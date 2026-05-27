@@ -1,0 +1,100 @@
+# --- Build Directories ---
+build/
+build_rel/
+out/
+bin/
+
+# --- Tooling & Cache (Language Servers) ---
+.cache/
+.clangd/
+.ccls-cache/
+
+# --- CMake & Compilation ---
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# --- Compiled Object files ---
+*.slo
+*.lo
+*.o
+*.obj
+
+# --- Compiled Dynamic & Static libraries ---
+*.so
+*.dylib
+*.dll
+*.lai
+*.la
+*.a
+*.lib
+
+# --- Executables ---
+*.exe
+*.out
+*.app
+
+# --- IDE & Editor Folders ---
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*.suo
+*.user
+
+# --- Performance & Profiling ---
+*.pcap
+callgrind.out.*
+perf.data
+
+
+# --- Vivado Workspaces & Generated Directories ---
+**/*.cache/
+**/*.hw/
+**/*.sim/
+**/*.ip_user_files/
+**/*.runs/
+**/*.srcs/
+**/*.gen/
+**/*.dcp
+
+# --- Temporary Vivado Tool Outputs ---
+*.log
+*.jou
+*.str
+*.pb
+*.vdi
+.Xil/
+**/.Xil/
+
+# --- Xilinx IP Whitelisting Infrastructure ---
+**/ip/**/*
+!**/ip/**/
+!**/ip/**/*.xci
+**/ip/**/*.log
+**/ip/**/*.xml
+
+# --- Block Design & IP Repository Cleanup ---
+**/hdl/**/*.hwh
+**/hdl/**/*.bda
+**/hdl/**/*.bxml
+**/hdl/**/*.veo
+**/hdl/**/*.vho
+**/hdl/**/*_ooc.xdc
+**/hdl/**/*.protoinst
+**/hdl/**/*.hwdef
+**/hdl/**/*.ui
+**/hdl/**/sim/
+**/hdl/**/synth/
+**/hdl/**/hdl/*_wrapper.v
+
+# --- OS Specific Files ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
