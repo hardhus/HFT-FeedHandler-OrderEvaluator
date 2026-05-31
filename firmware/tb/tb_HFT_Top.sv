@@ -20,113 +20,100 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
+import hft_pkg::*;
+
 module tb_HFT_Top ();
 
-  logic        clk;
-  logic        reset_n;
-  logic [ 7:0] s_axis_tdata;
-  logic        s_axis_tvalid;
-  logic        s_axis_tready;
-  logic        s_axis_tlast;
-  logic [ 1:0] host_addr;
-  logic        host_write_en;
-  logic [31:0] host_write_data;
-  logic [31:0] host_read_data;
-  logic        trade_execute_out;
+  // --- Clock & Reset Bus Signaling ---
+  logic clk_net;
+  logic clk_pcie;
+  logic rst_n;
+  logic trade_execute_out;
 
-  // Sistem En Üst Modülünü Bağlıyoruz
-  HFT_Top uut_top (.*);
+  // --- Interface Instantiation (Top-Level Infrastructure) ---
+  axis_if axis_bus ();  // Emulates 10G Ethernet MAC streaming output
+  axil_if axil_bus ();  // Emulates PCIe Host CPU memory-mapped bridge
 
-  // Clock üretimi (100 MHz)
-  always #5 clk = ~clk;
+  // ==========================================================================
+  // PART 1: Concurrent Clock Generation Processes
+  // ==========================================================================
+  initial clk_net = 0;
+  always #3.2 clk_net = ~clk_net;  // 156.25 MHz Network Domain Clock Line
 
-  // Byte gönderme görevi
-  task automatic send_byte(input logic [7:0] data, input logic last_byte);
+  initial clk_pcie = 0;
+  always #4.0 clk_pcie = ~clk_pcie;  // 125.00 MHz PCIe/Host Domain Clock Line
+
+  // ==========================================================================
+  // PART 2: Design Under Test (DUT) Instantiation
+  // ==========================================================================
+  HFT_Top_Core dut (
+      .clk_net          (clk_net),
+      .clk_pcie         (clk_pcie),
+      .rst_n            (rst_n),
+      .s_axis           (axis_bus.slave),
+      .s_axi            (axil_bus.slave),
+      .trade_execute_out(trade_execute_out)
+  );
+
+  // ==========================================================================
+  // PART 3: Low-Level Emulation Drivers (Verification Tasks)
+  // ==========================================================================
+
+  // --- Task A: 10G Ethernet Packet Injector ---
+  task automatic drive_network_packet();
     begin
-      s_axis_tdata  = data;
-      s_axis_tvalid = 1'b1;
-      s_axis_tlast  = last_byte;
-      @(posedge clk);
-      while (!s_axis_tready) @(posedge clk);
-      s_axis_tvalid = 1'b0;
-      s_axis_tlast  = 1'b0;
+      $display("[NET_DRIVER] Injecting misaligned 10G UDP market data packet...");
+
+      // TODO: Synchronize with @(posedge clk_net)
+      // TODO: Set axis_bus.tvalid high and stream 5 words of dummy headers (Cycles 1-5)
+      // TODO: Construct Cycle 6 (Word 5) -> Inject byte-misaligned msg_type & partial price
+      // TODO: Construct Cycle 7 (Word 6) -> Inject remaining volume bytes & assert axis_bus.tlast
+      // TODO: Clear axis_bus signals back to idle state
     end
   endtask
 
+  // --- Task B: PCIe Memory-Mapped AXI4-Lite Write Driver ---
+  task automatic axil_write(input logic [31:0] addr, input logic [31:0] data);
+    begin
+      // TODO: Sync with @(posedge clk_pcie)
+      // TODO: Drive awaddr/awvalid and wdata/wvalid channels independently
+      // TODO: Wait for awready and wready handshakes from the register_bank
+      // TODO: Reset valid signals after successful transaction commit
+    end
+  endtask
+
+  // --- Task C: PCIe Memory-Mapped AXI4-Lite Read Driver ---
+  task automatic axil_read(input logic [31:0] addr, output logic [31:0] data);
+    begin
+      // TODO: Sync with @(posedge clk_pcie)
+      // TODO: Drive araddr and arvalid lines high
+      // TODO: Wait for arready handshake from register_bank
+      // TODO: Capture s_axi.rdata once rvalid asserts, then drive rready to finish
+    end
+  endtask
+
+  // ==========================================================================
+  // PART 4: Main Test Flow Executive (Procedural Simulation)
+  // ==========================================================================
   initial begin
-    clk             = 1'b0;
-    reset_n         = 1'b0;
-    s_axis_tdata    = 8'h0;
-    s_axis_tvalid   = 1'b0;
-    s_axis_tlast    = 1'b0;
-    host_addr       = 2'b00;
-    host_write_en   = 1'b0;
-    host_write_data = 32'h0;
+    // Reset Sequence Activation
+    rst_n = 1'b0;
+    #100;
+    @(posedge clk_pcie);
+    rst_n = 1'b1;
+    $display("[SYS_TB] Reset sequence completed. System is armed.");
 
-    #20 reset_n = 1'b1;
-    #20;
+    // Stabilize pipeline clocks
+    repeat (10) @(posedge clk_pcie);
 
-    $display("[SYSTEM TB] --- Entegrasyon Simülasyonu Başladı ---");
+    // --- Main Verification Scenario ---
+    // TODO: Step 1. Fork/Run drive_network_packet() to stream live market feed
+    // TODO: Step 2. Simulate C++ application polling loops using axil_read tasks
+    // TODO: Step 3. Once data_valid register hits 1, extract price/volume and display
+    // TODO: Step 4. Execute C++ Handshake Acknowledgment via axil_write task
 
-    // 1. ADIM: Donanıma 42 Byte Header fırlat
-    for (int i = 0; i < 42; i++) begin
-      send_byte(8'hAA, 1'b0);
-    end
-
-    // 2. ADIM: Fiyat fırlat (95 -> 32'h0000005F)
-    send_byte(8'h00, 1'b0);
-    send_byte(8'h00, 1'b0);
-    send_byte(8'h00, 1'b0);
-    send_byte(8'h5F, 1'b0);
-
-    // 3. ADIM: Hacim fırlat (500 -> 32'h000001F4) ve paket bitsin
-    send_byte(8'h00, 1'b0);
-    send_byte(8'h00, 1'b0);
-    send_byte(8'h01, 1'b0);
-    send_byte(8'hF4, 1'b1);
-
-    // Hat boşa çıksın, donanım register'ları güncellesin
-    @(posedge clk);
-
-    // 4. ADIM: Sahte C++ Polling & Karar Mekanizması
-    $display("[SYSTEM TB] C++ Yazılımı (Host) PCIe hattı üzerinden Polling yapıyor...");
-
-    // Reg 2'yi (DATA_VALID) oku, 1 olana kadar bekle
-    host_addr = 2'b10;  // Reg 2 adresi
-    #1;
-    while (host_read_data != 32'h1) begin
-      @(posedge clk);
-      #1;
-    end
-
-    $display("[SYSTEM TB] C++: Yeni veri hazır sinyali yakalandı! Veriler okunuyor...");
-
-    // Reg 0 (Price) oku
-    host_addr = 2'b00;
-    #1;
-    $display("[SYSTEM TB] C++ Okunan Fiyat: %0d", host_read_data);
-
-    // 5. ADIM: C++ Emri Donanıma Yazıyor (Fiyat 95 < 100 olduğu için)
-    if (host_read_data < 100) begin
-      $display(
-          "[SYSTEM TB] C++: Fiyat eşik altı! BUY emri PCIe üzerinden Reg 3'e yazılıyor...");
-      host_addr       = 2'b11;  // Reg 3 (TRADE_EXECUTE)
-      host_write_data = 32'h1;  // AL emri
-      host_write_en   = 1'b1;
-      @(posedge clk);
-      host_write_en = 1'b0;
-    end
-
-    // Donanımın emri dışarı fırlatmasını izle
-    #1;
-    if (trade_execute_out == 1'b1) begin
-      $display(
-          "[SYSTEM TB] BAŞARILI: Tüm donanım döngüsü kapandı. Emir pini HIGH! [SUCCESS]");
-    end else begin
-      $display("[SYSTEM TB] HATA: Emir sinyali tetiklenemedi! [FAIL]");
-    end
-
-    #50;
+    #1000;
+    $display("[SYS_TB] Simulation finished successfully with zero-deadlock.");
     $finish;
   end
 

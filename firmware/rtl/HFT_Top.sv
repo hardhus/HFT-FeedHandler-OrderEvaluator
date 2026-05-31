@@ -20,55 +20,55 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 
-module HFT_Top (
-    input logic clk,
-    input logic reset_n,
+import hft_pkg::*;
 
-    // Dış Dünya: Ethernet MAC AXI4-Stream Arayüzü (Giriş)
-    input  logic [7:0] s_axis_tdata,
-    input  logic       s_axis_tvalid,
-    output logic       s_axis_tready,
-    input  logic       s_axis_tlast,
+module HFT_Top_Core (
+    // CLOCK AND RESET
+    input logic clk_net,   // Clock for Network domain (156.25 MHz)
+    input logic clk_pcie,  // Clock for PCIe domain (125 MHz)
+    input logic rst_n,     // Active-low asynchronous reset
 
-    // Dış Dünya: Sahte PCIe / Host Arayüzü (C++ Motorunun Okuyup Yazacağı Hatlar)
-    input  logic [ 1:0] host_addr,
-    input  logic        host_write_en,
-    input  logic [31:0] host_write_data,
-    output logic [31:0] host_read_data,
+    // TOP LEVEL INTERFACES
+    axis_if.slave s_axis,  // Direct stream from Ethernet MAC IP
+    axil_if.slave s_axi,   // Direct Memory Map from PCIe Bridge IP
 
-    // Donanım Çıkışı: Tetiklenen Emir Sinyali
+    // HARDWARE PIN OUT
     output logic trade_execute_out
 );
 
-  // Modüller Arası Bağlantı Sinyalleri (Wires)
-  logic [31:0] w_parser_price;
-  logic [31:0] w_parser_volume;
-  logic        w_parser_data_valid;
+  // ==========================================
+  // INTERFACE INSTANTIATION
+  // ==========================================
+  // This single interface instance creates the safe bridge between domains
+  fifo_if i_cdc_fifo_if ();
 
-  // 1. MODÜL: UDP & Market Data Parser Örneklendirmesi (Instantiation)
+  // ==========================================
+  // MODULE INSTANTIATIONS
+  // ==========================================
+
+  // 1. Network Domain Core: Parses UDP data and writes to FIFO
   udp_parser i_udp_parser (
-      .clk              (clk),
-      .reset_n          (reset_n),
-      .s_axis_tdata     (s_axis_tdata),
-      .s_axis_tvalid    (s_axis_tvalid),
-      .s_axis_tready    (s_axis_tready),
-      .s_axis_tlast     (s_axis_tlast),
-      .parser_price     (w_parser_price),
-      .parser_volume    (w_parser_volume),
-      .parser_data_valid(w_parser_data_valid)
+      .clk       (clk_net),
+      .reset_n   (rst_n),
+      .s_axis    (s_axis),
+      .fifo_write(i_cdc_fifo_if.write_port)  // Hooked up to FIFO write port
   );
 
-  // 2. MODÜL: Register Bank / PCIe Bellek Haritası Örneklendirmesi
+  // 2. Hardware CDC Component (Xilinx FIFO Generator IP or Custom Async FIFO)
+  // It takes write signals from clk_net and cross them over to clk_pcie
+  async_fifo_wrapper i_async_fifo (
+      .w_clk(clk_net),
+      .r_clk(clk_pcie),
+      .rst_n(rst_n),
+      .f_if (i_cdc_fifo_if)
+  );
+
+  // 3. PCIe Domain Core: Reads from FIFO and handles C++ AXI-Lite requests
   register_bank i_register_bank (
-      .clk              (clk),
-      .reset_n          (reset_n),
-      .parser_price     (w_parser_price),
-      .parser_volume    (w_parser_volume),
-      .parser_data_valid(w_parser_data_valid),
-      .host_addr        (host_addr),
-      .host_write_en    (host_write_en),
-      .host_write_data  (host_write_data),
-      .host_read_data   (host_read_data),
+      .clk              (clk_pcie),
+      .reset_n          (rst_n),
+      .fifo_read        (i_cdc_fifo_if.read_port),  // Hooked up to FIFO read port
+      .s_axi            (s_axi),
       .out_trade_execute(trade_execute_out)
   );
 
