@@ -48,10 +48,11 @@ module HFT_Top_Core (
 
   // 1. Network Domain Core: Parses UDP data and writes to FIFO
   udp_parser i_udp_parser (
-      .clk       (clk_net),
-      .reset_n   (rst_n),
-      .s_axis    (s_axis),
-      .fifo_write(i_cdc_fifo_if.write_port)  // Hooked up to FIFO write port
+      .clk             (clk_net),
+      .rst_n           (rst_n),
+      .s_axis          (s_axis),
+      .out_parsed_event(i_cdc_fifo_if.w_data),
+      .out_event_valid (i_cdc_fifo_if.w_en)
   );
 
   // 2. Hardware CDC Component (Xilinx FIFO Generator IP or Custom Async FIFO)
@@ -65,11 +66,14 @@ module HFT_Top_Core (
 
   // 3. PCIe Domain Core: Reads from FIFO and handles C++ AXI-Lite requests
   register_bank i_register_bank (
-      .clk              (clk_pcie),
-      .reset_n          (rst_n),
-      .fifo_read        (i_cdc_fifo_if.read_port),  // Hooked up to FIFO read port
-      .s_axi            (s_axi),
-      .out_trade_execute(trade_execute_out)
+      .clk                (clk_pcie),
+      .rst_n              (rst_n),
+      .in_pcie_event      (i_cdc_fifo_if.r_data),  // FIFO read data out
+      .in_pcie_event_valid(!i_cdc_fifo_if.empty),  // Valid when FIFO is NOT empty
+      .s_axi              (s_axi),
+      .out_trade_execute  (trade_execute_out)
   );
+
+  assign i_cdc_fifo_if.r_en = !i_cdc_fifo_if.empty;
 
 endmodule

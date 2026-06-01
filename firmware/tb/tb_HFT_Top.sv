@@ -25,10 +25,15 @@ import hft_pkg::*;
 module tb_HFT_Top ();
 
   // --- Clock & Reset Bus Signaling ---
-  logic clk_net;
-  logic clk_pcie;
-  logic rst_n;
-  logic trade_execute_out;
+  logic        clk_net;
+  logic        clk_pcie;
+  logic        rst_n;
+  logic        trade_execute_out;
+
+  // --- Verification Tracking Register Matrix ---
+  logic [31:0] polled_valid;
+  logic [31:0] extracted_price;
+  logic [31:0] extracted_volume;
 
   // --- Interface Instantiation (Top-Level Infrastructure) ---
   axis_if axis_bus ();  // Emulates 10G Ethernet MAC streaming output
@@ -56,65 +61,215 @@ module tb_HFT_Top ();
   );
 
   // ==========================================================================
-  // PART 3: Low-Level Emulation Drivers (Verification Tasks)
+  // PART 3: Low-Level Emulation Drivers
   // ==========================================================================
-
-  // --- Task A: 10G Ethernet Packet Injector ---
   task automatic drive_network_packet();
     begin
       $display("[NET_DRIVER] Injecting misaligned 10G UDP market data packet...");
+      @(posedge clk_net);
+      #1;
 
-      // TODO: Synchronize with @(posedge clk_net)
-      // TODO: Set axis_bus.tvalid high and stream 5 words of dummy headers (Cycles 1-5)
-      // TODO: Construct Cycle 6 (Word 5) -> Inject byte-misaligned msg_type & partial price
-      // TODO: Construct Cycle 7 (Word 6) -> Inject remaining volume bytes & assert axis_bus.tlast
-      // TODO: Clear axis_bus signals back to idle state
+      repeat (5) begin
+        axis_bus.tvalid <= 1'b1;
+        axis_bus.tdata  <= 64'hDEAD_BEEF_CAFE_BABE;
+        axis_bus.tstrb  <= 8'hFF;
+        axis_bus.tlast  <= 1'b0;
+        @(posedge clk_net);
+        #1;
+      end
+
+      // Cycle 6: Latch $95.00 (9500 -> 1C250000) and MSG_TYPE 8'h41
+      axis_bus.tvalid <= 1'b1;
+      axis_bus.tdata  <= {16'h0000, 8'h41, 32'h1C250000, 8'h00};
+      axis_bus.tstrb  <= 8'hFF;
+      axis_bus.tlast  <= 1'b0;
+      @(posedge clk_net);
+      #1;
+
+      // Cycle 7: Latch 500 shares (0001F4) and assert TLAST
+      axis_bus.tvalid <= 1'b1;
+      axis_bus.tdata  <= {24'h0001F4, 40'h0000000000};
+      axis_bus.tstrb  <= 8'hFF;
+      axis_bus.tlast  <= 1'b1;
+      @(posedge clk_net);
+      #1;
+
+      axis_bus.tvalid <= 1'b1; 
+      axis_bus.tdata  <= 64'h0;
+      axis_bus.tstrb  <= 8'h0;
+      axis_bus.tlast  <= 1'b0;
+      @(posedge clk_net);
+      #1;
+      
+      // Now we can safely close the stream
+      axis_bus.tvalid <= 1'b0;
+      $display("[NET_DRIVER] Packet injection complete.");
     end
   endtask
 
-  // --- Task B: PCIe Memory-Mapped AXI4-Lite Write Driver ---
   task automatic axil_write(input logic [31:0] addr, input logic [31:0] data);
     begin
-      // TODO: Sync with @(posedge clk_pcie)
-      // TODO: Drive awaddr/awvalid and wdata/wvalid channels independently
-      // TODO: Wait for awready and wready handshakes from the register_bank
-      // TODO: Reset valid signals after successful transaction commit
+      @(posedge clk_pcie);
+      axil_bus.awaddr  <= addr;
+      axil_bus.awvalid <= 1'b1;
+      axil_bus.wdata   <= data;
+      axil_bus.wvalid  <= 1'b1;
+
+      fork
+        begin
+          wait (axil_bus.awready);
+          @(posedge clk_pcie);
+          axil_bus.awvalid <= 1'b0;
+        end
+        begin
+          wait (axil_bus.wready);
+          @(posedge clk_pcie);
+          axil_bus.wvalid <= 1'b0;
+        end
+      join
+
+      axil_bus.bready <= 1'b1;
+      wait (axil_bus.bvalid);
+      @(posedge clk_pcie);
+      axil_bus.bready <= 1'b0;
     end
   endtask
 
-  // --- Task C: PCIe Memory-Mapped AXI4-Lite Read Driver ---
   task automatic axil_read(input logic [31:0] addr, output logic [31:0] data);
     begin
-      // TODO: Sync with @(posedge clk_pcie)
-      // TODO: Drive araddr and arvalid lines high
-      // TODO: Wait for arready handshake from register_bank
-      // TODO: Capture s_axi.rdata once rvalid asserts, then drive rready to finish
+      @(posedge clk_pcie);
+      axil_bus.araddr  <= addr;
+      axil_bus.arvalid <= 1'b1;
+      axil_bus.rready  <= 1'b1;
+
+      wait (axil_bus.arready);
+      @(posedge clk_pcie);
+      axil_bus.arvalid <= 1'b0;
+
+      wait (axil_bus.rvalid);
+      data = axil_bus.rdata;
+
+      @(posedge clk_pcie);
+      axil_bus.rready <= 1'b0;
+      axil_bus.araddr <= 32'h0;
     end
   endtask
 
   // ==========================================================================
-  // PART 4: Main Test Flow Executive (Procedural Simulation)
+  // PART 4: Main Test Flow Executive
   // ==========================================================================
   initial begin
-    // Reset Sequence Activation
     rst_n = 1'b0;
     #100;
-    @(posedge clk_pcie);
     rst_n = 1'b1;
     $display("[SYS_TB] Reset sequence completed. System is armed.");
 
-    // Stabilize pipeline clocks
-    repeat (10) @(posedge clk_pcie);
+    repeat (200) @(posedge clk_pcie);
 
-    // --- Main Verification Scenario ---
-    // TODO: Step 1. Fork/Run drive_network_packet() to stream live market feed
-    // TODO: Step 2. Simulate C++ application polling loops using axil_read tasks
-    // TODO: Step 3. Once data_valid register hits 1, extract price/volume and display
-    // TODO: Step 4. Execute C++ Handshake Acknowledgment via axil_write task
+    fork
+      drive_network_packet();
+    join_none
 
-    #1000;
+    $display("[SYS_TB] C++ Software starting polling loop on ADDR_DATA_VALID...");
+    polled_valid = 32'h0;
+
+    while (polled_valid == 32'h0) begin
+      axil_read(32'h0000_0008, polled_valid);
+      if (polled_valid == 32'h0) begin
+        repeat (5) @(posedge clk_pcie);
+      end
+    end
+    $display("[SYS_TB] MATCH! Data valid flag detected high (1).");
+
+    $display("[SYS_TB] Extracting market data from HFT Core registers...");
+    axil_read(32'h0000_0000, extracted_price);
+    axil_read(32'h0000_0004, extracted_volume);
+
+    $display("==========================================================");
+    $display("[C++ APP REPORT] >>> NEW BEST BID DETECTED <<<");
+    $display("[C++ APP REPORT] Price Data (Scaled) : %d", extracted_price);
+    $display("[C++ APP REPORT] Volume Data (Lots)  : %d", extracted_volume);
+    $display("==========================================================");
+    
+    // ------------------------------------------------------------------------
+    // YENİ EKLEME: HFT KARAR & EMİR TETİKLEME MATRİSİ
+    // ------------------------------------------------------------------------
+    $display("[SYS_TB] C++ Software evaluating market conditions...");
+    
+    // Algoritmik Eşik Kontrolü: Fiyat $95.00 (9500) ise emri ateşle!
+    if (extracted_price == 32'd9500) begin
+      $display("[SYS_TB] ALGO TRIGGER: Target price matched! Sending Trade Order via AXI-Lite...");
+      axil_write(32'h0000_000C, 32'h0000_0001); // Offset 3: ADDR_TRADE_EXECUTE register'ına '1' yaz
+      
+      // Donanımın combinational bypass hattını işlemesi için 1 cycle bekle
+      @(posedge clk_pcie); 
+      #1; 
+      
+      // Kontrol Noktası (Assertion): Donanım pini gerçekten kalktı mı?
+      if (trade_execute_out === 1'b1) begin
+        $display("[SYS_TB] SUCCESS!!! Hardware Pin 'trade_execute_out' driven HIGH in sub-nanosecond!");
+      end else begin
+        $display("[SYS_TB] ERROR: Hardware Pin 'trade_execute_out' failed to fire!");
+      end
+    end else begin
+      $display("[SYS_TB] ALGO SKIPPED: Price does not match trading criteria.");
+    end
+    // ------------------------------------------------------------------------
+
+    $display("[SYS_TB] Clearing Data Valid flag to acknowledge receipt...");
+    axil_write(32'h0000_0008, 32'h0000_0000);
+
+    #500;
     $display("[SYS_TB] Simulation finished successfully with zero-deadlock.");
     $finish;
   end
 
+  // ==========================================================================
+  // PART 5: THE PIPELINE TRACER (ZERO-GUESSWORK DEBUGGER)
+  // ==========================================================================
+
+  // 1. Data Flow Alignment Tracker (GÜNCELLENDİ)
+  always @(posedge clk_net) begin
+    if (axis_bus.tvalid) begin
+      $display("[TRACE-1: NET_BUS] Time: %0t | word_cnt: %0d | TLAST: %b | TDATA: %016X",
+               $time, dut.i_udp_parser.word_cnt, axis_bus.tlast, axis_bus.tdata);
+    end
+  end
+
+  // 2. Parser Output Firing Tracker
+  always @(posedge clk_net) begin
+    if (dut.i_udp_parser.out_event_valid) begin
+      $display("[TRACE-2: PARSER_OUT] FIRED! Msg: %h | Price: %h | Vol: %h",
+               dut.i_udp_parser.out_parsed_event.msg_type,
+               dut.i_udp_parser.out_parsed_event.price,
+               dut.i_udp_parser.out_parsed_event.volume);
+    end
+  end
+
+  // 3. FIFO Status Tracker
+  always @(dut.i_cdc_fifo_if.empty) begin
+    $display("[TRACE-3: FIFO] Empty flag changed to: %b at Time: %0t", dut.i_cdc_fifo_if.empty, $time);
+  end
+
+  // 4. Register Bank Ingestion Tracker
+  always @(posedge clk_pcie) begin
+    if (dut.i_register_bank.in_pcie_event_valid) begin
+       $display("[TRACE-4: REG_BANK] Ingesting FIFO Data! Price: %h | Vol: %h",
+                dut.i_register_bank.in_pcie_event.price,
+                dut.i_register_bank.in_pcie_event.volume);
+    end
+  end
+
+  // Smart Watchdog (GÜNCELLENDİ)
+  initial begin
+    #100000000; 
+    $display("==========================================================");
+    $display("[FATAL WATCHDOG] Simulation hung! Deadlock position:");
+    $display("  - Parser Word Cnt   : %0d", dut.i_udp_parser.word_cnt);
+    $display("  - FIFO Empty Status : %b", dut.i_cdc_fifo_if.empty);
+    $display("  - Register Valid Bit: 0x%08X", dut.i_register_bank.reg_data_valid);
+    $display("==========================================================");
+    $finish;
+  end
+  
 endmodule

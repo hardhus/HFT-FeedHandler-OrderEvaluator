@@ -26,7 +26,7 @@ module register_bank (
     // Synchronous with PCIe IP core & s_axi interface
     input logic clk,
     // Async assertion, synchronous de-assertion recommended
-    input logic reset_n,
+    input logic rst_n,
 
     // CDC FIFO outputs; data is already synchronized to PCIe domain here
     input hft_internal_event_t in_pcie_event,
@@ -44,6 +44,7 @@ module register_bank (
   logic        waddr_captured;  // High until transaction completes
   logic        wdata_captured;  // High until transaction completes
   logic        reg_rvalid;  // Registered rvalid to guarantee AXI protocol safety
+  logic        reg_bvalid;  // Write Response control flag
 
   // --- Real Internal Registers Matrix (32-bit Storage Cells) ---
   logic [31:0] reg_best_bid_price;
@@ -60,8 +61,8 @@ module register_bank (
   // ==========================================================================
   // PART 1: AXI4-Lite Write Handshake & Channel Latching Logic
   // ==========================================================================
-  always_ff @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
       reg_waddr      <= 1'b0;  // Reset width-matched address latch
       waddr_captured <= 1'b0;
       wdata_captured <= 1'b0;
@@ -96,8 +97,8 @@ module register_bank (
   logic [1:0] current_write_sel;
   assign current_write_sel = waddr_captured ? reg_waddr[3:2] : s_axi.awaddr[3:2];
 
-  always_ff @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
       reg_best_bid_price  <= 32'h0;
       reg_best_bid_volume <= 32'h0;
       reg_data_valid      <= 32'h0;
@@ -146,8 +147,8 @@ module register_bank (
   end
 
   // Robust AXI Read Valid sequential control to prevent interface deadlock
-  always_ff @(posedge clk or negedge reset_n) begin
-    if (!reset_n) begin
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
       reg_rvalid <= 1'b0;
     end else begin
       if (s_axi.arvalid && s_axi.arready) begin
@@ -158,7 +159,26 @@ module register_bank (
     end
   end  // always_ff
 
-  assign s_axi.rvalid      = reg_rvalid;
+  assign s_axi.rvalid = reg_rvalid;
+
+  // Robust AXI Write Response (B Channel) sequential control
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      reg_bvalid <= 1'b0;
+    end else begin
+      // Trigger bvalid when both components of the write transaction are locked or active
+      automatic logic current_waddr_valid = waddr_captured || s_axi.awvalid;
+      automatic logic current_wdata_valid = wdata_captured || s_axi.wvalid;
+
+      if (current_waddr_valid && current_wdata_valid && !reg_bvalid) begin
+        reg_bvalid <= 1'b1;  // Assert response valid to show host memory-write is committed
+      end else if (s_axi.bready && s_axi.bvalid) begin
+        reg_bvalid <= 1'b0;  // Clear after host master samples the response
+      end
+    end
+  end  // always_ff
+
+  assign s_axi.bvalid      = reg_bvalid;
 
   // Continuous comparator bypasses clock path to achieve sub-nanosecond drive
   assign out_trade_execute = (reg_trade_execute == 32'h1);
