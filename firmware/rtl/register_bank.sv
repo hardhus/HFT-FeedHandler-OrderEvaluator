@@ -112,6 +112,7 @@ module register_bank (
       end  // PRIORITY 2: Host (C++) write via PCIe. Evaluated only if FIFO path is idle.
       else if (waddr_captured || s_axi.awvalid) begin
         if (wdata_captured || s_axi.wvalid) begin
+        if (s_axi.wstrb == 4'hF) begin
           case (current_write_sel)
             ADDR_DATA_VALID: begin
               reg_data_valid <= s_axi.wdata;  // Host clears this register to ack event processing
@@ -123,6 +124,7 @@ module register_bank (
               // Firewall active: PRICE and VOLUME targets trigger no routing paths from host bus
             end
           endcase
+          end
         end
       end
     end
@@ -179,6 +181,9 @@ module register_bank (
   end  // always_ff
 
   assign s_axi.bvalid      = reg_bvalid;
+  
+  assign s_axi.rresp = 2'b00; // 2'b00 = OKAY
+  assign s_axi.bresp = 2'b00; // 2'b00 = OKAY
 
   // Continuous comparator bypasses clock path to achieve sub-nanosecond drive
   assign out_trade_execute = (reg_trade_execute == 32'h1);

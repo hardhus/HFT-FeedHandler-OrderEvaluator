@@ -28,6 +28,11 @@ module HFT_Top_Core (
     input logic clk_pcie,  // Clock for PCIe domain (125 MHz)
     input logic rst_n,     // Active-low asynchronous reset
 
+    // --- RUNTIME CONFIGURATION INPUTS (YENİ EKLEDİK) ---
+    input logic [47:0] local_mac,
+    input logic [31:0] local_ip,
+    input logic [15:0] target_port,
+
     // TOP LEVEL INTERFACES
     axis_if.slave s_axis,  // Direct stream from Ethernet MAC IP
     axil_if.slave s_axi,   // Direct Memory Map from PCIe Bridge IP
@@ -50,6 +55,9 @@ module HFT_Top_Core (
   udp_parser i_udp_parser (
       .clk             (clk_net),
       .rst_n           (rst_n),
+      .local_mac        (local_mac),
+      .local_ip         (local_ip),
+      .target_port      (target_port),
       .s_axis          (s_axis),
       .out_parsed_event(i_cdc_fifo_if.w_data),
       .out_event_valid (i_cdc_fifo_if.w_en)

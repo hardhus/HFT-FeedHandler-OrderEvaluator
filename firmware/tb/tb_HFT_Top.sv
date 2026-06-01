@@ -51,10 +51,18 @@ module tb_HFT_Top ();
   // ==========================================================================
   // PART 2: Design Under Test (DUT) Instantiation
   // ==========================================================================
+  
+  localparam logic [47:0] TB_LOCAL_MAC   = 48'h00_0A_35_01_02_03; // Örnek FPGA MAC adresi
+  localparam logic [31:0] TB_LOCAL_IP    = {8'd192, 8'd168, 8'd1, 8'd10}; // 192.168.1.10 IP adresi
+  localparam logic [15:0] TB_TARGET_PORT = 16'h04D2;              // Port 1234
+  
   HFT_Top_Core dut (
       .clk_net          (clk_net),
       .clk_pcie         (clk_pcie),
       .rst_n            (rst_n),
+      .local_mac        (TB_LOCAL_MAC),
+      .local_ip         (TB_LOCAL_IP),
+      .target_port      (TB_TARGET_PORT),
       .s_axis           (axis_bus.slave),
       .s_axi            (axil_bus.slave),
       .trade_execute_out(trade_execute_out)
@@ -65,43 +73,47 @@ module tb_HFT_Top ();
   // ==========================================================================
   task automatic drive_network_packet();
     begin
-      $display("[NET_DRIVER] Injecting misaligned 10G UDP market data packet...");
+      $display("[NET_DRIVER] Injecting STRICT Big-Endian 10G UDP Market Data Packet...");
       @(posedge clk_net);
       #1;
 
-      repeat (5) begin
-        axis_bus.tvalid <= 1'b1;
-        axis_bus.tdata  <= 64'hDEAD_BEEF_CAFE_BABE;
-        axis_bus.tstrb  <= 8'hFF;
-        axis_bus.tlast  <= 1'b0;
-        @(posedge clk_net);
-        #1;
-      end
-
-      // Cycle 6: Latch $95.00 (9500 -> 1C250000) and MSG_TYPE 8'h41
+      // WORD 0: Dest MAC (48'h00_0A_35_01_02_03) + Src MAC [63:48]
       axis_bus.tvalid <= 1'b1;
-      axis_bus.tdata  <= {16'h0000, 8'h41, 32'h1C250000, 8'h00};
-      axis_bus.tstrb  <= 8'hFF;
-      axis_bus.tlast  <= 1'b0;
-      @(posedge clk_net);
-      #1;
+      axis_bus.tstrb  <= 8'hFF; axis_bus.tlast  <= 1'b0;
+      axis_bus.tdata  <= {48'h00_0A_35_01_02_03, 16'h1111}; 
+      @(posedge clk_net); #1;
 
-      // Cycle 7: Latch 500 shares (0001F4) and assert TLAST
-      axis_bus.tvalid <= 1'b1;
-      axis_bus.tdata  <= {24'h0001F4, 40'h0000000000};
-      axis_bus.tstrb  <= 8'hFF;
+      // WORD 1: Src MAC [47:16] (22223333) + EtherType (0800) + IP Vers/IHL (45) + ToS (00)
+      axis_bus.tdata  <= {32'h2222_3333, 16'h0800, 8'h45, 8'h00}; 
+      @(posedge clk_net); #1;
+
+      // WORD 2: IP Total Length (002E = 46 Byte) + Ident/Flags (0000_0000) + TTL (40) + Protocol (11 = UDP)
+      axis_bus.tdata  <= {16'h002E, 32'h0000_0000, 8'h40, 8'h11}; 
+      @(posedge clk_net); #1;
+
+      // WORD 3: IP Checksum (0000) + Src IP (C0A80101 = 192.168.1.1) + Dest IP [31:16] (C0A8)
+      axis_bus.tdata  <= {16'h0000, 32'hC0A8_0101, 16'hC0A8}; 
+      @(posedge clk_net); #1;
+
+      // WORD 4: Dest IP [15:0] (010A = 192.168.1.10) + Src Port (C000) + Dest Port (04D2 = 1234) + UDP Length (001A = 26 Byte)
+      axis_bus.tdata  <= {16'h010A, 16'hC000, 16'h04D2, 16'h001A}; 
+      @(posedge clk_net); #1;
+
+      // WORD 5: UDP Checksum (0000) + MSG_TYPE ('A' = 41) + PRICE (1C250000 = 9500) + VOLUME [31:24] (00)
+      axis_bus.tdata  <= {16'h0000, 8'h41, 32'h1C250000, 8'h00}; 
+      @(posedge clk_net); #1;
+
+      // WORD 6: VOLUME [23:0] (0001F4 = 500) + Padding / Kalan Boşluklar (0000000000) + TLAST AKTİF!
+      axis_bus.tdata  <= {24'h0001F4, 40'h000000_0000};
       axis_bus.tlast  <= 1'b1;
-      @(posedge clk_net);
-      #1;
+      @(posedge clk_net); #1;
 
-      axis_bus.tvalid <= 1'b1; 
+      // Hat Temizleme Cycle (Inter-Packet Gap)
       axis_bus.tdata  <= 64'h0;
       axis_bus.tstrb  <= 8'h0;
       axis_bus.tlast  <= 1'b0;
-      @(posedge clk_net);
-      #1;
+      @(posedge clk_net); #1;
       
-      // Now we can safely close the stream
       axis_bus.tvalid <= 1'b0;
       $display("[NET_DRIVER] Packet injection complete.");
     end
@@ -113,6 +125,7 @@ module tb_HFT_Top ();
       axil_bus.awaddr  <= addr;
       axil_bus.awvalid <= 1'b1;
       axil_bus.wdata   <= data;
+      axil_bus.wstrb   <= 4'hF;
       axil_bus.wvalid  <= 1'b1;
 
       fork
@@ -125,6 +138,7 @@ module tb_HFT_Top ();
           wait (axil_bus.wready);
           @(posedge clk_pcie);
           axil_bus.wvalid <= 1'b0;
+          axil_bus.wstrb  <= 4'b0;
         end
       join
 

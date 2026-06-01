@@ -30,6 +30,7 @@ interface axil_if #(
   logic                  awready;  // FPGA Write Address Ready
   // Write Data Channel
   logic [ REG_WIDTH-1:0] wdata;  // Write Data
+  logic [(REG_WIDTH/8)-1:0] wstrb;
   logic                  wvalid;  // Write Data Valid
   logic                  wready;  // FPGA Write Data Ready
   // Read Address Channel
@@ -38,15 +39,17 @@ interface axil_if #(
   logic                  arready;  // FPGA Read Address Ready
   // Read Data Channel
   logic [ REG_WIDTH-1:0] rdata;  // Read Data driven by FPGA
+  logic [1:0] rresp;
   logic                  rvalid;  // FPGA Read Data Valid
   logic                  rready;  // Host Read Data Ready
   // Write Response Channel (B Channel) - EKSİK OLAN KATMAN
+  logic [1:0] bresp;
   logic                  bvalid;  // Driven by FPGA Register Bank
   logic                  bready;  // Driven by Host CPU (Testbench)
 
   // Slave mode (Our Register Bank)
   modport slave(
-      input awaddr, awvalid, wdata, wvalid, araddr, arvalid, rready, bready,
-      output awready, wready, arready, rdata, rvalid, bvalid
+      input awaddr, awvalid, wdata, wstrb, wvalid, araddr, arvalid, rready, bready,
+      output awready, wready, arready, rdata, rresp, rvalid, bresp, bvalid
   );
 endinterface
