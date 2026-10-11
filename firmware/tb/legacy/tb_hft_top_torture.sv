@@ -2,7 +2,7 @@
 
 import hft_pkg::*;
 
-module tb_HFT_Top ();
+module tb_hft_top_torture ();
 
   // ==========================================================================
   // 1. CLOCK & RESET SIGNALING

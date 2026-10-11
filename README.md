@@ -1,22 +1,52 @@
 # HFT FeedHandler & OrderEvaluator
 
-This repository contains a high-frequency trading (HFT) hardware-accelerated feed handler and order evaluation engine designed for ultra-low latency UDP network packet processing. It features a hardware/software co-design approach leveraging FPGA RTL execution and host software control.
+An FPGA feed handler and order evaluator for NASDAQ TotalView-ITCH 5.0 over MoldUDP64. The design is hybrid. The FPGA
+parses the feed, maintains state, and runs software-programmed tick-to-trade rules and pre-trade risk checks. Events
+reach the host through a DMA ring buffer that the host busy-polls, and a C++ application runs the more complex
+strategies. The RTL core is board-agnostic and is verified in simulation only (Verilator + cocotb); no FPGA board is
+required.
 
-## 📂 Repository Structure
+## Quick Start
 
-* **`/firmware/rtl`**: SystemVerilog hardware source files containing the UDP parser, asynchronous FIFO wrappers, register banks, and top-level synthesis logic (`HFT_Top.sv`).
-* **`/firmware/tb`**: Hardware testbenches for individual module and system-level validation.
-* **`/firmware/vivado`**: AMD Xilinx Vivado simulation models and project binaries.
-* **`/software/include`**: C++ header structures mapping memory-mapped registers (`hft_registers.hpp`) between hardware and software layers.
-* **`/software/src`**: C++ implementation files managing execution control and interface drivers (`main.cpp`).
+Linux, WSL or Raspberry Pi 5 (64-bit):
 
-## 🛠️ Stack & Technologies
+```bash
+git clone https://github.com/hardhus/HFT-FeedHandler-OrderEvaluator.git
+cd HFT-FeedHandler-OrderEvaluator
+./scripts/bootstrap.sh && just ci
+```
 
-* **Hardware (RTL):** `SystemVerilog`
-* **Software:** `C++ (C++17/C++20)`
-* **EDA Toolchain:** `AMD Xilinx Vivado` / `XSIM`
-* **Protocols:** `UDP/IP`, `AXI-Stream (AXIS)`, `AXI-Lite (AXIL)`
+Windows (PowerShell): `just setup` and then `just ci`. Both run inside WSL.
 
-## 🚧 Project Status
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for details and [firmware/CODING_STYLE.md](firmware/CODING_STYLE.md)
+for the RTL rules.
 
-This project is currently under **active development** (WIP). Basic packet parsing structures and network interface wrappers have been instantiated; full system-level deployment and performance optimization benchmarks are pending execution.
+## Repository Structure
+
+| Path | Contents |
+|------|----------|
+| `justfile` | Single entry point (`just` lists all recipes) |
+| `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
+| `firmware/rtl/core/` | Board-agnostic core (parser, book, rules, DMA engine): planned |
+| `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
+| `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
+| `firmware/filelists/` | `.f` filelists shared by Verilator, cocotb and Vivado |
+| `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), reference models, SVA, legacy SV testbenches |
+| `firmware/scripts/vivado/` | Vivado Tcl: project generation and OOC synthesis |
+| `firmware/lint/` | Verilator waivers and Verible format flags |
+| `scripts/` | Bootstrap, setup and doctor scripts |
+| `software/` | C++ host side: early stage, to be rebuilt around the DMA ring interface |
+
+## Stack
+
+- **RTL:** SystemVerilog
+- **Verification:** Verilator 5, cocotb 2, pytest; Verible for style lint and formatting
+- **Synthesis checks (optional):** AMD Vivado (OOC timing and utilization reports, XSIM for the legacy testbench)
+- **Tooling:** just, uv, pinned OSS CAD Suite (Linux x86_64 and arm64)
+- **Software:** C++20
+
+## Status
+
+Phase F0 (infrastructure) is in place: a cross-platform toolchain, the lint gate, the cocotb test harness and a first
+verified block (`reset_sync`). The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced
+block by block in the following phases.

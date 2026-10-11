@@ -2,7 +2,7 @@
 build/
 build_rel/
 out/
-bin/
+software/bin/
 
 # --- Tooling & Cache (Language Servers) ---
 .cache/
@@ -13,7 +13,7 @@ bin/
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
-Makefile
+software/**/Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
@@ -98,3 +98,15 @@ perf.data
 Thumbs.db
 Desktop.ini
 ehthumbs.db
+
+# --- Sim / Python toolchain (F0) ---
+/build/
+/.tools/
+/.venv/
+.env.local
+__pycache__/
+.pytest_cache/
+*.fst
+*.vcd
+results.xml
+sim_build/

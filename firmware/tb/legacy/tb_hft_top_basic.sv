@@ -5,7 +5,7 @@
 // 
 // Create Date: 27.05.2026 12:44:03
 // Design Name: 
-// Module Name: tb_HFT_Top
+// Module Name: tb_hft_top_basic
 // Project Name: 
 // Target Devices: 
 // Tool Versions: 
@@ -22,7 +22,7 @@
 
 import hft_pkg::*;
 
-module tb_HFT_Top ();
+module tb_hft_top_basic ();
 
   // --- Clock & Reset Bus Signaling ---
   logic        clk_net;

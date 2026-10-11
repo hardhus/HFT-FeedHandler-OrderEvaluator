@@ -1,0 +1,13 @@
+# Verible lint rules for this repo, on top of --ruleset=all. Read by `just lint`
+# and by editors running verible-verilog-ls with --ruleset=all --rules_config_search.
+# Only rules that conflict with firmware/CODING_STYLE.md or are owned by the
+# formatter are disabled. Keep this in sync with the editor's --rules flag
+# (command-line --rules overrides this file).
+
+# AXI-style port names (s_axis_tdata, clk, rst) instead of _i/_o suffixes.
+-port-name-suffix
+# _q/_d naming is recommended, not enforced (see CODING_STYLE.md).
+-dff-name-style
+# Whitespace and code width are owned by the formatter (column_limit=100).
+-no-trailing-spaces
+-line-length

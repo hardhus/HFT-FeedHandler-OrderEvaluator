@@ -1,0 +1,7 @@
+--column_limit=100
+--formal_parameters_alignment=align
+--named_parameter_alignment=align
+--port_declarations_alignment=align
+--assignment_statement_alignment=align
+--named_port_alignment=align
+--module_net_variable_alignment=align
