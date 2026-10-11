@@ -8,9 +8,9 @@ import os
 
 import cocotb
 import pytest
-from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer
 
+from common.clocks import start_clock
 from common.runner import run_cocotb
 
 PERIOD_NS = 10
@@ -22,7 +22,7 @@ def stages() -> int:
 
 
 async def start(dut):
-    Clock(dut.clk, PERIOD_NS, unit="ns").start()
+    start_clock(dut.clk, PERIOD_NS * 1000)
     dut.rst_in.value = 1
     for _ in range(stages() + 2):
         await RisingEdge(dut.clk)

@@ -74,7 +74,7 @@ lint-legacy:
 # Run all cocotb tests in parallel
 [unix]
 test *ARGS:
-    uv run pytest -n auto {{ ARGS }}
+    uv run pytest -n auto --dist loadgroup {{ ARGS }}
 
 # Run tests matching NAME (pytest -k)
 [unix]

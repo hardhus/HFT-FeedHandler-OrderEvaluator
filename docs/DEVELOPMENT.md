@@ -61,7 +61,36 @@ just waves reset_sync     # re-run with FST tracing and print the .fst paths
 just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.log
 ```
 
-Build outputs go to `build/`: `build/sim/<top>_<hash>/` per parameter set, plus `build/test-results.xml`.
+Build outputs go to `build/`:
+- `build/sim/<top>_<hash>/` holds one cocotb build per configuration, with one `run_<hash>/` per runtime environment;
+- `build/svtb/` holds SV-testbench builds;
+- `build/test-results.xml` is the JUnit report.
+
+### Builds, seeds and reproducing a failure
+
+- **Builds are reused.** The build directory name hashes the toplevel, parameters, defines, flags, every source file
+  and `tools.env`. Changing any of them gives a new directory; an unchanged configuration is not recompiled. Old
+  directories pile up; `just clean` removes them.
+- **Every run has a seed.** Each test prints a line such as
+  `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
+  The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
+  reset start with random values, so a missing reset shows up as a failure.
+  To replay a failure exactly: `HFT_SEED=<seed> just test-one <name>`.
+- **Parallel runs:** `just test` uses `pytest -n auto --dist loadgroup`. Tests that share a build run on the same
+  worker. If a test module passes some settings only as environment variables (for example the clock ratio), it lists
+  them in `RUNTIME_PARAMS`, so all values share one build.
+
+### Test helpers (`firmware/tb/common/`)
+
+| Module | Purpose |
+|--------|---------|
+| `runner.py` | `run_cocotb(toplevel, filelists, test_module, parameters, defines, extra_env, sva=True)` |
+| `svtb.py` | `run_svtb(top, filelists, tb_files)`: self-checking SV testbench under Verilator `--binary --timing`. The TB must print one `HFT_TB_RESULT: PASS/FAIL` line |
+| `clocks.py` | `start_clock(sig, period_ps, jitter_pct)`, plus clock-ratio profiles selected by `RATIO` (`same`, `net2host`, `host2net`, `jitter`) |
+| `scoreboard.py` | In-order scoreboard (catches loss, duplication and reordering) |
+
+AXI/AXI-Stream drivers come from [cocotbext-axi](https://github.com/alexforencich/cocotbext-axi). It works with
+cocotb 2.1 but emits `DeprecationWarning`s.
 
 Open waveforms with GTKWave or Surfer. Both ship with OSS CAD Suite and open through WSLg, for example
 `.tools/oss-cad-suite/bin/surfer build/sim/.../dump.fst`. Any Windows viewer works too.

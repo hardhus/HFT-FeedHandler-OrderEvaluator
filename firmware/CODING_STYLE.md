@@ -41,8 +41,9 @@ Every module starts with a short header comment:
   `s_axis_tdata`, `s_axis_tvalid`, `m_axi_awaddr`, … AXI-Stream byte 0 is `tdata[7:0]`.
 - Signals are `lower_snake_case`. Parameters and localparams are `UPPER_SNAKE_CASE`. Types end in `_t`.
 - Register outputs may use a `_q` suffix and their next-state signal a `_d` suffix. This is recommended, not
-  enforced (Verible's `port-name-suffix` and `dff-name-style` are disabled because they conflict with the AXI
-  names).
+  enforced. Verible's `port-name-suffix` and `dff-name-style` are disabled because they conflict with the AXI
+  names. `instance-shadowing` is also disabled, because it flags ordinary named connections such as `.clk(clk)`.
+  Still, do not reuse an outer name for an inner declaration.
 
 ## Processes
 

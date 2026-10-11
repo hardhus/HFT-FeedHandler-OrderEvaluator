@@ -8,6 +8,8 @@
 -port-name-suffix
 # _q/_d naming is recommended, not enforced (see CODING_STYLE.md).
 -dff-name-style
+# False positives on ordinary named connections such as .clk(clk) / .STAGES(STAGES).
+-instance-shadowing
 # Whitespace and code width are owned by the formatter (column_limit=100).
 -no-trailing-spaces
 -line-length
