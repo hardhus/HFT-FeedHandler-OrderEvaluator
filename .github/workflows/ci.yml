@@ -1,0 +1,63 @@
+# Same flow as a fresh WSL / Raspberry Pi 5 checkout: ./scripts/bootstrap.sh && just ci
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 (WSL-like) and arm64 (Raspberry Pi 5-like)
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned OSS CAD Suite + Verible (~2 GB unpacked); key changes only when tools.env does.
+      - name: Cache pinned tools
+        uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools.env') }}
+
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock', '.python-version') }}
+
+      - name: Bootstrap
+        run: ./scripts/bootstrap.sh
+
+      - name: just ci
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          just ci
+
+      - name: Legacy lint report
+        if: always()
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          just lint-legacy || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.os }}
+          path: |
+            build/test-results.xml
+            build/lint/legacy.log
+            build/sim/*/results.xml
+          if-no-files-found: ignore

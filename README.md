@@ -1,5 +1,7 @@
 # HFT FeedHandler & OrderEvaluator
 
+[![ci](https://github.com/hardhus/HFT-FeedHandler-OrderEvaluator/actions/workflows/ci.yml/badge.svg)](https://github.com/hardhus/HFT-FeedHandler-OrderEvaluator/actions/workflows/ci.yml)
+
 An FPGA feed handler and order evaluator for NASDAQ TotalView-ITCH 5.0 over MoldUDP64. The design is hybrid. The FPGA
 parses the feed, maintains state, and runs software-programmed tick-to-trade rules and pre-trade risk checks. Events
 reach the host through a DMA ring buffer that the host busy-polls, and a C++ application runs the more complex
