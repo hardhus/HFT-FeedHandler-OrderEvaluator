@@ -28,16 +28,23 @@ def profile(name: str | None = None) -> tuple[int, int, int]:
 async def _jittered(sig, period_ps: int, jitter_pct: int, rng: random.Random) -> None:
     half = period_ps // 2
     span = half * jitter_pct // 100
+    sig.value = 0  # start low: the first rising edge comes after inputs are driven
     while True:
+        await Timer(half + rng.randint(-span, span), unit="ps")
         sig.value = 1
         await Timer(half + rng.randint(-span, span), unit="ps")
         sig.value = 0
-        await Timer(half + rng.randint(-span, span), unit="ps")
 
 
 def start_clock(sig, period_ps: int, jitter_pct: int = 0, seed: int | None = None):
-    """Start a clock on `sig`. With jitter, each half period varies by +/-jitter_pct %."""
+    """Start a clock on `sig`. With jitter, each half period varies by +/-jitter_pct %.
+
+    The clock starts LOW, so its first rising edge is half a period later. Starting high (the
+    cocotb default) gives the DUT a rising edge at t=0, before the testbench has driven its
+    inputs: flops then capture random input values (seen in CI as a spurious FIFO overflow).
+    Drive all inputs before calling this anyway.
+    """
     if jitter_pct == 0:
-        return Clock(sig, period_ps, unit="ps").start()
+        return Clock(sig, period_ps, unit="ps").start(start_high=False)
     rng = random.Random(seed if seed is not None else random.getrandbits(32))
     return cocotb.start_soon(_jittered(sig, period_ps, jitter_pct, rng))

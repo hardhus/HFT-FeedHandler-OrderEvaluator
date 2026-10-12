@@ -38,8 +38,8 @@ async def start(dut):
     """Start the destination clock and let the (resetless) chain settle on d = 0."""
     width, stages, _ = cfg()
     _, dst_ps, jit = profile()
-    start_clock(dut.clk, dst_ps, jit)
     dut.d.value = 0
+    start_clock(dut.clk, dst_ps, jit)
     for _ in range(stages + 2):
         await RisingEdge(dut.clk)
 

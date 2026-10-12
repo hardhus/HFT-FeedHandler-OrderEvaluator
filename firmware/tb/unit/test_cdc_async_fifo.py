@@ -44,14 +44,15 @@ class Pulses:
 
 
 async def start(dut) -> Pulses:
-    """Clocks, power-up reset held long enough (see the module header), wait for both busy flags."""
+    """Inputs and reset first, then the clocks; power-up reset held long enough (see the module
+    header); wait for both busy flags."""
     wr_ps, rd_ps, jit = profile()
-    start_clock(dut.wr_clk, wr_ps, jit)
-    start_clock(dut.rd_clk, rd_ps, jit)
     dut.wr_en.value = 0
     dut.rd_en.value = 0
     dut.din.value = 0
     dut.rst.value = 1
+    start_clock(dut.wr_clk, wr_ps, jit)
+    start_clock(dut.rd_clk, rd_ps, jit)
     for _ in range(2 * SYNC_STAGES + 4):
         await RisingEdge(dut.wr_clk)
         await RisingEdge(dut.rd_clk)

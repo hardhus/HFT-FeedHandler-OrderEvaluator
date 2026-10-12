@@ -28,8 +28,7 @@ def cfg() -> tuple[str, int, int]:
 
 
 async def start(dut, cycles: int = 4) -> None:
-    """Clock, idle inputs, synchronous reset."""
-    start_clock(dut.clk, PERIOD_PS)
+    """Idle inputs and reset first, then the clock (no edge with undriven inputs)."""
     dut.s_axis_tvalid.value = 0
     dut.s_axis_tdata.value = 0
     dut.s_axis_tkeep.value = 0
@@ -37,6 +36,7 @@ async def start(dut, cycles: int = 4) -> None:
     dut.s_axis_tuser.value = 0
     dut.m_axis_tready.value = 0
     dut.rst.value = 1
+    start_clock(dut.clk, PERIOD_PS)
     for _ in range(cycles):
         await RisingEdge(dut.clk)
     dut.rst.value = 0

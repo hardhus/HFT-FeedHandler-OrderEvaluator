@@ -24,12 +24,12 @@ def jitter() -> int:
 async def start(dut) -> None:
     """Both clocks, both resets asserted together, released in their own domains."""
     src_ps, dst_ps, jit = profile()
-    start_clock(dut.src_clk, src_ps, jit)
-    start_clock(dut.dst_clk, dst_ps, jit)
     dut.src_valid.value = 0
     dut.src_data.value = 0
     dut.src_rst.value = 1
     dut.dst_rst.value = 1
+    start_clock(dut.src_clk, src_ps, jit)
+    start_clock(dut.dst_clk, dst_ps, jit)
     for _ in range(STAGES + 4):
         await RisingEdge(dut.src_clk)
         await RisingEdge(dut.dst_clk)

@@ -22,8 +22,8 @@ def stages() -> int:
 
 
 async def start(dut):
-    start_clock(dut.clk, PERIOD_NS * 1000)
     dut.rst_in.value = 1
+    start_clock(dut.clk, PERIOD_NS * 1000)
     for _ in range(stages() + 2):
         await RisingEdge(dut.clk)
 

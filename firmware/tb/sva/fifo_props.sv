@@ -1,8 +1,12 @@
 // fifo_props: contract checks for cdc_async_fifo (any IMPL); bind to the FIFO instance.
-// Simulation only. Contract: outputs are defined once the power-up reset has been released
-// and both busy flags have dropped. During the power-up hold, random initial synchronizer
-// state can make rd_rst_busy glitch before the real reset request arrives, so the read side
-// is armed only by a busy seen after rst was released (the real request is still in flight).
+// Simulation only. Contract: outputs are defined once the power-up reset has been released.
+// Both sides are therefore armed only at that point, never by an edge seen during the hold:
+//  - write side: when rst is seen low after having been high. Before that, resetless flops such
+//    as overflow may still hold random power-up values, and the checker may even see an initial
+//    clock edge the DUT does not act on (Verilator, random init; CI seed 1438791676).
+//  - read side: by a rd_rst_busy seen after the release (the real reset request is still in
+//    flight then); random synchronizer state can make rd_rst_busy glitch during the hold.
+// Regressions for both: tb/sv/tb_fifo_props_arming.sv.
 module fifo_props #(
     parameter int unsigned WIDTH = 64
 ) (
@@ -20,22 +24,22 @@ module fifo_props #(
     input logic             rd_rst_busy
 );
   // Sim-only: initial + always (not always_ff) on purpose.
-  logic armed_wr, released_wr, armed_rd;
+  logic rst_seen, armed_wr, armed_rd;
   initial begin
-    armed_wr    = 1'b0;
-    released_wr = 1'b0;
-    armed_rd    = 1'b0;
+    rst_seen = 1'b0;
+    armed_wr = 1'b0;
+    armed_rd = 1'b0;
   end
   always @(posedge wr_clk) begin
     if (rst) begin
-      armed_wr <= 1'b1;
+      rst_seen <= 1'b1;
     end
-    if (armed_wr && !rst) begin
-      released_wr <= 1'b1;  // power-up reset released
+    if (rst_seen && !rst) begin
+      armed_wr <= 1'b1;  // power-up reset released
     end
   end
   always @(posedge rd_clk) begin
-    if (released_wr && rd_rst_busy) begin
+    if (armed_wr && rd_rst_busy) begin
       armed_rd <= 1'b1;
     end
   end
