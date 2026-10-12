@@ -3,6 +3,7 @@
 import pytest
 
 from common.clocks import PROFILES, profile
+from common.junit import tidy_junit
 from common.runner import build_key, env_dir_name
 from common.scoreboard import Scoreboard
 
@@ -50,3 +51,20 @@ def test_clock_profiles(monkeypatch):
     monkeypatch.setenv("RATIO", "net2host")
     assert profile() == PROFILES["net2host"]
     assert profile("same")[0] == profile("same")[1]
+
+
+def test_tidy_junit(tmp_path):
+    report = tmp_path / "r.xml"
+    report.write_text(
+        '<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" tests="2">'
+        '<testcase classname="m" name="t[b]@m::t[x=1]" time="1" />'
+        '<testcase classname="m" name="t[a]@m::t[x=1]" time="2"><failure message="boom" /></testcase>'
+        "</testsuite></testsuites>"
+    )
+    tidy_junit(report)
+    text = report.read_text()
+    lines = text.splitlines()
+    assert len(lines) > 4, "report should be indented, one element per line"
+    assert "@" not in text, "xdist group suffix should be removed"
+    assert text.index('name="t[a]"') < text.index('name="t[b]"'), "cases should be sorted"
+    assert '<failure message="boom"' in text, "failure details must be kept"
