@@ -1,6 +1,9 @@
 // reset_sync: asynchronous-assert / synchronous-deassert reset synchronizer.
 // Clock domain : clk
 // Latency      : assert = immediate (async); deassert = STAGES rising edges
+// Pulse        : any rst_in pulse, even one between two clk edges, gives rst_out high until
+//                STAGES rising edges after its release (in hardware: at least the flop's
+//                minimum asynchronous reset pulse width)
 // Note         : the only module allowed to use an async reset (see CODING_STYLE.md)
 module reset_sync #(
     parameter int unsigned STAGES = 3

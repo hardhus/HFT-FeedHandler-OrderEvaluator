@@ -3,6 +3,8 @@
 // Latency      : STAGES rising edges (STAGES or STAGES+1 with HFT_SIM_CDC_JITTER)
 // Note         : only for single bits or gray-coded buses, never for binary multi-bit values.
 //                No reset: the chain settles to d within STAGES cycles.
+// Pulse        : hold each level for more than 2 clk periods (longest period, jitter included);
+//                a shorter pulse may be missed. Use cdc_handshake for events.
 module sync_bit #(
     parameter int unsigned WIDTH  = 1,
     parameter int unsigned STAGES = 2

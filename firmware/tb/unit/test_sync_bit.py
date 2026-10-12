@@ -126,6 +126,59 @@ async def tc_gray_bus_valid(dut):
 
 
 @cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_min_pulse(dut):
+    """Pulse-width contract. A level held longer than two clk periods (the longest period,
+    jitter included) always shows up on q. A pulse that spans a single clk edge is not
+    covered: the jitter model (like real metastability) may miss it."""
+    width, stages, jitter = cfg()
+    _, dst_ps, jit = profile()
+    await start(dut)
+    max_period = dst_ps * (100 + jit) // 100
+
+    async def seen_within(bit: int, edges: int) -> bool:
+        for _ in range(edges):
+            await RisingEdge(dut.clk)
+            await ReadOnly()
+            if int(dut.q.value) & bit:
+                return True
+        return False
+
+    async def settle():
+        for _ in range(stages + 3):
+            await RisingEdge(dut.clk)
+
+    # Contract: > 2 longest periods at a random phase -> never missed.
+    for _ in range(40):
+        bit = 1 << random.randrange(width)
+        await FallingEdge(dut.clk)
+        await Timer(random.randint(0, dst_ps), unit="ps")
+        watch = cocotb.start_soon(seen_within(bit, stages + 5))
+        dut.d.value = bit
+        await Timer(2 * max_period + 1, unit="ps")
+        dut.d.value = 0
+        assert await watch, f"pulse of {2 * max_period + 1} ps on bit {bit:#x} never reached q"
+        await settle()
+
+    # Outside the contract: a pulse that spans exactly one rising edge. The jitter model drops
+    # it when the rising change is captured late and the falling one is not (p = 1/4), so
+    # 120 tries miss nothing with p = 0.75**120 ~ 1e-15.
+    missed = 0
+    for _ in range(120):
+        bit = 1 << random.randrange(width)
+        await FallingEdge(dut.clk)
+        watch = cocotb.start_soon(seen_within(bit, stages + 3))
+        dut.d.value = bit
+        await FallingEdge(dut.clk)
+        dut.d.value = 0
+        missed += not await watch
+        await settle()
+    if jitter:
+        assert missed > 0, "jitter model never dropped a one-edge pulse"
+    else:
+        assert missed == 0, f"{missed} one-edge pulses dropped without the jitter model"
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_jitter_model(dut):
     """All bits flip at once: with HFT_SIM_CDC_JITTER some samples show a mixture of old and
     new bits (the model is active); without it q only ever shows the old or the new word."""

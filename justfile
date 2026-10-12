@@ -86,10 +86,11 @@ lint-legacy:
     verible-verilog-lint --ruleset=all --rules_config=.rules.verible_lint $L/*.sv >>"$log" 2>&1
     echo "legacy lint: $(grep -cE '%(Warning|Error)' "$log") verilator + $(grep -cE '\[Style: ' "$log") verible findings -> $log"
 
-# Run all cocotb tests in parallel
+# Run all cocotb tests in parallel (extra pytest args are passed through as given, e.g. -k "a or b")
+[positional-arguments]
 [unix]
 test *ARGS:
-    uv run pytest -n auto --dist loadgroup {{ ARGS }}
+    uv run pytest -n auto --dist loadgroup "$@"
 
 # Run tests matching NAME (pytest -k)
 [unix]

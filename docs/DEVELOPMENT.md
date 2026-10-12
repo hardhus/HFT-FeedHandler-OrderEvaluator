@@ -81,7 +81,8 @@ Build outputs go to `build/`:
   directories pile up; `just clean` removes them.
   The hash covers every file of the filelists a build uses, so editing any file in `common.f` (or `sva.f`) rebuilds
   every test that uses that list. Expect a cold `just test` after such a change.
-  For reference (WSL, 2 workers, 62 tests): a warm `just test` takes about 1.5 minutes, a cold one about 10 minutes.
+  For reference (WSL, 2 workers, 62 tests): a warm `just test` takes about 1.5 minutes. A cold
+  one took 10 to 36 minutes on `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a

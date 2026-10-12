@@ -5,6 +5,7 @@ test_reset_sync(), which builds and runs the simulation per STAGES value.
 """
 
 import os
+import random
 
 import cocotb
 import pytest
@@ -79,6 +80,35 @@ async def tc_reassert_during_release(dut):
     await RisingEdge(dut.clk)
     await ReadOnly()
     assert dut.rst_out.value == 0
+
+
+@cocotb.test()
+async def tc_short_pulse(dut):
+    """A rst_in pulse shorter than a clock period, between two edges, still gives a full
+    reset: rst_out rises at once and falls exactly STAGES rising edges after the pulse."""
+    await start(dut)
+    dut.rst_in.value = 0
+    for _ in range(stages() + 2):
+        await RisingEdge(dut.clk)
+    period_ps = PERIOD_NS * 1000
+    for _ in range(20):
+        await RisingEdge(dut.clk)
+        offset = random.randint(100, period_ps - 300)  # keep the pulse off the clock edges
+        width = random.randint(1, period_ps - 200 - offset)
+        await Timer(offset, unit="ps")
+        dut.rst_in.value = 1
+        await Timer(width, unit="ps")
+        assert dut.rst_out.value == 1, f"{width} ps pulse: assert must be asynchronous"
+        dut.rst_in.value = 0
+        edges = 0
+        while True:
+            await RisingEdge(dut.clk)
+            edges += 1
+            await ReadOnly()
+            if dut.rst_out.value == 0:
+                break
+            assert edges <= stages(), "deassert took too long"
+        assert edges == stages(), f"{width} ps pulse: reset lasted {edges} edges, expected {stages()}"
 
 
 @cocotb.test()

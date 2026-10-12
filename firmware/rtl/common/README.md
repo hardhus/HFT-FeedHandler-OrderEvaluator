@@ -18,16 +18,16 @@ The CDC rules that go with these blocks are in [`CODING_STYLE.md`](../../CODING_
 | `axis_register` | Forward AXI-Stream register (`tvalid`/payload registered) | Breaking long forward data paths |
 | `axis_skid_buffer` | AXI-Stream register slice, both directions registered | Module boundaries where `tready` must not be combinational |
 
-**Which CDC block?** A level that may be sampled late → `sync_bit`. A multi-bit value that changes rarely and must
-arrive whole → `cdc_handshake`. A stream of values, one per cycle → `cdc_async_fifo`. There is no CDC on the
+**Which CDC block?** A level that may be sampled late and is held for more than 2 destination clock periods →
+`sync_bit`. A single event or a multi-bit value that changes rarely and must arrive whole → `cdc_handshake`. A stream of values, one per cycle → `cdc_async_fifo`. There is no CDC on the
 tick-to-trade path; these blocks only affect the host, config and counter paths.
 
 ## Interfaces and timing
 
 | Block | Parameters | Clock domains | Latency | Throughput | Reset |
 |-------|------------|---------------|---------|------------|-------|
-| `reset_sync` | `STAGES=3` | `clk` | assert immediate, deassert `STAGES` edges | – | `rst_in` async, active-high |
-| `sync_bit` | `WIDTH=1`, `STAGES=2` (≥ 2) | `clk` (destination); `d` asynchronous | `STAGES` edges (+1 in jitter mode) | – | none (settles to `d`) |
+| `reset_sync` | `STAGES=3` | `clk` | assert immediate, deassert `STAGES` edges | – | `rst_in` async, active-high; any pulse width gives a full reset |
+| `sync_bit` | `WIDTH=1`, `STAGES=2` (≥ 2) | `clk` (destination); `d` asynchronous | `STAGES` edges (+1 in jitter mode) | hold each level > 2 `clk` periods (longest, jitter included) | none (settles to `d`) |
 | `cdc_handshake` | `WIDTH=32`, `STAGES=2` | `src_clk` (`src_*`), `dst_clk` (`dst_*`) | `STAGES+1` dst cycles to `dst_valid` (+1 jitter) | one word per req/ack round trip | `src_rst`, `dst_rst` asserted together |
 | `cdc_async_fifo` | `WIDTH=64`, `DEPTH_LOG2=4` (≥ 2; ≥ 4 for `xpm`), `SYNC_STAGES=2`, `IMPL="portable"` | `wr_clk` (`rst`, `wr_*`, `full`, `overflow`, `wr_rst_busy`), `rd_clk` (`rd_*`, `dout`, `empty`, `underflow`, `rd_rst_busy`) | write → `!empty` ≤ `SYNC_STAGES+3` rd cycles | 1 word/cycle per side | `rst` synchronous to `wr_clk`, busy handshake (below) |
 | `axis_register` | `DATA_W=64` (multiple of 8), `USER_W=1` | `clk` | 1 cycle | 1 beat/cycle | `rst` sync (control only) |

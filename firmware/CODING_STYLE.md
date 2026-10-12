@@ -43,6 +43,8 @@ The blocks are described in [`rtl/common/README.md`](rtl/common/README.md).
   declare them.
 - A multi-bit value crosses only as a gray code (FIFO pointers, through `sync_bit`), through `cdc_handshake`, or
   through `cdc_async_fifo`. Never pass a binary bus through `sync_bit`.
+- A level passed through `sync_bit` must stay stable for more than 2 destination clock periods; a shorter pulse may
+  be lost. Send events (one-cycle pulses) through `cdc_handshake`.
 - A register that is read in another domain without a synchronizer, because a protocol keeps it stable, is marked
   `(* hft_cdc_data = "TRUE" *)` (for example `cdc_handshake.data_q`). FIFO storage is async-read LUTRAM
   (`ram_style = "distributed"`).
