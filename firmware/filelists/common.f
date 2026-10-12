@@ -2,3 +2,5 @@
 # Paths are relative to this file.
 ../rtl/common/reset_sync.sv
 ../rtl/common/sync_bit.sv
+../rtl/common/axis_register.sv
+../rtl/common/axis_skid_buffer.sv
