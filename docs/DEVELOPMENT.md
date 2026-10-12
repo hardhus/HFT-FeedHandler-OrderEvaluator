@@ -76,6 +76,12 @@ Build outputs go to `build/`:
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
   reset start with random values, so a missing reset shows up as a failure.
   To replay a failure exactly: `HFT_SEED=<seed> just test-one <name>`.
+- **Failures carry their own diagnosis.** A failed cocotb run reports its seed, its environment, the log path
+  (`build/sim/<build>/run_<env>/sim.log`, kept on disk) and the simulator's error lines, e.g. the failing SVA. This
+  appears in the pytest summary and in `build/test-results.xml`.
+- **Assertions (SVA):** `firmware/filelists/sva.f` (protocol checkers in `firmware/tb/sva/` plus binds) is compiled
+  into every cocotb build. A failing assertion stops the simulation. The checkers themselves are tested in
+  `tb/unit/test_sva_checkers.py`.
 - **Parallel runs:** `just test` uses `pytest -n auto --dist loadgroup`.
   - The number of workers and of compile jobs comes from one budget: min(CPUs, available RAM / 600 MB).
     Under WSL the budget is capped at 2. Override it with `HFT_JOBS=<n>` (environment or `.env.local`).

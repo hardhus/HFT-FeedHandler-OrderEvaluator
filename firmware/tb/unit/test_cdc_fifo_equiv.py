@@ -15,7 +15,7 @@ SEEDS = [1, 2, 3]
 def test_cdc_fifo_equiv_portable(seed):
     run_svtb(
         top="tb_cdc_fifo_equiv",
-        filelists=["common.f"],
+        filelists=["common.f", "sva.f"],  # fifo_props checks the contract
         tb_files=["firmware/tb/sv/tb_cdc_fifo_equiv.sv"],
         seed=seed,
     )

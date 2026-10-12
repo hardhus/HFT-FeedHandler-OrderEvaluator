@@ -16,8 +16,9 @@ set out [file normalize [file join $fw .. build xsim $impl]]
 file mkdir $out
 cd $out
 
+# sva.f binds fifo_props, so the XPM FIFO is also checked against the contract assertions.
 set srcs [concat [read_f $fw/filelists/common.f] [read_f $fw/filelists/xilinx.f] \
-  [list [file join $fw tb sv tb_cdc_fifo_equiv.sv]]]
+  [read_f $fw/filelists/sva.f] [list [file join $fw tb sv tb_cdc_fifo_equiv.sv]]]
 set defs [list -d HFT_HAVE_XPM]
 if {$impl eq "xpm"} {
   lappend defs -d HFT_FIFO_IMPL_XPM
@@ -47,6 +48,12 @@ run [list [tool xvlog] -sv {*}$defs {*}$srcs]
 run [list [tool xelab] tb_cdc_fifo_equiv glbl -L xpm -timescale 1ns/1ps -s equiv]
 set log [run [list [tool xsim] equiv -R -testplusarg seed=$seed]]
 
+# XSIM reports a failing assertion ($error) and keeps running, so the TB alone could still
+# print PASS: any runtime "Error:" line fails the run as well.
+if {[regexp -line {^Error: .*} $log assertion]} {
+  puts "XSIM equivalence FAILED (impl=$impl seed=$seed): $assertion"
+  exit 1
+}
 if {![regexp {HFT_TB_RESULT: PASS[^\n]*} $log result]} {
   puts "XSIM equivalence FAILED (impl=$impl seed=$seed)"
   exit 1

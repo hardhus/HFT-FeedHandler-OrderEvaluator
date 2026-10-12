@@ -172,18 +172,38 @@ def run_cocotb(
             )
             stamp.write_text(json.dumps(config, sort_keys=True, default=str))
 
+    log = run_dir / "sim.log"
     print(f"[hft] {toplevel} seed={seed} build={build_dir.name} env={env}  (rerun: HFT_SEED={seed})")
-    runner.test(
-        hdl_toplevel=toplevel,
-        hdl_toplevel_lang="verilog",  # required when build() was skipped (reused build)
-        test_module=test_module,
-        testcase=testcase,
-        build_dir=build_dir,
-        test_dir=run_dir,
-        results_xml=str(run_dir / "results.xml"),
-        seed=seed,
-        plusargs=["+verilator+rand+reset+2", f"+verilator+seed+{seed}"],
-        extra_env=env,
-        waves=waves,
-    )
+    try:
+        runner.test(
+            hdl_toplevel=toplevel,
+            hdl_toplevel_lang="verilog",  # required when build() was skipped (reused build)
+            test_module=test_module,
+            testcase=testcase,
+            build_dir=build_dir,
+            test_dir=run_dir,
+            results_xml=str(run_dir / "results.xml"),
+            seed=seed,
+            plusargs=["+verilator+rand+reset+2", f"+verilator+seed+{seed}"],
+            extra_env=env,
+            waves=waves,
+            log_file=log,
+        )
+    except (SystemExit, RuntimeError) as exc:
+        # Make every failure reproducible from the report alone: seed, env, log and the
+        # simulator's own error lines (the log stays in the run directory).
+        raise AssertionError(
+            f"{toplevel} failed: seed={seed} env={env}\n"
+            f"rerun: HFT_SEED={seed} (same parameters/env)\nlog: {log}\n{failure_lines(log)}"
+        ) from exc
 
+
+def failure_lines(log: Path, limit: int = 12) -> str:
+    """The interesting lines of a simulation log: assertion/error/failed-test messages."""
+    try:
+        lines = log.read_text(errors="replace").splitlines()
+    except OSError:
+        return "(no log)"
+    keys = ("Assertion failed", "AssertionError", "%Error", "Error:", " failed", "FAIL")
+    hits = [line.strip() for line in lines if any(k in line for k in keys)]
+    return "\n".join(hits[:limit]) or "\n".join(lines[-limit:])
