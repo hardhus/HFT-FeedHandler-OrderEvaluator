@@ -32,23 +32,36 @@ setup:
 doctor:
     bash scripts/doctor.sh
 
-# Lint new RTL (blocking): Verilator -Wall per module (file name == module name),
+# SystemVerilog files under the style gate, one per line: KIND PATH. KIND is
+# rtl (Verilator top = file name, -F common.f), ooc (same with synth_ooc.f) or style (Verible only:
+# XPM wrappers that Verilator cannot compile, SVA checkers and self-checking SV testbenches).
+[private]
+[script("bash")]
+[unix]
+sv-files:
+    set -euo pipefail
+    files_of() { grep -vE '^\s*(#|//)' "firmware/filelists/$1" | sed '/^\s*$/d; s|^|firmware/filelists/|'; }
+    files_of common.f | sed 's/^/rtl /'
+    files_of synth_ooc.f | sed 's/^/ooc /'
+    { files_of xilinx.f; files_of sva.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
 
-# Verible style rules (.rules.verible_lint, same as the editor) and formatting.
+# Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check
 [script("bash")]
 [unix]
 lint:
     set -uo pipefail
     fail=0
     srcs=()
-    for f in $(grep -vE '^\s*(#|//)' firmware/filelists/common.f | sed '/^\s*$/d'); do
-      srcs+=("firmware/filelists/$f")
-    done
-    for f in "${srcs[@]}"; do
+    while read -r kind f; do
+      srcs+=("$f")
+      [ "$kind" = style ] && continue
       top=$(basename "$f" .sv)
+      lists=(-F firmware/filelists/common.f)
+      [ "$kind" = ooc ] && lists+=(-F firmware/filelists/synth_ooc.f)
       echo "== verilator $top"
-      verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt -F firmware/filelists/common.f || fail=1
-    done
+      verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
+    done < <(just sv-files)
+    [ ${#srcs[@]} -gt 0 ] || { echo "lint: no files found"; exit 1; }
     echo "== verible-verilog-lint"
     verible-verilog-lint --ruleset=all --rules_config=.rules.verible_lint "${srcs[@]}" || fail=1
     echo "== verible-verilog-format --verify"
@@ -89,13 +102,13 @@ waves NAME:
     WAVES=1 uv run pytest -k '{{ NAME }}' -p no:xdist
     @find "$HFT_BUILD_DIR/sim" -name '*.fst' -newer pyproject.toml -print
 
-# Format new RTL in place (same flags as the editor: firmware/lint/verible-format.flags)
+# Format every file under the style gate in place (same flags as the editor: firmware/lint/verible-format.flags)
 [script("bash")]
 [unix]
 fmt:
     set -euo pipefail
-    for f in $(grep -vE '^\s*(#|//)' firmware/filelists/common.f | sed '/^\s*$/d'); do
-      verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "firmware/filelists/$f"
+    just sv-files | while read -r _ f; do
+      verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "$f"
     done
 
 # doctor + lint + test

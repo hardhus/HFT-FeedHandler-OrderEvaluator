@@ -32,8 +32,28 @@ Every module starts with a short header comment:
 - Control flops (FSM state, valid bits, counters) use a synchronous reset. Datapath registers are not reset.
 - **Exception:** `reset_sync` uses an asynchronous assert and a synchronous deassert, as its definition requires.
   It is the only module allowed to have an async reset.
-- Every signal that crosses a clock domain goes through a CDC block from `rtl/common/`. No ad hoc
-  double-flops in leaf modules.
+
+## Clock domain crossing
+
+The blocks are described in [`rtl/common/README.md`](rtl/common/README.md).
+
+- Every signal that crosses a clock domain goes through a CDC block from `rtl/common/` (`sync_bit`,
+  `cdc_handshake`, `cdc_async_fifo`). No ad hoc double-flops in leaf modules.
+- Synchronizer flops carry `(* ASYNC_REG = "TRUE" *)` and have no reset. Only `sync_bit` and `reset_sync`
+  declare them.
+- A multi-bit value crosses only as a gray code (FIFO pointers, through `sync_bit`), through `cdc_handshake`, or
+  through `cdc_async_fifo`. Never pass a binary bus through `sync_bit`.
+- A register that is read in another domain without a synchronizer, because a protocol keeps it stable, is marked
+  `(* hft_cdc_data = "TRUE" *)` (for example `cdc_handshake.data_q`). FIFO storage is async-read LUTRAM
+  (`ram_style = "distributed"`).
+- CDC timing constraints are not written by hand. [`constraints/cdc.tcl`](constraints/cdc.tcl) derives them from
+  the netlist (`ASYNC_REG` chains, `hft_cdc_data` cells, LUTRAM read across clocks). Do not use
+  `set_clock_groups -asynchronous`, which would override them.
+- `cdc_async_fifo` reset contract: `rst` is synchronous to `wr_clk`; no `wr_en` / `rd_en` while
+  `wr_rst_busy` / `rd_rst_busy` is high; hold `rst` for at least `2*SYNC_STAGES+2` slow-clock cycles after power-up.
+- `cdc_handshake`: `src_rst` and `dst_rst` come from one reset source (one `reset_sync` per domain).
+- Every new CDC use must pass `just synth-common`-style checks: `report_cdc` without Critical findings and without an
+  unconstrained crossing.
 
 ## Ports and naming
 

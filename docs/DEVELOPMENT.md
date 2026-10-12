@@ -54,12 +54,20 @@ Optional per-machine settings go in `.env.local` (git-ignored). Copy them from [
 
 ```bash
 just lint                 # Verilator -Wall + Verible lint + format check (blocking)
-just fmt                  # format new RTL in place
+just fmt                  # format every file under the lint gate in place
 just test                 # all cocotb tests, in parallel
 just test-one reset_sync  # tests matching a name (pytest -k)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths
 just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.log
 ```
+
+`just lint` covers:
+- **Verilator `-Wall` + Verible:** every module in `common.f` (each as its own top) and the OOC synthesis harnesses in
+  `synth_ooc.f`;
+- **Verible only (lint + format):** the XPM wrappers in `xilinx.f` (Verilator cannot compile XPM), the SVA checkers
+  in `sva.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
+
+The list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
 
 Build outputs go to `build/`:
 - `build/sim/<top>_<hash>/` holds one cocotb build per configuration, with one `run_<hash>/` per runtime environment;
@@ -71,6 +79,9 @@ Build outputs go to `build/`:
 - **Builds are reused.** The build directory name hashes the toplevel, parameters, defines, flags, every source file
   and `tools.env`. Changing any of them gives a new directory; an unchanged configuration is not recompiled. Old
   directories pile up; `just clean` removes them.
+  The hash covers every file of the filelists a build uses, so editing any file in `common.f` (or `sva.f`) rebuilds
+  every test that uses that list. Expect a cold `just test` after such a change.
+  For reference (WSL, 2 workers, 62 tests): a warm `just test` takes about 1.5 minutes, a cold one about 10 minutes.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a

@@ -33,8 +33,9 @@ for the RTL rules.
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
 | `firmware/filelists/` | `.f` filelists shared by Verilator, cocotb and Vivado |
-| `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), reference models, SVA, legacy SV testbenches |
-| `firmware/scripts/vivado/` | Vivado Tcl: project generation and OOC synthesis |
+| `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), SVA checkers (`sva/`), self-checking SV testbenches (`sv/`), legacy SV testbenches |
+| `firmware/scripts/vivado/` | Vivado Tcl: project generation, OOC synthesis gate, XSIM runs |
+| `firmware/constraints/` | Netlist-driven CDC constraints (`cdc.tcl`) |
 | `firmware/lint/` | Verilator waivers and Verible format flags |
 | `scripts/` | Bootstrap, setup and doctor scripts |
 | `software/` | C++ host side: early stage, to be rebuilt around the DMA ring interface |
@@ -43,12 +44,20 @@ for the RTL rules.
 
 - **RTL:** SystemVerilog
 - **Verification:** Verilator 5, cocotb 2, pytest; Verible for style lint and formatting
-- **Synthesis checks (optional):** AMD Vivado (OOC timing and utilization reports, XSIM for the legacy testbench)
+- **Synthesis checks (optional):** AMD Vivado (OOC timing/`report_cdc` gate, XSIM for the cross-simulator FIFO test)
 - **Tooling:** just, uv, pinned OSS CAD Suite (Linux x86_64 and arm64)
 - **Software:** C++20
 
 ## Status
 
-Phase F0 (infrastructure) is in place: a cross-platform toolchain, the lint gate, the cocotb test harness and a first
-verified block (`reset_sync`). The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced
-block by block in the following phases.
+- **F0, infrastructure:** cross-platform toolchain (WSL, Raspberry Pi 5, GitHub Actions x64/arm64), lint gate and
+  cocotb test harness with build reuse, per-run seeds and randomized initial state.
+- **F1, common blocks:** verified CDC and AXI-Stream building blocks in
+  [`firmware/rtl/common/`](firmware/rtl/common/README.md): `reset_sync`, `sync_bit`, `cdc_handshake`,
+  `cdc_async_fifo` (portable and XPM), `axis_register` and `axis_skid_buffer`.
+  - Multi-clock tests with jittered clocks and a metastability model, plus SVA protocol checkers.
+  - The portable and XPM FIFOs pass the same testbench in Verilator and XSIM.
+  - Netlist-driven CDC constraints, with an OOC synthesis gate on timing and `report_cdc`.
+
+The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
+phases.
