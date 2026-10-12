@@ -167,6 +167,16 @@ vivado-project PART=fpga_part:
 synth-ooc TOP PART=fpga_part LISTS="common.f":
     New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ LISTS }}
 
+# Cross-simulator FIFO check in XSIM: IMPL = portable | xpm (same TB and seed as `just test`)
+[windows]
+xsim-test IMPL="xpm" SEED="1":
+    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log xsim_{{ IMPL }}.log -source ../../firmware/scripts/vivado/xsim_run.tcl -tclargs {{ IMPL }} {{ SEED }}
+
+# Cross-simulator FIFO check in XSIM: IMPL = portable | xpm (same TB and seed as `just test`)
+[unix]
+xsim-test IMPL="xpm" SEED="1":
+    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log xsim_{{ IMPL }}.log -source ../../firmware/scripts/vivado/xsim_run.tcl -tclargs {{ IMPL }} {{ SEED }}
+
 # Regenerate the board-less Vivado project under build/vivado/<PART>
 [unix]
 vivado-project PART=fpga_part:

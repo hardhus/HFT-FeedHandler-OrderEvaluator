@@ -129,7 +129,13 @@ run the legacy XSIM testbench.
 just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr (no board part)
 just synth-ooc reset_sync                # build/vivado/ooc/reset_sync/{timing_summary,utilization}.rpt
 just synth-ooc HFT_Top_Core xc7a100tcsg324-1 "legacy.f common.f"
+just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```
+
+`just xsim-test` runs `firmware/tb/sv/tb_cdc_fifo_equiv.sv`. It is the same self-checking TB that `just test` runs
+under Verilator (seeds 1–3). The TB uses its own random generator, so for the portable FIFO a given seed produces
+identical results in both simulators. The XPM variant (`IMPL=xpm`) can only be simulated in Vivado. It is checked
+against the same contract and stimulus; its FWFT capacity is one word larger.
 
 The project file is generated and never committed. Sources come from the same filelists that Verilator uses.
 

@@ -33,9 +33,13 @@ def run_svtb(
     tb_files: list[str | Path],
     defines: dict | None = None,
     plusargs: list[str] | None = None,
+    seed: int | None = None,
     timeout_s: int = 600,
 ) -> str:
-    """Compile and run `top`; fail unless the TB prints a PASS sentinel. Returns the output."""
+    """Compile and run `top`; fail unless the TB prints a PASS sentinel. Returns the output.
+
+    `seed` fixes the TB's +seed (e.g. to replay the same stimulus in another simulator);
+    by default HFT_SEED or a random seed is used."""
     defines = dict(defines or {})
     tb_paths = [(REPO / p).resolve() if not Path(p).is_absolute() else Path(p) for p in tb_files]
     sources = [*sources_for(filelists), *tb_paths]
@@ -52,10 +56,13 @@ def run_svtb(
                 *[f"+define+{k}={v}" for k, v in defines.items()],
                 *map(str, sources),
             ]  # fmt: skip
-            subprocess.run(cmd, check=True, cwd=REPO)
+            build = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO)
+            if build.returncode != 0:
+                log = "\n".join((build.stdout + build.stderr).splitlines()[-40:])
+                raise AssertionError(f"{top}: verilator build failed\n{log}")
             (build_dir / STAMP).write_text(" ".join(cmd))
 
-    seed = run_seed()
+    seed = seed if seed is not None else run_seed()
     run = [str(exe), f"+seed={seed}", "+verilator+rand+reset+2", f"+verilator+seed+{seed}"]
     run += plusargs or []
     print(f"[hft] {top} seed={seed} build={build_dir.name}  (rerun: HFT_SEED={seed})")

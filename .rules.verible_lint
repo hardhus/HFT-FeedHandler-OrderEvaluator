@@ -10,6 +10,8 @@
 -dff-name-style
 # False positives on ordinary named connections such as .clk(clk) / .STAGES(STAGES).
 -instance-shadowing
+# Parameters/localparams are UPPER_SNAKE_CASE (CODING_STYLE.md); the default pattern rejects inner '_'.
+parameter-name-style=parameter_style:ALL_CAPS;localparam_style:ALL_CAPS
 # Whitespace and code width are owned by the formatter (column_limit=100).
 -no-trailing-spaces
 -line-length
