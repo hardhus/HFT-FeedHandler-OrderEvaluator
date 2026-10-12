@@ -66,7 +66,9 @@ module cdc_async_fifo #(
     logic [N:0] rbin_q, rgray_q, rbin_next, rgray_next, wgray_s;
     logic wr_fire, rd_fire;
     logic rst_req_q, ack_s, req_s, ack_q;
-    (* hft_cdc_data = "TRUE" *) logic [WIDTH-1:0] mem[2**N];
+    // LUTRAM on purpose: async read for FWFT; also keeps a consumer's output register from
+    // pulling the array into a BRAM.
+    (* ram_style = "distributed", hft_cdc_data = "TRUE" *) logic [WIDTH-1:0] mem[2**N];
 
     // ---- reset handshake: wr side requests, rd side resets and acknowledges ----
     always_ff @(posedge wr_clk) begin

@@ -133,8 +133,9 @@ run the legacy XSIM testbench.
 
 ```powershell
 just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr (no board part)
-just synth-ooc reset_sync                # build/vivado/ooc/reset_sync/{timing_summary,utilization}.rpt
-just synth-ooc HFT_Top_Core xc7a100tcsg324-1 "legacy.f common.f"
+just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>/{timing_summary,utilization,cdc}.rpt
+just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
+just synth-common                         # every common block, both clock directions, gated
 just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```
 
@@ -142,6 +143,21 @@ just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM
 under Verilator (seeds 1–3). The TB uses its own random generator, so for the portable FIFO a given seed produces
 identical results in both simulators. The XPM variant (`IMPL=xpm`) can only be simulated in Vivado. It is checked
 against the same contract and stimulus; its FWFT capacity is one word larger.
+
+`synth-ooc` (and therefore `synth-common`) **fails** in any of these cases:
+- negative register-to-register setup or hold slack;
+- a Critical `report_cdc` finding, or any warning ID other than CDC-6 (gray-coded multi-bit synchronizer) and CDC-15
+  (enable-captured stable data);
+- a crossing that `firmware/constraints/cdc.tcl` could not constrain.
+
+`cdc.tcl` derives the CDC constraints from the netlist rather than from instance names:
+- the first flop of each `ASYNC_REG` chain, plus bus skew per synchronizer;
+- cells marked `(* hft_cdc_data = "TRUE" *)`;
+- LUTRAM read across clocks (FIFO storage).
+
+Clock profiles: `net2host` is 156.25 MHz → 250 MHz (`wr`/`src`/`clk` at 156.25), and `host2net` is the reverse.
+The legacy top also synthesizes, but its port names are not in the port-to-clock map, so its CDC check is only partial:
+`just synth-ooc HFT_Top_Core net2host legacy.f`.
 
 The project file is generated and never committed. Sources come from the same filelists that Verilator uses.
 
@@ -153,6 +169,8 @@ The project file is generated and never committed. Sources come from the same fi
 | `just: command not found` in WSL | Use a login shell (`bash -l`) or add `~/.local/bin` to `PATH` |
 | `Permission denied` running a recipe script | `XDG_RUNTIME_DIR` is `noexec`; script recipes already use `[script("bash")]`. Keep it that way for new ones |
 | `Wsl/Service/E_UNEXPECTED` during `just test` | The Windows host could not supply the memory the WSL VM asked for during parallel builds. Cap the VM in `%USERPROFILE%\.wslconfig` (`[wsl2]` `memory=3GB`, `swap=4GB`), run `wsl --shutdown`, and/or set `HFT_JOBS=1` |
+| `.venv/bin/python` disappears, builds fail with missing `cocotb/share/...` files | Something on the Windows side touched the repo's `.venv` (it is shared through `/mnt/d`). On WSL set `UV_PROJECT_ENVIRONMENT=/home/<you>/.cache/hft-feedhandler/venv` in `.env.local` and run `just setup`; the venv then lives on ext4, out of Windows' reach |
+| `SRE module mismatch` in a build log | A Verilator helper (`verilator_includer`) ran with another Python than the venv's stdlib on `PYTHONPATH`. The runner sets `PYTHON3` for make to the venv interpreter; keep that when changing the runner |
 | Slow first build on `/mnt/d` | Exclude the repo's `build/` and `.tools/` folders from Windows Defender real-time scanning, or set `HFT_BUILD_DIR` to a WSL path |
 | Lint does not flag a signal named `*unused*` | Verilator ignores names matching `--unused-regexp` (`*unused*`) on purpose |
 | `Unsupported arch` | 32-bit Pi OS is not supported. Install the 64-bit image |

@@ -19,7 +19,9 @@ import hashlib
 import json
 import os
 import random
+import sys
 from collections.abc import Iterable, Iterator
+from importlib.metadata import version
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -150,7 +152,9 @@ def run_cocotb(
     if waves:
         build_args += ["--trace-fst", "--trace-structs"]
 
-    config = {"top": toplevel, "params": parameters, "defines": defines, "args": build_args}
+    # The model links cocotb's libraries by path: a different venv/cocotb means a new build.
+    config = {"top": toplevel, "params": parameters, "defines": defines, "args": build_args,
+              "cocotb": [cocotb_runner.__file__, version("cocotb")]}  # fmt: skip
     build_dir = BUILD / "sim" / build_key(toplevel, config, sources)
     run_dir = build_dir / env_dir_name(env)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -160,16 +164,35 @@ def run_cocotb(
     stamp = build_dir / STAMP
     with build_lock(build_dir):
         if not stamp.exists():
-            runner.build(
-                sources=sources,
-                hdl_toplevel=toplevel,
-                parameters=parameters,
-                defines=defines,
-                build_args=build_args,
-                build_dir=build_dir,
-                waves=waves,
-                timescale=("1ns", "1ps"),
-            )
+            build_log = build_dir / "build.log"
+            # cocotb puts this interpreter's sys.path into the build's PYTHONPATH, while
+            # Verilator's makefile runs its helper scripts (verilator_includer) with the system
+            # `python3`. A different Python version then imports this stdlib and dies
+            # ("SRE module mismatch"). Make the helpers use this interpreter: variable
+            # assignments in MAKEFLAGS act like make command-line overrides.
+            makeflags = os.environ.get("MAKEFLAGS")
+            os.environ["MAKEFLAGS"] = f"{makeflags or ''} -- PYTHON3={sys.executable}".strip()
+            try:
+                runner.build(
+                    sources=sources,
+                    hdl_toplevel=toplevel,
+                    parameters=parameters,
+                    defines=defines,
+                    build_args=build_args,
+                    build_dir=build_dir,
+                    waves=waves,
+                    timescale=("1ns", "1ps"),
+                    log_file=build_log,
+                )
+            except (SystemExit, RuntimeError) as exc:
+                raise AssertionError(
+                    f"{toplevel} build failed: config={config}\nlog: {build_log}\n{failure_lines(build_log)}"
+                ) from exc
+            finally:
+                if makeflags is None:
+                    os.environ.pop("MAKEFLAGS", None)
+                else:
+                    os.environ["MAKEFLAGS"] = makeflags
             stamp.write_text(json.dumps(config, sort_keys=True, default=str))
 
     log = run_dir / "sim.log"
@@ -204,6 +227,6 @@ def failure_lines(log: Path, limit: int = 12) -> str:
         lines = log.read_text(errors="replace").splitlines()
     except OSError:
         return "(no log)"
-    keys = ("Assertion failed", "AssertionError", "%Error", "Error:", " failed", "FAIL")
+    keys = ("Assertion failed", "AssertionError", "%Error", "%Warning", "error:", "Error:", " failed", "FAIL", "Killed")
     hits = [line.strip() for line in lines if any(k in line for k in keys)]
     return "\n".join(hits[:limit]) or "\n".join(lines[-limit:])

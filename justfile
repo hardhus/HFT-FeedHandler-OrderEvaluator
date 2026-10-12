@@ -162,10 +162,15 @@ gen:
 vivado-project PART=fpga_part:
     New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log create_project.log -source ../../firmware/scripts/vivado/create_project.tcl -tclargs {{ PART }}
 
-# Out-of-context synthesis; reports in build/vivado/ooc/<TOP>
+# OOC synthesis + CDC constraints + timing/report_cdc gate. ARGS: extra filelists or NAME:VALUE generics
 [windows]
-synth-ooc TOP PART=fpga_part LISTS="common.f":
-    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ LISTS }}
+synth-ooc TOP PROFILE="net2host" *ARGS:
+    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ fpga_part }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+
+# Gate every common block in both clock directions; prints one HFT_SYNTH line per run
+[windows]
+synth-common:
+    $runs = @("reset_sync","sync_bit","axis_register","axis_skid_buffer","cdc_handshake","cdc_async_fifo_ooc","cdc_async_fifo_ooc IMPL:xpm"); $bad = 0; foreach ($r in $runs) { foreach ($p in "net2host","host2net") { $a = $r.Split(" "); $out = just synth-ooc $a[0] $p @($a | Select-Object -Skip 1) 2>&1; if ($LASTEXITCODE) { $bad++ }; ($out | Select-String "^HFT_SYNTH").Line } }; if ($bad) { Write-Host "synth-common: $bad run(s) FAILED"; exit 1 }; Write-Host "synth-common: all PASS"
 
 # Cross-simulator FIFO check in XSIM: IMPL = portable | xpm (same TB and seed as `just test`)
 [windows]
@@ -182,10 +187,26 @@ xsim-test IMPL="xpm" SEED="1":
 vivado-project PART=fpga_part:
     mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log create_project.log -source ../../firmware/scripts/vivado/create_project.tcl -tclargs {{ PART }}
 
-# Out-of-context synthesis; reports in build/vivado/ooc/<TOP>
+# OOC synthesis + CDC constraints + timing/report_cdc gate. ARGS: extra filelists or NAME:VALUE generics
 [unix]
-synth-ooc TOP PART=fpga_part LISTS="common.f":
-    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log synth_{{ TOP }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ LISTS }}
+synth-ooc TOP PROFILE="net2host" *ARGS:
+    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ fpga_part }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+
+# Gate every common block in both clock directions; prints one HFT_SYNTH line per run
+[script("bash")]
+[unix]
+synth-common:
+    bad=0
+    for r in reset_sync sync_bit axis_register axis_skid_buffer cdc_handshake cdc_async_fifo_ooc "cdc_async_fifo_ooc IMPL:xpm"; do
+      for p in net2host host2net; do
+        set -- $r
+        out=$(just synth-ooc "$1" "$p" "${@:2}" 2>&1)
+        rc=$?
+        grep '^HFT_SYNTH' <<<"$out"
+        [ $rc = 0 ] || bad=$((bad + 1))
+      done
+    done
+    [ $bad = 0 ] && echo "synth-common: all PASS" || { echo "synth-common: $bad run(s) FAILED"; exit 1; }
 
 # Remove build outputs (keeps .tools/ and .venv/)
 clean:
