@@ -14,13 +14,16 @@ Every run uses a seed (HFT_SEED or random), printed for reproduction, and
 Verilator randomizes initial values so missing resets show up in tests.
 """
 
+import fcntl
 import hashlib
 import json
 import os
 import random
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+import cocotb_tools.runner as cocotb_runner
 from cocotb_tools.runner import get_runner
 
 from common.filelist import read_filelist
@@ -33,6 +36,66 @@ TOOLS_ENV = REPO / "tools.env"
 # Randomize uninitialized state: resetless flops start with random values.
 X_BUILD_ARGS = ["--x-assign", "unique", "--x-initial", "unique"]
 STAMP = ".hft-build-ok"
+
+
+# Rough peak memory of one simulator build job (C++ compiler) plus its share of the
+# worker process. Used to keep parallel builds within small machines' RAM.
+MB_PER_JOB = 600
+
+
+# Default cap under WSL: its MemAvailable is not backed by free host RAM, and when the
+# Windows host cannot supply memory the whole WSL VM crashes (Wsl/Service/E_UNEXPECTED).
+WSL_DEFAULT_JOBS = 2
+
+
+def is_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text().lower()
+    except OSError:
+        return False
+
+
+def job_budget() -> int:
+    """Machine-wide parallelism (pytest workers and compile jobs together).
+
+    HFT_JOBS overrides it (e.g. in .env.local). Otherwise min(CPUs, available
+    memory / MB_PER_JOB), capped at WSL_DEFAULT_JOBS under WSL. At least 1.
+    """
+    if os.environ.get("HFT_JOBS"):
+        return max(1, int(os.environ["HFT_JOBS"]))
+    budget = os.cpu_count() or 1
+    try:
+        with open("/proc/meminfo") as f:
+            avail_kb = next(int(line.split()[1]) for line in f if line.startswith("MemAvailable:"))
+        budget = min(budget, avail_kb // 1024 // MB_PER_JOB)
+    except (OSError, StopIteration):
+        pass
+    if is_wsl():
+        budget = min(budget, WSL_DEFAULT_JOBS)
+    return max(1, budget)
+
+
+def build_jobs() -> int:
+    """Compile jobs for this process: the budget shared by all pytest-xdist workers.
+
+    Without this every worker runs `make -j<all CPUs>`, and WSL (4 GB), the
+    Raspberry Pi or CI runners run out of memory (the OOM killer ends cc1plus).
+    """
+    workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
+    return max(1, job_budget() // workers)
+
+
+@contextmanager
+def build_lock(build_dir: Path) -> Iterator[None]:
+    """Exclusive lock per build directory, so concurrent workers never compile the same
+    build at once (the second one waits, then finds the stamp and reuses the build)."""
+    build_dir.mkdir(parents=True, exist_ok=True)
+    with open(build_dir / ".hft-build.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def run_seed() -> int:
@@ -92,20 +155,22 @@ def run_cocotb(
     run_dir = build_dir / env_dir_name(env)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    cocotb_runner.MAX_PARALLEL_BUILD_JOBS = build_jobs()  # read by the runner's `make -j`
     runner = get_runner("verilator")
     stamp = build_dir / STAMP
-    if not stamp.exists():
-        runner.build(
-            sources=sources,
-            hdl_toplevel=toplevel,
-            parameters=parameters,
-            defines=defines,
-            build_args=build_args,
-            build_dir=build_dir,
-            waves=waves,
-            timescale=("1ns", "1ps"),
-        )
-        stamp.write_text(json.dumps(config, sort_keys=True, default=str))
+    with build_lock(build_dir):
+        if not stamp.exists():
+            runner.build(
+                sources=sources,
+                hdl_toplevel=toplevel,
+                parameters=parameters,
+                defines=defines,
+                build_args=build_args,
+                build_dir=build_dir,
+                waves=waves,
+                timescale=("1ns", "1ps"),
+            )
+            stamp.write_text(json.dumps(config, sort_keys=True, default=str))
 
     print(f"[hft] {toplevel} seed={seed} build={build_dir.name} env={env}  (rerun: HFT_SEED={seed})")
     runner.test(
@@ -121,3 +186,4 @@ def run_cocotb(
         extra_env=env,
         waves=waves,
     )
+

@@ -52,7 +52,9 @@ lint:
     echo "== verible-verilog-lint"
     verible-verilog-lint --ruleset=all --rules_config=.rules.verible_lint "${srcs[@]}" || fail=1
     echo "== verible-verilog-format --verify"
-    verible-verilog-format --flagfile=firmware/lint/verible-format.flags --verify "${srcs[@]}" || fail=1
+    for f in "${srcs[@]}"; do
+      verible-verilog-format --flagfile=firmware/lint/verible-format.flags --verify "$f" || fail=1
+    done
     echo "lint: ${#srcs[@]} file(s), $([ $fail = 0 ] && echo clean || echo FAILED)"
     exit $fail
 

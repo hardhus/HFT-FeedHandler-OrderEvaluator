@@ -76,9 +76,15 @@ Build outputs go to `build/`:
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
   reset start with random values, so a missing reset shows up as a failure.
   To replay a failure exactly: `HFT_SEED=<seed> just test-one <name>`.
-- **Parallel runs:** `just test` uses `pytest -n auto --dist loadgroup`. Tests that share a build run on the same
-  worker. If a test module passes some settings only as environment variables (for example the clock ratio), it lists
-  them in `RUNTIME_PARAMS`, so all values share one build.
+- **Parallel runs:** `just test` uses `pytest -n auto --dist loadgroup`.
+  - The number of workers and of compile jobs comes from one budget: min(CPUs, available RAM / 600 MB).
+    Under WSL the budget is capped at 2. Override it with `HFT_JOBS=<n>` (environment or `.env.local`).
+  - A per-build file lock means a build is compiled once even if several workers need it.
+  - If a test module passes some settings only as environment variables (for example the clock ratio), it lists them
+    in `RUNTIME_PARAMS`, so all values share one build.
+- **CDC jitter mode:** tests of clock-domain-crossing blocks also run with the `HFT_SIM_CDC_JITTER` define. In that
+  mode, `sync_bit` captures bits that change close to a clock edge one cycle late, at random, which models
+  metastability. Without it, a non-gray multi-bit crossing passes simulation; with it, the test fails.
 
 ### Test helpers (`firmware/tb/common/`)
 
@@ -134,6 +140,7 @@ The project file is generated and never committed. Sources come from the same fi
 | `fatal: detected dubious ownership` in WSL | `git config --global --add safe.directory /mnt/d/<path-to-repo>` |
 | `just: command not found` in WSL | Use a login shell (`bash -l`) or add `~/.local/bin` to `PATH` |
 | `Permission denied` running a recipe script | `XDG_RUNTIME_DIR` is `noexec`; script recipes already use `[script("bash")]`. Keep it that way for new ones |
+| `Wsl/Service/E_UNEXPECTED` during `just test` | The Windows host could not supply the memory the WSL VM asked for during parallel builds. Cap the VM in `%USERPROFILE%\.wslconfig` (`[wsl2]` `memory=3GB`, `swap=4GB`), run `wsl --shutdown`, and/or set `HFT_JOBS=1` |
 | Slow first build on `/mnt/d` | Exclude the repo's `build/` and `.tools/` folders from Windows Defender real-time scanning, or set `HFT_BUILD_DIR` to a WSL path |
 | Lint does not flag a signal named `*unused*` | Verilator ignores names matching `--unused-regexp` (`*unused*`) on purpose |
 | `Unsupported arch` | 32-bit Pi OS is not supported. Install the 64-bit image |

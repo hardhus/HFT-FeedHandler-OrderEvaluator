@@ -11,7 +11,17 @@ The build is reused the same way as in runner.py.
 import subprocess
 from pathlib import Path
 
-from common.runner import BUILD, REPO, STAMP, X_BUILD_ARGS, build_key, run_seed, sources_for
+from common.runner import (
+    BUILD,
+    REPO,
+    STAMP,
+    X_BUILD_ARGS,
+    build_jobs,
+    build_key,
+    build_lock,
+    run_seed,
+    sources_for,
+)
 
 SENTINEL = "HFT_TB_RESULT:"
 
@@ -34,16 +44,16 @@ def run_svtb(
     build_dir = BUILD / "svtb" / build_key(top, config, sources)
     exe = build_dir / f"V{top}"
 
-    if not (build_dir / STAMP).exists():
-        build_dir.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            "verilator", *args, "-j", "0",
-            "--top-module", top, "-Mdir", str(build_dir), "-o", exe.name,
-            *[f"+define+{k}={v}" for k, v in defines.items()],
-            *map(str, sources),
-        ]  # fmt: skip
-        subprocess.run(cmd, check=True, cwd=REPO)
-        (build_dir / STAMP).write_text(" ".join(cmd))
+    with build_lock(build_dir):
+        if not (build_dir / STAMP).exists():
+            cmd = [
+                "verilator", *args, "-j", str(build_jobs()),
+                "--top-module", top, "-Mdir", str(build_dir), "-o", exe.name,
+                *[f"+define+{k}={v}" for k, v in defines.items()],
+                *map(str, sources),
+            ]  # fmt: skip
+            subprocess.run(cmd, check=True, cwd=REPO)
+            (build_dir / STAMP).write_text(" ".join(cmd))
 
     seed = run_seed()
     run = [str(exe), f"+seed={seed}", "+verilator+rand+reset+2", f"+verilator+seed+{seed}"]

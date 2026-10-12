@@ -2,7 +2,20 @@
 
 import pytest
 
+from common.runner import job_budget
 
+
+@pytest.hookimpl(optionalhook=True)  # only exists when pytest-xdist is active
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
+    """`-n auto`: as many workers as CPUs and available memory allow (see runner.job_budget)."""
+    return job_budget()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "xdist_group(name): run on the same pytest-xdist worker")
+
+
+@pytest.hookimpl(tryfirst=True)  # before pytest-xdist reads the xdist_group markers
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Keep tests that share a simulator build on one xdist worker (--dist loadgroup).
 
