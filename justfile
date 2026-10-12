@@ -81,12 +81,12 @@ test *ARGS:
 # Run tests matching NAME (pytest -k)
 [unix]
 test-one NAME *ARGS:
-    uv run pytest -k {{ NAME }} {{ ARGS }}
+    uv run pytest -k '{{ NAME }}' {{ ARGS }}
 
 # Re-run one test with FST tracing; prints the wave file paths.
 [unix]
 waves NAME:
-    WAVES=1 uv run pytest -k {{ NAME }} -p no:xdist
+    WAVES=1 uv run pytest -k '{{ NAME }}' -p no:xdist
     @find "$HFT_BUILD_DIR/sim" -name '*.fst' -newer pyproject.toml -print
 
 # Format new RTL in place (same flags as the editor: firmware/lint/verible-format.flags)
@@ -132,12 +132,12 @@ test *ARGS:
 # Run tests matching NAME in WSL
 [windows]
 test-one NAME *ARGS:
-    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just test-one {{ NAME }} {{ ARGS }}"
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just test-one '{{ NAME }}' {{ ARGS }}"
 
 # Re-run one test with FST tracing in WSL
 [windows]
 waves NAME:
-    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just waves {{ NAME }}"
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just waves '{{ NAME }}'"
 
 # Format new RTL in WSL
 [windows]
