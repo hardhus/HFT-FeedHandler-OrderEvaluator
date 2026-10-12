@@ -76,7 +76,7 @@ async def quiet(dut, dst_cycles: int) -> None:
         assert not dut.dst_valid.value, "unexpected extra dst_valid pulse"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_single_transfer(dut):
     """One word: arrives once, intact, within STAGES+1 dst edges of acceptance (+1 with jitter)."""
     await start(dut)
@@ -100,7 +100,7 @@ async def tc_single_transfer(dut):
     await quiet(dut, 20)
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_back_to_back(dut):
     """The source re-sends as soon as src_ready returns: every word arrives once, in order."""
     await start(dut)
@@ -111,7 +111,7 @@ async def tc_back_to_back(dut):
     await quiet(dut, 20)
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_valid_while_busy(dut):
     """src_valid held high with new data every cycle: only words offered while src_ready was
     high are transferred; the rest are ignored."""
@@ -148,7 +148,7 @@ async def tc_valid_while_busy(dut):
     assert 0 < sb.checked < total, f"{sb.checked} of {total} offered words transferred"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_data_stable_window(dut):
     """While req_q is high, data_q (the unsynchronized CDC path) never changes."""
     await start(dut)

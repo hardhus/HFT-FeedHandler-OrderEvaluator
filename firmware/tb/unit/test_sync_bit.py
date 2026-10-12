@@ -54,7 +54,7 @@ async def edges_until(dut, expected: int, limit: int) -> int:
     raise AssertionError(f"q never became {expected:#x} within {limit} edges")
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_latency(dut):
     """Single-bit change -> q follows after exactly STAGES edges (STAGES or STAGES+1 with jitter)."""
     width, stages, jitter = cfg()
@@ -70,7 +70,7 @@ async def tc_latency(dut):
     assert seen <= allowed, f"latencies {sorted(seen)} not within {sorted(allowed)}"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_stable_input(dut):
     """With a constant input, q equals it and never glitches."""
     width, stages, _ = cfg()
@@ -85,7 +85,7 @@ async def tc_stable_input(dut):
         assert int(dut.q.value) == value
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_gray_bus_valid(dut):
     """A gray counter clocked by the source clock: every sampled q is a code the source
     actually produced, sampled codes never go backwards, and q catches up at the end."""
@@ -125,7 +125,7 @@ async def tc_gray_bus_valid(dut):
     assert int(dut.q.value) == gray(state["count"] & mask), "q did not settle to the final code"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_jitter_model(dut):
     """All bits flip at once: with HFT_SIM_CDC_JITTER some samples show a mixture of old and
     new bits (the model is active); without it q only ever shows the old or the new word."""

@@ -5,3 +5,4 @@
 ../rtl/common/axis_register.sv
 ../rtl/common/axis_skid_buffer.sv
 ../rtl/common/cdc_handshake.sv
+../rtl/common/cdc_async_fifo.sv

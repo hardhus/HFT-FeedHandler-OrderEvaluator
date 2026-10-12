@@ -65,7 +65,7 @@ def sample_out(dut) -> dict[str, int]:
     return {k: int(getattr(dut, f"m_axis_{k}").value) for k in ("tdata", "tkeep", "tlast", "tuser")}
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_random_frames(dut):
     """Frames through cocotbext-axi with random gaps on both sides: payload, tkeep, tlast and
     tuser arrive intact and in order."""
@@ -93,7 +93,7 @@ async def tc_random_frames(dut):
     assert snk.empty(), "extra frames at the output"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_full_throughput(dut):
     """Continuous tvalid and tready: N beats leave in N consecutive cycles, s_axis_tready stays 1."""
     _, data_w, user_w = cfg()
@@ -114,7 +114,7 @@ async def tc_full_throughput(dut):
     assert cycles == list(range(cycles[0], cycles[0] + n)), "bubble in the output stream"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_stall_hold(dut):
     """While m_axis_tready = 0 the output is stable and exactly CAPACITY beats are accepted;
     after release the accepted beats come out in order."""
@@ -146,7 +146,7 @@ async def tc_stall_hold(dut):
     assert got == accepted, "beats lost or reordered after stall"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_tready_path(dut):
     """Toggle m_axis_tready in the middle of a cycle (no clock edge) under random traffic and
     see whether s_axis_tready follows in the same time step."""
@@ -170,7 +170,7 @@ async def tc_tready_path(dut):
         assert followed > 0, "expected axis_register's combinational ready path to be visible"
 
 
-@cocotb.test()
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_reset_mid_stream(dut):
     """Reset while full and stalled: output empties, input becomes ready, and a beat sent after
     reset is the only one that comes out."""
