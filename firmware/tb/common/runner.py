@@ -231,12 +231,22 @@ def run_cocotb(
         ) from exc
 
 
-def failure_lines(log: Path, limit: int = 12) -> str:
-    """The interesting lines of a simulation log: assertion/error/failed-test messages."""
+def failure_lines(log: Path, limit: int | None = None) -> str:
+    """The interesting lines of a simulation log, in log order: every failed-test line of the
+    cocotb regression (the list of failed tests is always complete), plus at most `limit`
+    assertion/error lines (default HFT_LOG_LINES, else 12). Without any, the log's tail."""
+    if limit is None:
+        limit = int(os.environ.get("HFT_LOG_LINES") or 12)
     try:
         lines = log.read_text(errors="replace").splitlines()
     except OSError:
         return "(no log)"
     keys = ("Assertion failed", "AssertionError", "%Error", "%Warning", "error:", "Error:", " failed", "FAIL", "Killed")
-    hits = [line.strip() for line in lines if any(k in line for k in keys)]
-    return "\n".join(hits[:limit]) or "\n".join(lines[-limit:])
+    out, details = [], 0
+    for line in lines:
+        if "cocotb.regression" in line and " failed" in line:
+            out.append(line.strip())
+        elif details < limit and any(k in line for k in keys):
+            out.append(line.strip())
+            details += 1
+    return "\n".join(out) or "\n".join(lines[-limit:])

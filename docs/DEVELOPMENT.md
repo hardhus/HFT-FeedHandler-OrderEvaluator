@@ -90,7 +90,8 @@ Build outputs go to `build/`:
   To replay a failure exactly: `HFT_SEED=<seed> just test-one <name>`.
 - **Failures carry their own diagnosis.** A failed cocotb run reports its seed, its environment, the log path
   (`build/sim/<build>/run_<env>/sim.log`, kept on disk) and the simulator's error lines, e.g. the failing SVA. This
-  appears in the pytest summary and in `build/test-results.xml`.
+  appears in the pytest summary and in `build/test-results.xml`. The report lists every failed cocotb test; the
+  assertion and error details are capped at 12 lines (`HFT_LOG_LINES=<n>` to change it, or read `sim.log`).
 - **Assertions (SVA):** `firmware/filelists/sva.f` (protocol checkers in `firmware/tb/sva/` plus binds) is compiled
   into every cocotb build. A failing assertion stops the simulation. The checkers themselves are tested in
   `tb/unit/test_sva_checkers.py`.

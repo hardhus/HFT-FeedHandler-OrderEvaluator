@@ -7,7 +7,7 @@ import pytest
 from common.clocks import PROFILES, profile
 from common.coverage import REPORT, Coverage
 from common.junit import tidy_junit
-from common.runner import build_key, env_dir_name, sim_filelists
+from common.runner import build_key, env_dir_name, failure_lines, sim_filelists
 from common.scoreboard import Scoreboard
 
 
@@ -106,3 +106,18 @@ def test_coverage_report(tmp_path):
         "first": {"bins": {"x": 1}, "empty": []},
         "second": {"bins": {"y": 2, "z": 1}, "empty": []},
     }, "groups sharing a run directory keep separate entries"
+
+
+def test_failure_lines_lists_every_failed_test(tmp_path, monkeypatch):
+    """Regression: the report kept only the first 12 matching lines, so with many failing
+    tests the list of failed tests was cut (seen in the F2 S3 mutation runs)."""
+    log = tmp_path / "sim.log"
+    body = []
+    for i in range(20):
+        body += [f"{i}.00ns WARNING  cocotb.regression  test_m.tc_{i} failed", "Traceback:", f"AssertionError: detail {i}"]
+    log.write_text("\n".join(body) + "\n")
+    out = failure_lines(log, limit=3).splitlines()
+    assert [line for line in out if "cocotb.regression" in line] == [line for line in body if "regression" in line]
+    assert sum("AssertionError" in line for line in out) == 3, "details stay bounded"
+    monkeypatch.setenv("HFT_LOG_LINES", "5")
+    assert sum("AssertionError" in line for line in failure_lines(log).splitlines()) == 5
