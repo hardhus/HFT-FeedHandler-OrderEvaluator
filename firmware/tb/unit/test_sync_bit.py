@@ -151,7 +151,8 @@ async def tc_min_pulse(dut):
     for _ in range(40):
         bit = 1 << random.randrange(width)
         await FallingEdge(dut.clk)
-        await Timer(random.randint(0, dst_ps), unit="ps")
+        # Any phase: 1..dst_ps covers a full period (cocotb rejects Timer(0), seed 2073703349).
+        await Timer(random.randint(1, dst_ps), unit="ps")
         watch = cocotb.start_soon(seen_within(bit, stages + 5))
         dut.d.value = bit
         await Timer(2 * max_period + 1, unit="ps")
