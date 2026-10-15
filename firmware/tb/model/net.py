@@ -287,6 +287,7 @@ class _Gen:
         self.mcast = [i for i in self.enabled if ipaddress.IPv4Address(cfg.filters[i][0]).is_multicast]
         self.disabled = [i for i, (_, _, en) in enumerate(cfg.filters) if not en]
         self.pairs = {(ip_int(cfg.filters[i][0]), cfg.filters[i][1]) for i in self.enabled}
+        self.headers: dict[tuple[str, str, int], bytes] = {}  # scapy-built, without payload
         if not self.mcast or len(self.pairs) != len(self.enabled):
             raise ValueError("config needs a multicast entry and a distinct (ip, port) per enabled entry")
 
@@ -295,7 +296,9 @@ class _Gen:
         if padded:
             lo, hi = 1, 17
         elif jumbo:
-            lo, hi = 1473, 8972  # beyond a 1514-B frame, up to a 9000-B MTU
+            # Beyond a 1514-B frame. Kept short: simulation time is per beat, and 9000-B and
+            # 17000-B frames have their own test (tc_k4_long_packet_no_spurious_event).
+            lo, hi = 1473, 2000
         else:
             lo, hi = 18, 1472 if self.rng.random() < 0.1 else 300
         while True:
@@ -322,18 +325,23 @@ class _Gen:
         else:
             dst = mcast_mac(ip)
         n = self.payload_len() if length is None else length
-        frame = udp_frame(
-            rng.randbytes(n),
-            dst_mac=dst,
-            src_mac=self.random_mac(),
-            src_ip=f"10.{rng.randrange(256)}.{rng.randrange(256)}.{rng.randint(1, 254)}",
-            dst_ip=ip,
-            sport=rng.randrange(1, 65536),
-            dport=port,
-            ident=rng.randrange(65536),
-            ttl=rng.randint(1, 255),
-        )
-        return pad_to(frame)
+        # scapy builds the headers once per (dst MAC, dst IP, port) (~1 ms each); the per-frame
+        # fields are then written on the raw bytes like any fault injection, one checksum at the end.
+        key = (dst, ip, port)
+        if key not in self.headers:
+            self.headers[key] = udp_frame(b"", dst_mac=dst, dst_ip=ip, dport=port)
+        frame = self.headers[key] + rng.randbytes(n)
+        for name, value in (
+            ("src_mac", self.random_mac()),
+            ("src_ip", f"10.{rng.randrange(256)}.{rng.randrange(256)}.{rng.randint(1, 254)}"),
+            ("sport", rng.randrange(1, 65536)),
+            ("ident", rng.randrange(65536)),
+            ("ttl", rng.randint(1, 255)),
+            ("ip_len", 28 + n),
+            ("udp_len", 8 + n),
+        ):
+            frame = with_field(frame, name, value, fix_csum=False)
+        return pad_to(fix_ip_checksum(frame))
 
     def bad_checksum(self) -> bytes:
         """Flip one bit in a header field that no earlier check reads (ident, TTL, csum, src IP)."""
