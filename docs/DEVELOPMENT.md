@@ -57,15 +57,17 @@ just lint                 # Verilator -Wall + Verible lint + format check (block
 just fmt                  # format every file under the lint gate in place
 just test                 # all cocotb tests, in parallel
 just test-one reset_sync  # tests matching a name (pytest -k)
+just test-one net_model   # golden-model self-tests only (no simulator, seconds)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths
 just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.log
 ```
 
 `just lint` covers:
-- **Verilator `-Wall` + Verible:** every module in `common.f` (each as its own top) and the OOC synthesis harnesses in
-  `synth_ooc.f`;
+- **Verilator `-Wall` + Verible:** every module in `common.f` and `core.f` (each as its own top, `core.f` together
+  with `common.f`) and the OOC synthesis harnesses in `synth_ooc.f` and `synth_ooc_core.f`. Packages (`*_pkg.sv`)
+  are not a top of their own: Verilator checks them through their users, so an unused package constant fails lint;
 - **Verible only (lint + format):** the XPM wrappers in `xilinx.f` (Verilator cannot compile XPM), the SVA checkers
-  in `sva.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
+  in `sva.f` and `sva_core.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
 
 The list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
 
@@ -80,9 +82,13 @@ Build outputs go to `build/`:
   and `tools.env`. Changing any of them gives a new directory; an unchanged configuration is not recompiled. Old
   directories pile up; `just clean` removes them.
   The hash covers every file of the filelists a build uses, so editing any file in `common.f` (or `sva.f`) rebuilds
-  every test that uses that list. Expect a cold `just test` after such a change.
-  For reference (WSL, 2 workers, 62 tests): a warm `just test` takes about 1.5 minutes. A cold
-  one took 10 to 36 minutes on `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
+  every test that uses that list. Expect a cold `just test` after such a change. Core assertions therefore live in
+  their own list: a build with `core.f` also compiles `sva_core.f` (`SVA_FOR` in `runner.py`), and editing them
+  rebuilds only the core tests.
+  For reference (WSL, 2 workers, 173 tests after F2): a warm `just test` takes about 2.3 minutes. The longest test
+  is `tc_random_golden` (10⁴ frames, about 50 s); the cocotb harness runs about 6k cycles/s. Right after a WSL
+  restart (cold file cache) the same run took 4 minutes. A cold build of all F1 tests took 10 to 36 minutes on
+  `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
@@ -93,8 +99,10 @@ Build outputs go to `build/`:
   appears in the pytest summary and in `build/test-results.xml`. The report lists every failed cocotb test; the
   assertion and error details are capped at 12 lines (`HFT_LOG_LINES=<n>` to change it, or read `sim.log`).
 - **Assertions (SVA):** `firmware/filelists/sva.f` (protocol checkers in `firmware/tb/sva/` plus binds) is compiled
-  into every cocotb build. A failing assertion stops the simulation. The checkers themselves are tested in
-  `tb/unit/test_sva_checkers.py`.
+  into every cocotb build, and `sva_core.f` into every build that uses `core.f`. A failing assertion stops the
+  simulation. The checkers themselves are tested in `tb/unit/test_sva_checkers.py`: an SV testbench drives each
+  checker directly, stays quiet on legal traffic, and violates each property once. Inside a DUT test the cocotb
+  checks often see a fault one edge before the assertion, and the next test's reset then disables it.
 - **Parallel runs:** `just test` uses `pytest -n auto --dist loadgroup`.
   - The number of workers and of compile jobs comes from one budget: min(CPUs, available RAM / 600 MB).
     Under WSL the budget is capped at 2. Override it with `HFT_JOBS=<n>` (environment or `.env.local`).
@@ -113,6 +121,22 @@ Build outputs go to `build/`:
 | `svtb.py` | `run_svtb(top, filelists, tb_files)`: self-checking SV testbench under Verilator `--binary --timing`. The TB must print one `HFT_TB_RESULT: PASS/FAIL` line |
 | `clocks.py` | `start_clock(sig, period_ps, jitter_pct)`, plus clock-ratio profiles selected by `RATIO` (`same`, `net2host`, `host2net`, `jitter`) |
 | `scoreboard.py` | In-order scoreboard (catches loss, duplication and reordering) |
+| `coverage.py` | `Coverage(name, required_bins)`: `hit(bin)` (an unknown bin fails at once), `check(out_dir)` writes `coverage.json` and fails if a required bin is empty |
+
+### Golden models (`firmware/tb/model/`) and coverage
+
+- `net.py` is the reference for `eth_ip_udp_rx`, in pure Python. `expect(frame, tuser, cfg)` parses the frame with
+  scapy and applies the receive rules in the documented priority order. It never uses the RTL's byte offsets, so
+  the model and the DUT cannot share a byte-order mistake. Frame builders and `random_traffic()` produce the
+  stimulus, each frame tagged with the outcome the generator meant.
+- `tb/selftest/test_net_model.py` tests the model without a simulator (`just test-one net_model`):
+  - hand-written hex frames whose checksums were summed by hand;
+  - every pair of faults, for the priority order;
+  - the reason codes against `hft_pkg.sv`;
+  - that the generator's intent and the model agree on 2000 random frames.
+- **Coverage is a gate.** `tc_random_golden` hits named bins (reasons, last-beat cases, MAC classes, filter
+  entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The counts are written to
+  `coverage.json` in the test's run directory. Bins are not removed to make a test pass.
 
 AXI/AXI-Stream drivers come from [cocotbext-axi](https://github.com/alexforencich/cocotbext-axi). It works with
 cocotb 2.1 but emits `DeprecationWarning`s.
@@ -149,6 +173,7 @@ just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr
 just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>/{timing_summary,utilization,cdc}.rpt
 just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
 just synth-common                         # every common block, both clock directions, gated
+just synth-core                           # eth_ip_udp_rx at 156.25 MHz, gated (250 MHz: synth-ooc ... host2net)
 just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```
 

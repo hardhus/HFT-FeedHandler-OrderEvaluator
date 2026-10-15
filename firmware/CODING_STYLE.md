@@ -14,6 +14,9 @@ read-only reference and is replaced phase by phase; do not copy its patterns.
 - Every RTL file is listed in a filelist under `firmware/filelists/`. Paths in a `.f` file are relative to the
   `.f` file itself. Packages come before their users.
 - Packages are imported inside the module (`module m import foo_pkg::*; (...)`), never at file (`$unit`) scope.
+- A package (`*_pkg.sv`) comes first in its filelist and is not linted as a Verilator top of its own; Verilator
+  checks it through the modules that import it. Every constant in it must have a user (an unused one fails lint),
+  so a constant is added together with its first user.
 
 ## Header
 
@@ -91,3 +94,11 @@ The blocks are described in [`rtl/common/README.md`](rtl/common/README.md).
 - cocotb coroutines are named `tc_*`, so pytest does not collect them. The pytest entry point
   `test_<module>()` calls `common.runner.run_cocotb(...)` and is parametrized over the module's parameters.
 - Every bug fix comes with a test that fails without the fix.
+- A reference model must not reuse the RTL's offsets or layout. It derives fields from an independent source
+  (e.g. scapy's parse), and its own tests use hand-written vectors. A model that copies the RTL's assumptions
+  passes the same bugs.
+- Required coverage bins are a gate: an empty bin fails the test. A bin is removed only with a written reason,
+  never to make a test pass.
+- Tests are never loosened or trimmed (fewer frames, smaller ranges, weaker checks) to pass or to save time. A
+  test changes only when the test itself is wrong. A planned negative check (mutation, violation) that does not
+  bite is explained and replaced or strengthened.

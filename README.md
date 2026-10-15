@@ -58,6 +58,15 @@ for the RTL rules.
   - Multi-clock tests with jittered clocks and a metastability model, plus SVA protocol checkers.
   - The portable and XPM FIFOs pass the same testbench in Verilator and XSIM.
   - Netlist-driven CDC constraints, with an OOC synthesis gate on timing and `report_cdc`.
+- **F2, receive filter:** `eth_ip_udp_rx` in [`firmware/rtl/core/`](firmware/rtl/core/README.md).
+  - It checks the Ethernet/IPv4/UDP headers (checksum included) against an 8-entry (IP, port) filter table that
+    accepts unicast, multicast and optionally broadcast.
+  - It streams the UDP payload at line rate, realigned to byte 0, with an abort flag.
+  - It emits one stat event per frame with the drop reason.
+  - Every frame is checked against an independent scapy-based golden model: 10⁴ random frames and a coverage gate,
+    plus directed regressions for the legacy parser's bugs (sticky match, byte order, counter overflow).
+  - SVA checkers are bound in every test.
+  - Timing passes at 156.25 MHz in OOC synthesis.
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.
