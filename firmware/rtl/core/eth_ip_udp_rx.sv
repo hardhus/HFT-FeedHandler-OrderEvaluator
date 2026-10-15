@@ -1,7 +1,9 @@
 // eth_ip_udp_rx: Ethernet/IPv4/UDP receive filter; streams the UDP payload realigned to byte 0.
 // Clock domain : clk (net_clk)
-// Latency      : stat event 1 cycle after the input tlast beat; payload path arrives in F2 S3
-//                (target: first payload beat 7 cycles after the SOF beat, audit/09 §2.3)
+// Latency      : first payload beat 7 cycles after the SOF beat (no tvalid gaps), unless it is
+//                also the last beat and is held for the input tlast (padding: 09 §2.4);
+//                payload tlast 1 cycle after input tlast (2 if the last input beat holds > 2
+//                payload bytes); stat event 1 cycle after input tlast
 // Throughput   : line rate, no backpressure (s_axis_rx_tready = 1, no m_axis_udp_tready)
 // Config       : every cfg_* input is sampled in one cycle per frame (stage A); cfg_rx_en at SOF
 // Reset        : rst with the MAC reset or between frames; the first beat after reset is a SOF
@@ -290,11 +292,102 @@ module eth_ip_udp_rx
     end
   end
 
-  // Payload path: F2 S3.
-  assign m_axis_udp_tdata  = '0;
-  assign m_axis_udp_tkeep  = '0;
-  assign m_axis_udp_tvalid = 1'b0;
-  assign m_axis_udp_tlast  = 1'b0;
-  assign m_axis_udp_tuser  = 1'b0;
+  // ---- payload path (09 §2.4): 2-byte realign, trim to udp_len - 8, hold, tail, abort ----
+  // The payload starts at byte 42 (beat 5, lane 2): output beat j = {beat 6+j [15:0],
+  // beat 5+j [63:16]}, formed when beat 6+j is accepted. Nothing here is cleared at a SOF,
+  // so a tail beat may share its cycle with the next frame's beat 0.
+  logic        pass_b;  // stage B: headers pass and the frame was enabled at its SOF
+  logic        pay_q;  // control: this frame's payload goes out (cleared at tlast)
+  logic        pay;  // ... including the stage-B cycle
+  logic [47:0] prev_q;  // lanes 2..7 of the previous input beat
+  logic [15:0] remain_q;  // payload bytes still to emit (loaded in stage B)
+  logic [ 3:0] n_cur;  // bytes in the current input beat
+  logic [ 3:0] avail;  // payload bytes the current beat completes: 6 of prev + up to 2 of cur
+  logic [ 3:0] emit_n;  // bytes in the formed output beat
+  logic        form;  // an output beat is formed this cycle
+  logic        done;  // ... and it holds the last payload byte
+  logic        tail_set;  // input tlast leaves payload bytes beyond lane 1: tail beat next cycle
+  logic        last_now;  // the beat formed at input tlast is the packet's last one
+  logic        pend_q;  // control: last beat formed, waiting for input tlast (padding)
+  logic        tail_q;  // control: emit the tail beat this cycle
+  logic [ 3:0] tail_n_q;  // bytes after lane 1 of the last input beat
+  logic [ 3:0] tail_emit;
+  logic        out_valid_q;  // control
+  logic [63:0] out_data_q;
+  logic [ 7:0] out_keep_q;
+  logic        out_last_q;
+  logic        out_user_q;
+
+  function automatic logic [7:0] keep_of(input logic [3:0] n);  // n low bytes, n <= 8
+    return 8'((9'd1 << n) - 9'd1);
+  endfunction
+
+  assign pass_b    = rx_en_q && hdr_reason_b == RX_OK;
+  assign pay       = pay_q || (stage_b_q && pass_b);
+  assign n_cur     = 4'($countones(s_axis_rx_tkeep));
+  assign avail     = 4'd6 + ((n_cur > 4'd2) ? 4'd2 : n_cur);
+  assign form      = s_axis_rx_tvalid && pay && beat_cnt_q >= BEAT_W'(6) && remain_q != '0;
+  assign done      = 16'(avail) >= remain_q;
+  assign emit_n    = done ? remain_q[3:0] : avail;
+  assign tail_set  = eof && pay && n_cur > 4'd2 && (beat_cnt_q == BEAT_W'(5) || (form && !done));
+  assign last_now  = eof && !tail_set;
+  assign tail_emit = (16'(tail_n_q) > remain_q) ? remain_q[3:0] : tail_n_q;
+
+  always_ff @(posedge clk) begin
+    if (rst || eof) begin
+      pay_q <= 1'b0;
+    end else if (stage_b_q) begin
+      pay_q <= pass_b;
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      out_valid_q <= 1'b0;
+      pend_q      <= 1'b0;
+      tail_q      <= 1'b0;
+    end else begin
+      out_valid_q <= tail_q || (form && (!done || eof)) || (pend_q && eof);
+      tail_q      <= tail_set;
+      if (eof) begin
+        pend_q <= 1'b0;
+      end else if (form && done) begin
+        pend_q <= 1'b1;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (s_axis_rx_tvalid && beat_cnt_q >= BEAT_W'(5)) begin
+      prev_q <= s_axis_rx_tdata[63:16];
+    end
+    if (stage_b_q) begin
+      remain_q <= udp_len_q - 16'd8;
+    end else if (form) begin
+      remain_q <= remain_q - 16'(emit_n);
+    end
+    if (tail_set) begin
+      tail_n_q <= n_cur - 4'd2;
+    end
+    if (tail_q) begin
+      out_data_q <= {16'h0, prev_q};
+      out_keep_q <= keep_of(tail_emit);
+      out_last_q <= 1'b1;
+      out_user_q <= stat_reason != RX_OK;  // registered at the tlast beat
+    end else if (form) begin
+      out_data_q <= {s_axis_rx_tdata[15:0], prev_q};
+      out_keep_q <= keep_of(emit_n);
+      out_last_q <= done || last_now;
+      out_user_q <= last_now && reason != RX_OK;
+    end else if (pend_q && eof) begin
+      out_user_q <= reason != RX_OK;  // the held beat goes out with this frame's verdict
+    end
+  end
+
+  assign m_axis_udp_tdata  = out_data_q;
+  assign m_axis_udp_tkeep  = out_keep_q;
+  assign m_axis_udp_tvalid = out_valid_q;
+  assign m_axis_udp_tlast  = out_last_q;
+  assign m_axis_udp_tuser  = out_user_q;
 
 endmodule

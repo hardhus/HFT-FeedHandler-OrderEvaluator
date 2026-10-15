@@ -1,19 +1,26 @@
 """eth_ip_udp_rx: Ethernet/IPv4/UDP receive filter (audit/09).
 
-Every frame is checked against the golden model (model/net.py): exactly one stat event
-per frame with the model's reason and byte count and, for frames whose headers pass,
-the m_udp_* metadata. Metadata is sampled at the stat event: it holds the frame's
-values from stage B until the next frame's stage B. The payload path arrives in F2 S3;
-until then the output must stay silent (PAYLOAD_PATH).
+Every frame is checked against the golden model (model/net.py):
+- exactly one stat event per frame, with the model's reason and byte count;
+- the payload on m_axis_udp: the model's bytes, tuser (abort) only on the last beat,
+  tkeep 0xFF before the last beat and contiguous from lane 0 on it;
+- the m_udp_* metadata and m_udp_sof_ts on every payload beat and at the stat event
+  (the DUT holds them from stage B until the next frame's stage B).
+The monitor numbers the cycles, so latency tests check 09 §2.3 exactly.
 """
 
+import math
 import random
 from collections import deque
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import cocotb
 from cocotb.triggers import ReadOnly, RisingEdge
+from cocotbext.axi import AxiStreamBus, AxiStreamFrame, AxiStreamSource
+from scapy.layers.inet import IP, UDP
+from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 
 from common.clocks import start_clock
 from common.runner import run_cocotb
@@ -24,6 +31,7 @@ from model.net import (
     RxReason,
     expect,
     ip_int,
+    last_beat_payload_bytes,
     mcast_mac,
     pad_to,
     random_config,
@@ -35,21 +43,43 @@ from model.net import (
 
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
 N_FILTERS = 8
-PAYLOAD_PATH = False  # F2 S3: m_axis_udp_* is compared with the model's payload
 STAGE_A_BEAT = 4  # cfg_* is sampled together with beat 4 (09 §2.3)
+SOF_TO_PAYLOAD = 7  # cycles from the SOF beat to the first payload beat (09 §2.3)
 LOCAL_MAC = "02:00:00:00:00:01"
 CFG = RxConfig(local_mac=LOCAL_MAC, filters=(("10.0.0.2", 5000, True),))
+CONTIGUOUS_KEEP = {(1 << n) - 1 for n in range(1, 9)}
+
+
+@dataclass
+class Frame:
+    """One frame: the model's outcome and what the monitor saw. Cycle numbers count rising
+    edges; an input beat belongs to the cycle in which it is presented, an output to the
+    cycle in which it is visible."""
+
+    name: str
+    want: RxExpect  # for a cut frame: the outcome had it not been cut
+    cut: bool = False  # cut by a reset: no stat event, only a prefix of the payload
+    ts: int | None = None  # ts_now at the SOF beat
+    sof: int = -1
+    eof: int = -1
+    out_first: int = -1
+    out_last: int = -1
+    stat: int = -1
 
 
 class Rx:
-    """Drives frames and cfg_*; checks every stat event (and the metadata) against the model."""
+    """Drives frames and cfg_*; checks every stat event, payload packet and metadata
+    against the model."""
 
     def __init__(self, dut, cfg: RxConfig) -> None:
         self.dut = dut
-        self.expected: deque[tuple[str, RxExpect]] = deque()
-        self.sof_ts: deque[int] = deque()
-        self.sent = 0
-        self.events = 0
+        self.cycle = 0
+        self.awaiting_sof: deque[Frame] = deque()  # sent, SOF not seen yet
+        self.in_flight: Frame | None = None  # input frame between SOF and tlast
+        self.stat_q: deque[Frame] = deque()  # stat event outstanding
+        self.pay_q: deque[Frame] = deque()  # payload packet outstanding
+        self.pkt = bytearray()  # payload packet being received
+        self.pkt_beats = 0
         self.apply(cfg)
 
     def apply(self, cfg: RxConfig) -> None:
@@ -70,6 +100,22 @@ class Rx:
         for _ in range(cycles):
             await RisingEdge(self.dut.clk)
 
+    def expect_frame(
+        self, frame: bytes, *, tuser: bool = False, cfg: RxConfig | None = None,
+        intent: RxReason | None = None, name: str = "",
+    ) -> Frame:  # fmt: skip
+        """Register the model's outcome of a frame about to be sent (under cfg, default:
+        the config applied now). intent: the reason the test means to produce."""
+        f = Frame(name or f"frame {len(self.awaiting_sof) + self.cycle}", expect(frame, tuser, cfg or self.cfg))
+        assert intent is None or f.want.reason == intent, (
+            f"{f.name}: test frame gives {f.want.reason.name}, meant {intent.name}"
+        )
+        self.awaiting_sof.append(f)
+        self.stat_q.append(f)
+        if f.want.payload is not None:
+            self.pay_q.append(f)
+        return f
+
     async def send(
         self,
         frame: bytes,
@@ -81,39 +127,52 @@ class Rx:
         at_beat: dict[int, Callable[[], None]] | None = None,
         noise: bool = False,
         name: str = "",
-    ) -> None:
-        """Present one frame, byte 0 = tdata[7:0], and expect the model's outcome under cfg
-        (default: the config applied now). intent: the reason the test means to produce.
+    ) -> Frame:
+        """Present one frame, byte 0 = tdata[7:0], and expect the model's outcome.
         gaps[k]: idle cycles before beat k. at_beat[k]: runs while beat k is presented, so
         the DUT sees its effect at the same edge as beat k. noise: random tuser on the
         beats before tlast (the MAC's tuser is only valid on the tlast beat)."""
-        name = name or f"frame {self.sent}"
-        want = expect(frame, tuser, cfg or self.cfg)
-        if intent is not None:
-            assert want.reason == intent, f"{name}: test frame gives {want.reason.name}, meant {intent.name}"
-        self.expected.append((name, want))
-        self.sent += 1
+        f = self.expect_frame(frame, tuser=tuser, cfg=cfg, intent=intent, name=name)
+        await self._drive(frame, tuser, gaps or {}, at_beat or {}, noise)
+        return f
+
+    async def send_cut(self, frame: bytes, beats: int, name: str = "") -> Frame:
+        """Present the first `beats` beats, then a 1-cycle reset; the rest of the frame is
+        dropped (the MAC is reset with us). No stat event; the payload beats that leave
+        before the reset must be a prefix of the model's payload, without tlast."""
+        f = Frame(name or "cut frame", expect(frame, False, self.cfg), cut=True)
+        self.awaiting_sof.append(f)
+        if f.want.payload is not None:
+            self.pay_q.append(f)
+        await self._drive(frame[: 8 * beats], False, {}, {}, False, last=False)
+        self.dut.s_axis_rx_tvalid.value = 0
+        self.dut.rst.value = 1
+        await RisingEdge(self.dut.clk)
+        self.dut.rst.value = 0
+        return f
+
+    async def _drive(self, frame: bytes, tuser: bool, gaps: dict, at_beat: dict, noise: bool, last: bool = True):
         dut = self.dut
         beats = [frame[i : i + 8] for i in range(0, len(frame), 8)]
         for k, beat in enumerate(beats):
-            await self.idle((gaps or {}).get(k, 0))
-            last = k == len(beats) - 1
+            await self.idle(gaps.get(k, 0))
+            tlast = last and k == len(beats) - 1
             dut.s_axis_rx_tdata.value = int.from_bytes(beat.ljust(8, b"\0"), "little")
             dut.s_axis_rx_tkeep.value = (1 << len(beat)) - 1
-            dut.s_axis_rx_tlast.value = int(last)
-            dut.s_axis_rx_tuser.value = int(tuser) if last else int(noise and random.random() < 0.5)
+            dut.s_axis_rx_tlast.value = int(tlast)
+            dut.s_axis_rx_tuser.value = int(tuser) if tlast else int(noise and random.random() < 0.5)
             dut.s_axis_rx_tvalid.value = 1
-            if at_beat and k in at_beat:
+            if k in at_beat:
                 at_beat[k]()
             await RisingEdge(dut.clk)
         dut.s_axis_rx_tvalid.value = 0
 
     async def finish(self, cycles: int = 8) -> None:
-        """Let the last events come out; every frame must have produced its stat event."""
+        """Let the last events come out; every frame must have produced its outcome."""
         await self.idle(cycles)
-        head = self.expected[0][0] if self.expected else ""
-        assert not self.expected, f"{len(self.expected)} frame(s) without a stat event (first: {head})"
-        assert self.events == self.sent
+        for name, q in (("stat event", self.stat_q), ("payload packet", self.pay_q), ("SOF", self.awaiting_sof)):
+            assert not q, f"{len(q)} frame(s) without a {name} (first: {q[0].name})"
+        assert not self.pkt_beats, f"payload packet without tlast ({self.pkt_beats} beats)"
 
     async def _ts(self) -> None:
         ts = random.getrandbits(63)
@@ -124,43 +183,86 @@ class Rx:
 
     async def _monitor(self) -> None:
         dut = self.dut
-        in_frame = False
         while True:
             await RisingEdge(dut.clk)
             await ReadOnly()
+            self.cycle += 1
             assert dut.s_axis_rx_tready.value == 1, "RX must never backpressure the MAC"
             if dut.stat_valid.value:
                 self._check_stat()
-            if not PAYLOAD_PATH:
-                assert dut.m_axis_udp_tvalid.value == 0, "payload output before the payload path exists"
+            if dut.m_axis_udp_tvalid.value:
+                self._out_beat()
             if dut.rst.value:
-                in_frame = False
+                self.in_flight = None
+                if self.pay_q and self.pay_q[0].cut:  # its partial payload packet ends here
+                    self.pay_q.popleft()
+                    self.pkt.clear()
+                    self.pkt_beats = 0
+                assert not self.pkt_beats, "reset in the middle of a payload packet that was not cut"
             elif dut.s_axis_rx_tvalid.value:
-                if not in_frame:
-                    self.sof_ts.append(int(dut.ts_now.value))  # sampled by the DUT at the SOF edge
-                in_frame = not dut.s_axis_rx_tlast.value
+                if self.in_flight is None:
+                    assert self.awaiting_sof, "input frame that the test did not register"
+                    self.in_flight = self.awaiting_sof.popleft()
+                    self.in_flight.ts = int(dut.ts_now.value)  # sampled by the DUT at the SOF edge
+                    self.in_flight.sof = self.cycle
+                if dut.s_axis_rx_tlast.value:
+                    self.in_flight.eof = self.cycle
+                    self.in_flight = None
+
+    def _check_meta(self, f: Frame, where: str) -> None:
+        dut = self.dut
+        meta = RxMeta(
+            int(dut.m_udp_src_ip.value),
+            int(dut.m_udp_dst_ip.value),
+            int(dut.m_udp_dst_port.value),
+            int(dut.m_udp_len.value),
+            int(dut.m_udp_filter_idx.value),
+        )
+        assert meta == f.want.meta, f"{f.name}: metadata at {where} {meta}, model {f.want.meta}"
+        ts = int(dut.m_udp_sof_ts.value)
+        assert ts == f.ts, f"{f.name}: m_udp_sof_ts {ts:#x} at {where}, ts_now at the SOF beat {f.ts:#x}"
 
     def _check_stat(self) -> None:
         dut = self.dut
-        assert self.expected, "stat event with no frame outstanding"
-        name, want = self.expected.popleft()
-        ts = self.sof_ts.popleft()
-        self.events += 1
+        assert self.stat_q, "stat event with no frame outstanding"
+        f = self.stat_q.popleft()
+        f.stat = self.cycle
         reason, nbytes = int(dut.stat_reason.value), int(dut.stat_bytes.value)
         got = RxReason(reason).name if reason in RxReason._value2member_map_ else str(reason)
-        assert (reason, nbytes) == (want.reason, want.nbytes), (
-            f"{name}: stat ({got}, {nbytes} B), model ({want.reason.name}, {want.nbytes} B)"
+        assert (reason, nbytes) == (f.want.reason, f.want.nbytes), (
+            f"{f.name}: stat ({got}, {nbytes} B), model ({f.want.reason.name}, {f.want.nbytes} B)"
         )
-        if want.meta is not None:
-            meta = RxMeta(
-                int(dut.m_udp_src_ip.value),
-                int(dut.m_udp_dst_ip.value),
-                int(dut.m_udp_dst_port.value),
-                int(dut.m_udp_len.value),
-                int(dut.m_udp_filter_idx.value),
-            )
-            assert meta == want.meta, f"{name}: metadata {meta}, model {want.meta}"
-            assert int(dut.m_udp_sof_ts.value) == ts, f"{name}: m_udp_sof_ts {int(dut.m_udp_sof_ts.value):#x}, ts_now at the SOF beat {ts:#x}"
+        if f.want.meta is not None:
+            self._check_meta(f, "the stat event")
+
+    def _out_beat(self) -> None:
+        dut = self.dut
+        assert self.pay_q, f"payload beat {int(dut.m_axis_udp_tdata.value):#x} with no packet expected"
+        f = self.pay_q[0]
+        keep, last, user = int(dut.m_axis_udp_tkeep.value), int(dut.m_axis_udp_tlast.value), int(dut.m_axis_udp_tuser.value)
+        if self.pkt_beats == 0:
+            f.out_first = self.cycle
+        self._check_meta(f, f"payload beat {self.pkt_beats}")
+        if not last:
+            assert (keep, user) == (0xFF, 0), f"{f.name}: beat {self.pkt_beats} keep {keep:#04x} tuser {user} before tlast"
+        else:
+            assert keep in CONTIGUOUS_KEEP, f"{f.name}: last beat keep {keep:#04x} is not contiguous from lane 0"
+        n = keep.bit_count()
+        self.pkt += int(dut.m_axis_udp_tdata.value).to_bytes(8, "little")[:n]
+        self.pkt_beats += 1
+        if f.cut:
+            assert not last, f"{f.name}: the cut frame's payload packet got a tlast"
+            assert f.want.payload.startswith(self.pkt), f"{f.name}: payload before the reset is not the model's prefix"
+        elif last:
+            self.pay_q.popleft()
+            f.out_last = self.cycle
+            got, want = bytes(self.pkt), f.want.payload
+            bad = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
+            assert got == want, f"{f.name}: payload {len(got)} B, model {len(want)} B; first difference at byte {bad}"
+            assert bool(user) == f.want.aborted, f"{f.name}: tuser (abort) {user}, model {f.want.aborted}"
+            assert self.pkt_beats == math.ceil(len(want) / 8), f"{f.name}: {self.pkt_beats} beats for {len(want)} B"
+            self.pkt.clear()
+            self.pkt_beats = 0
 
 
 async def start(dut, cfg: RxConfig = CFG) -> Rx:
@@ -407,6 +509,88 @@ async def tc_tuser_abort(dut):
     await rx.send(good[:30], tuser=True, intent=R.FCS, name="short frame, FCS error")
     for i in range(20):
         await rx.send(udp_frame(payload(random.randint(18, 200))), noise=True, intent=R.OK, name=f"tuser noise {i}")
+    await rx.finish()
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def tc_k2_byte_lane_order_scapy(dut):
+    """Legacy K2: frames built by scapy (its own lengths and checksums) and driven by
+    cocotbext-axi's AxiStreamSource, not by this testbench's driver. Every payload byte,
+    IP byte and port byte is distinct, so any lane swap or shift shows up."""
+    src_ip, dst_ip, sport, dport = "10.20.30.40", "172.16.33.66", 0xABCD, 0x1234
+    rx = await start(dut, RxConfig(local_mac=LOCAL_MAC, filters=((dst_ip, dport, True),)))
+    source = AxiStreamSource(AxiStreamBus.from_prefix(dut, "s_axis_rx"), dut.clk, dut.rst)
+    frames = []
+    for n in (1, 2, 5, 6, 7, 8, 9, 15, 16, 17, 64, 200, 255):
+        pkt = Ether(dst=LOCAL_MAC, src="02:00:00:00:00:99") / IP(src=src_ip, dst=dst_ip) / UDP(sport=sport, dport=dport)
+        frame = pad_to(bytes(pkt / Raw(bytes(range(n)))))
+        frames.append(rx.expect_frame(frame, intent=RxReason.OK, name=f"scapy, {n} payload bytes"))
+        await source.send(AxiStreamFrame(frame))
+    await source.wait()
+    await rx.finish()
+    for f in frames:  # the model read these from scapy's parse; pin them to the literals too
+        assert (f.want.meta.src_ip, f.want.meta.dst_ip, f.want.meta.dst_port) == (0x0A141E28, 0xAC102142, 0x1234)
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")
+async def tc_tail_all_last_lengths(dut):
+    """Every case of the last payload beat: payload lengths 1..25 and 120..127, padded (short
+    frames) and unpadded, plus the runts (abort). Each alone and followed with IPG 0 by an
+    accepted frame, so a tail beat shares its cycle with the next SOF."""
+    rx = await start(dut)
+    for n in [*range(1, 26), *range(120, 128)]:
+        f = udp_frame(payload(n))
+        variants = [("padded", pad_to(f)), ("runt", f)] if len(f) < 60 else [("unpadded", f)]
+        for kind, frame in variants:
+            await rx.send(frame, name=f"{n} B {kind}, alone")
+            await rx.idle(4)
+            await rx.send(frame, name=f"{n} B {kind}, then IPG 0")
+            await rx.send(udp_frame(payload(random.randint(18, 40))), intent=RxReason.OK, name=f"after {n} B {kind}")
+    await rx.finish()
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def tc_latency(dut):
+    """09 §2.3, exact: SOF beat -> first payload beat 7 cycles; input tlast -> payload tlast
+    1 cycle (<= 2 payload bytes in the last beat, or the last beat held for tlast) or 2 (a
+    tail beat); input tlast -> stat 1 cycle. A packet whose only beat is held (09 §2.4:
+    padding) starts with its tlast, 1 cycle after the input tlast."""
+    rx = await start(dut)
+    by_tail = {last_beat_payload_bytes(n): n for n in range(18, 26)}  # unpadded frames
+    # (name, frame, intent, first beat after SOF or None if held, payload tlast after input tlast)
+    cases = [(f"{t} payload byte(s) in the last beat", udp_frame(payload(by_tail[t])), RxReason.OK, SOF_TO_PAYLOAD,
+              1 if t <= 2 else 2) for t in (1, 2, 3, 8)]
+    cases += [
+        ("padded, one beat (held)", pad_to(udp_frame(payload(4))), RxReason.OK, None, 1),
+        ("padded, two beats", pad_to(udp_frame(payload(10))), RxReason.OK, SOF_TO_PAYLOAD, 1),
+        ("bytes after the datagram (last beat held)", udp_frame(payload(10)) + bytes(20), RxReason.LEN, SOF_TO_PAYLOAD, 1),
+    ]
+    for name, frame, intent, first_latency, tlast_latency in cases:
+        f = await rx.send(frame, intent=intent, name=name)
+        await rx.idle(6)
+        if first_latency is None:
+            assert f.out_first == f.out_last, f"{name}: expected a single, held beat"
+        else:
+            assert f.out_first - f.sof == first_latency, f"{name}: first payload beat {f.out_first - f.sof} cycles after SOF"
+        assert f.out_last - f.eof == tlast_latency, f"{name}: payload tlast {f.out_last - f.eof} cycles after tlast"
+        assert f.stat - f.eof == 1, f"{name}: stat {f.stat - f.eof} cycles after tlast"
+    await rx.finish()  # fmt: skip
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def tc_reset_mid_frame(dut):
+    """09 §2.8: a 1-cycle reset in the header, at the first payload beat and in the middle of
+    the payload. The cut frame gets no stat event and no further payload; frames after the
+    reset come out exactly."""
+    rx = await start(dut)
+    for cut in (3, 7, 12):
+        await rx.send(udp_frame(payload(60)), intent=RxReason.OK, name=f"before the reset at beat {cut}")
+        await rx.idle(4)
+        f = await rx.send_cut(udp_frame(payload(200)), cut, name=f"cut at beat {cut}")
+        # The payload starts with beat 6: a cut in the header leaves no output, later cuts do.
+        assert (f.out_first != -1) == (cut > 6), f"cut at beat {cut}: payload out before the reset {f.out_first}"
+        await rx.send(udp_frame(payload(50)), intent=RxReason.OK, name=f"first after the reset at beat {cut}")
+        await rx.send(udp_frame(payload(30)), intent=RxReason.OK, name=f"second after the reset at beat {cut}")
     await rx.finish()
 
 
