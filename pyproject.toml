@@ -11,6 +11,7 @@ dev = [
     "cocotbext-axi>=0.1.28",
     "pytest>=8",
     "pytest-xdist>=3",
+    "scapy>=2.8.0",
 ]
 
 [tool.uv]

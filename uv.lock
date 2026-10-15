@@ -94,6 +94,7 @@ dev = [
     { name = "cocotbext-axi" },
     { name = "pytest" },
     { name = "pytest-xdist" },
+    { name = "scapy" },
 ]
 
 [package.metadata]
@@ -104,6 +105,7 @@ dev = [
     { name = "cocotbext-axi", specifier = ">=0.1.28" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-xdist", specifier = ">=3" },
+    { name = "scapy", specifier = ">=2.8.0" },
 ]
 
 [[package]]

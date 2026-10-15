@@ -39,6 +39,10 @@ TOOLS_ENV = REPO / "tools.env"
 X_BUILD_ARGS = ["--x-assign", "unique", "--x-initial", "unique"]
 STAMP = ".hft-build-ok"
 
+# SVA filelists that belong to an RTL filelist; added with sva=True (09 §2.10). Keeping them
+# out of sva.f means a change to core assertions does not rebuild the common-block tests.
+SVA_FOR = {"core.f": "sva_core.f"}
+
 
 # Rough peak memory of one simulator build job (C++ compiler) plus its share of the
 # worker process. Used to keep parallel builds within small machines' RAM.
@@ -110,6 +114,13 @@ def sources_for(filelists: Iterable[str]) -> list[Path]:
     return [p for f in filelists for p in read_filelist(FILELISTS / f)]
 
 
+def sim_filelists(filelists: list[str], sva: bool) -> list[str]:
+    """Filelists of a build: the RTL lists, then (sva=True) sva.f and each list's SVA_FOR partner."""
+    if not sva:
+        return list(filelists)
+    return [*filelists, "sva.f", *(SVA_FOR[f] for f in filelists if f in SVA_FOR)]
+
+
 def build_key(name: str, config: object, sources: Iterable[Path]) -> str:
     """Directory name for a build: `<name>_<hash of config + source contents + tools.env>`."""
     h = hashlib.sha1(json.dumps(config, sort_keys=True, default=str).encode())
@@ -138,7 +149,7 @@ def run_cocotb(
     parameters: HDL parameters (part of the build key).
     defines:    preprocessor defines, e.g. {"HFT_SIM_CDC_JITTER": 1} (part of the build key).
     extra_env:  runtime-only settings such as RATIO (not part of the build key).
-    sva:        also compile filelists/sva.f (assertion modules and binds).
+    sva:        also compile filelists/sva.f and the SVA_FOR lists (assertion modules and binds).
     """
     parameters = dict(parameters or {})
     defines = dict(defines or {})
@@ -146,8 +157,7 @@ def run_cocotb(
     waves = os.environ.get("WAVES", "0") == "1"
     seed = run_seed()
 
-    lists = [*filelists, *(["sva.f"] if sva else [])]
-    sources = sources_for(lists)
+    sources = sources_for(sim_filelists(filelists, sva))
     build_args = ["-Wall", "--assert", *X_BUILD_ARGS]
     if waves:
         build_args += ["--trace-fst", "--trace-structs"]

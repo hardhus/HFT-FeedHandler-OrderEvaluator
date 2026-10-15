@@ -33,17 +33,21 @@ doctor:
     bash scripts/doctor.sh
 
 # SystemVerilog files under the style gate, one per line: KIND PATH. KIND is
-# rtl (Verilator top = file name, -F common.f), ooc (same with synth_ooc.f) or style (Verible only:
-# XPM wrappers that Verilator cannot compile, SVA checkers and self-checking SV testbenches).
+# rtl (Verilator top = file name, -F common.f), core (+ core.f), ooc (+ synth_ooc.f),
+# ooc_core (+ core.f and synth_ooc_core.f) or style (Verible only: XPM wrappers that Verilator
+# cannot compile, SVA checkers and self-checking SV testbenches).
 [private]
 [script("bash")]
 [unix]
 sv-files:
     set -euo pipefail
-    files_of() { grep -vE '^\s*(#|//)' "firmware/filelists/$1" | sed '/^\s*$/d; s|^|firmware/filelists/|'; }
+    # `|| true`: a filelist may hold only comments until its first file arrives.
+    files_of() { { grep -vE '^\s*(#|//)' "firmware/filelists/$1" || true; } | sed '/^\s*$/d; s|^|firmware/filelists/|'; }
     files_of common.f | sed 's/^/rtl /'
+    files_of core.f | sed 's/^/core /'
     files_of synth_ooc.f | sed 's/^/ooc /'
-    { files_of xilinx.f; files_of sva.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
+    files_of synth_ooc_core.f | sed 's/^/ooc_core /'
+    { files_of xilinx.f; files_of sva.f; files_of sva_core.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
 
 # Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check
 [script("bash")]
@@ -55,9 +59,14 @@ lint:
     while read -r kind f; do
       srcs+=("$f")
       [ "$kind" = style ] && continue
+      case "$f" in *_pkg.sv) continue ;; esac   # packages are linted through their users (no module top)
       top=$(basename "$f" .sv)
       lists=(-F firmware/filelists/common.f)
-      [ "$kind" = ooc ] && lists+=(-F firmware/filelists/synth_ooc.f)
+      case "$kind" in
+        core)     lists+=(-F firmware/filelists/core.f) ;;
+        ooc)      lists+=(-F firmware/filelists/synth_ooc.f) ;;
+        ooc_core) lists+=(-F firmware/filelists/core.f -F firmware/filelists/synth_ooc_core.f) ;;
+      esac
       echo "== verilator $top"
       verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
     done < <(just sv-files)

@@ -1,10 +1,13 @@
 """Simulator-free self-tests of the shared test helpers."""
 
+import json
+
 import pytest
 
 from common.clocks import PROFILES, profile
+from common.coverage import REPORT, Coverage
 from common.junit import tidy_junit
-from common.runner import build_key, env_dir_name
+from common.runner import build_key, env_dir_name, sim_filelists
 from common.scoreboard import Scoreboard
 
 
@@ -68,3 +71,38 @@ def test_tidy_junit(tmp_path):
     assert "@" not in text, "xdist group suffix should be removed"
     assert text.index('name="t[a]"') < text.index('name="t[b]"'), "cases should be sorted"
     assert '<failure message="boom"' in text, "failure details must be kept"
+
+
+def test_sim_filelists_adds_sva_partners():
+    assert sim_filelists(["common.f", "core.f"], sva=True) == ["common.f", "core.f", "sva.f", "sva_core.f"]
+    assert sim_filelists(["common.f"], sva=True) == ["common.f", "sva.f"], "F1 builds must not see sva_core.f"
+    assert sim_filelists(["common.f", "core.f"], sva=False) == ["common.f", "core.f"]
+
+
+def test_coverage_empty_required_bin_fails(tmp_path):
+    cov = Coverage("g", ["a", "b"])
+    cov.hit("a")
+    with pytest.raises(AssertionError, match="'b'"):
+        cov.check(tmp_path)
+    assert json.loads((tmp_path / REPORT).read_text())["g"]["empty"] == ["b"], "report is written on failure too"
+
+
+def test_coverage_unknown_bin_fails():
+    cov = Coverage("g", ["a"])
+    with pytest.raises(AssertionError, match="unknown bin"):
+        cov.hit("A")
+
+
+def test_coverage_report(tmp_path):
+    first = Coverage("first", ["x"])
+    first.hit("x")
+    first.check(tmp_path)
+    second = Coverage("second", ["y", "z"])
+    for b in ("y", "y", "z"):
+        second.hit(b)
+    second.check(tmp_path)
+    report = json.loads((tmp_path / REPORT).read_text())
+    assert report == {
+        "first": {"bins": {"x": 1}, "empty": []},
+        "second": {"bins": {"y": 2, "z": 1}, "empty": []},
+    }, "groups sharing a run directory keep separate entries"
