@@ -296,9 +296,7 @@ class _Gen:
         if padded:
             lo, hi = 1, 17
         elif jumbo:
-            # Beyond a 1514-B frame. Kept short: simulation time is per beat, and 9000-B and
-            # 17000-B frames have their own test (tc_k4_long_packet_no_spurious_event).
-            lo, hi = 1473, 2000
+            lo, hi = 1473, 8972  # beyond a 1514-B frame, up to a 9000-B MTU
         else:
             lo, hi = 18, 1472 if self.rng.random() < 0.1 else 300
         while True:
