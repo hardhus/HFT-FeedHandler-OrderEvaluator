@@ -1,13 +1,16 @@
 """Simulator-free self-tests of the shared test helpers."""
 
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
 from common.clocks import PROFILES, profile
 from common.coverage import REPORT, Coverage
+from common.filelist import read_filelist
 from common.junit import tidy_junit
-from common.runner import build_key, env_dir_name, failure_lines, sim_filelists
+from common.runner import FILELISTS, REPO, build_key, env_dir_name, failure_lines, run_problems, sim_filelists
 from common.scoreboard import Scoreboard
 
 
@@ -121,3 +124,69 @@ def test_failure_lines_lists_every_failed_test(tmp_path, monkeypatch):
     assert sum("AssertionError" in line for line in out) == 3, "details stay bounded"
     monkeypatch.setenv("HFT_LOG_LINES", "5")
     assert sum("AssertionError" in line for line in failure_lines(log).splitlines()) == 5
+
+
+def _results_xml(tmp_path, names):
+    cases = "".join(f'<testcase classname="m" name="{n}" time="0" />' for n in names)
+    path = tmp_path / "results.xml"
+    path.write_text(f'<?xml version="1.0"?><testsuites><testsuite name="m">{cases}</testsuite></testsuites>')
+    return path
+
+
+def test_run_problems_catches_silent_passes(tmp_path):
+    """Regression (verification hardening): a cocotb run with a testcase filter that matches
+    nothing ran zero tests and still passed."""
+    log = tmp_path / "sim.log"
+    log.write_text("INFO all good\n")
+    assert run_problems(_results_xml(tmp_path, ["tc_a", "tc_b"]), log, ["tc_a"]) == []
+    assert "no cocotb test ran" in run_problems(_results_xml(tmp_path, []), log, None)
+    assert any("did not run" in p for p in run_problems(_results_xml(tmp_path, ["tc_a"]), log, ["tc_a", "tc_x"]))
+    assert any("did not run" in p for p in run_problems(_results_xml(tmp_path, ["tc_a"]), log, "tc_typo"))
+    log.write_text("[100] %Error: x.sv:3: Assertion failed in top.a_check\n")
+    assert any("reports errors" in p for p in run_problems(_results_xml(tmp_path, ["tc_a"]), log, None))
+    assert any("no readable" in p for p in run_problems(tmp_path / "missing.xml", log, None))
+
+
+def _unit_modules():
+    return sorted((REPO / "firmware" / "tb" / "unit").glob("test_*.py"))
+
+
+def test_every_tc_is_a_cocotb_test():
+    """A tc_* coroutine without @cocotb.test is never run and nothing would say so."""
+    bare = []
+    for path in _unit_modules():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("tc_"):
+                decorators = [ast.unparse(d.func if isinstance(d, ast.Call) else d) for d in node.decorator_list]
+                if "cocotb.test" not in decorators:
+                    bare.append(f"{path.name}:{node.lineno} {node.name}")
+    assert not bare, f"tc_* without @cocotb.test: {bare}"
+
+
+def test_long_test_groups_name_real_tests():
+    """Every name in a module's LONG_TESTS is a tc_* defined in that module (a typo would make
+    its pytest entry run nothing; run_problems also catches it at run time)."""
+    for path in _unit_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "LONG_TESTS" for t in node.targets):
+                names = ast.literal_eval(node.value)
+                assert set(names) <= defined, f"{path.name}: LONG_TESTS names no test: {set(names) - defined}"
+
+
+def test_every_rtl_and_sva_file_is_listed_once():
+    """An RTL or SVA file outside every filelist is neither linted nor simulated."""
+    fw = REPO / "firmware"
+    listed: dict[Path, list[str]] = {}
+    for name in ("common.f", "core.f", "xilinx.f", "synth_ooc.f", "synth_ooc_core.f", "sva.f", "sva_core.f"):
+        for path in read_filelist(FILELISTS / name):
+            listed.setdefault(path, []).append(name)
+    files = [p.resolve() for area in ("common", "core", "platform") for p in (fw / "rtl" / area).rglob("*.sv")]
+    files += [p.resolve() for p in (fw / "tb" / "sva").glob("*.sv")]
+    unlisted = [str(p.relative_to(REPO)) for p in files if p not in listed]
+    twice = {str(p.relative_to(REPO)): lists for p, lists in listed.items() if len(lists) > 1}
+    assert not unlisted, f"not in any filelist: {unlisted}"
+    assert not twice, f"in more than one filelist: {twice}"
+    missing = [str(p) for p in listed if not p.exists()]
+    assert not missing, f"filelist entries that do not exist: {missing}"

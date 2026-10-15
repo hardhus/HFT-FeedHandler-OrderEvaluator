@@ -129,7 +129,8 @@ verdict is `LEN` either way.
 | What | Where |
 |------|-------|
 | Golden model (scapy, independent of the RTL's byte offsets) and its own tests | `tb/model/net.py`, `tb/selftest/test_net_model.py` |
-| Directed tests, latency, reset, K1/K2/K4 regressions | `tb/unit/test_eth_ip_udp_rx.py` (group `directed`, `tc_k4_long_packet_no_spurious_event`) |
+| Directed tests, latency, reset, K1/K2/K4 regressions; the directed group also runs at `N_FILTERS` = 1 and 5 | `tb/unit/test_eth_ip_udp_rx.py` (group `directed`, `tc_k4_long_packet_no_spurious_event`) |
+| Limits: largest datagram and ±1 B, 64 KiB counters, `left_q` floor (`tc_size_limits`); every reachable checksum sum k·0xFFFF, k = 1..9 (`tc_checksum_sums`); `ts_now` wrap (`tc_ts_wrap`) | same module |
 | 10⁴ random frames against the model, coverage gate (52 bins) | `tc_random_golden` (writes `coverage.json` in its run directory) |
 | Line rate, IPG 0, zero loss | `tc_line_rate_b2b` |
 | Assertions (bound in every test) and their own tests | `tb/sva/udp_rx_props.sv`, `tb/sv/tb_udp_rx_props.sv`, `tb/unit/test_sva_checkers.py` |

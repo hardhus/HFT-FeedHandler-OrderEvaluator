@@ -12,6 +12,7 @@ The monitor numbers the cycles, so latency tests check 09 §2.3 exactly.
 
 import ipaddress
 import math
+import os
 import random
 from collections import deque
 from collections.abc import Callable
@@ -48,7 +49,8 @@ from model.net import (
 )
 
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
-N_FILTERS = 8
+N_FILTERS = int(os.environ.get("N_FILTERS", "8"))  # the build parameter, passed to the simulation via env
+TS_MASK = (1 << 64) - 1  # ts_now is 64 bits and wraps
 STAGE_A_BEAT = 4  # cfg_* is sampled together with beat 4 (09 §2.3)
 SOF_TO_PAYLOAD = 7  # cycles from the SOF beat to the first payload beat (09 §2.3)
 N_RANDOM = 10_000  # 05 F2 "done": do not lower (09 §5)
@@ -88,6 +90,7 @@ class Rx:
         self.pay_q: deque[Frame] = deque()  # payload packet outstanding
         self.pkt = bytearray()  # payload packet being received
         self.pkt_beats = 0
+        self.ts_start: int | None = None  # first ts_now value (default: random 64-bit)
         self.stat_events = 0  # totals over the test
         self.out_beats = 0
         # Signal handles, looked up once: the long tests run a few 10^5 cycles.
@@ -196,10 +199,10 @@ class Rx:
     async def _monitor(self) -> None:
         """Each cycle: drive the free-running ts_now, then (ReadOnly) check the outputs and
         track the input frames."""
-        ts = random.getrandbits(63)
+        ts = random.getrandbits(64) if self.ts_start is None else self.ts_start
         while True:
             await RisingEdge(self.clk)
-            ts += 1
+            ts = (ts + 1) & TS_MASK
             self.ts_now.value = ts  # sampled by the DUT at the next edge, seen below
             await ReadOnly()
             self.cycle += 1
@@ -275,7 +278,7 @@ class Rx:
             self.pkt_beats = 0
 
 
-async def start(dut, cfg: RxConfig = CFG) -> Rx:
+async def start(dut, cfg: RxConfig = CFG, ts_start: int | None = None) -> Rx:
     """Idle inputs, config and reset first, then the clock (no edge with undriven inputs)."""
     dut.s_axis_rx_tvalid.value = 0
     dut.s_axis_rx_tdata.value = 0
@@ -284,6 +287,7 @@ async def start(dut, cfg: RxConfig = CFG) -> Rx:
     dut.s_axis_rx_tuser.value = 0
     dut.ts_now.value = 0
     rx = Rx(dut, cfg)
+    rx.ts_start = ts_start
     dut.rst.value = 1
     start_clock(dut.clk, PERIOD_PS)
     await RisingEdge(dut.clk)  # the synchronous reset has cleared the control flops
@@ -361,14 +365,25 @@ async def tc_filter_table(dut):
         only_i = replace(full, filters=tuple((ip, p, j == i) for j, (ip, p, _) in enumerate(full.filters)))
         rx.apply(only_i)
         await rx.send(frame_for(full, i), intent=R.OK, name=f"only entry {i} enabled")
-        await rx.send(frame_for(full, (i + 1) % N_FILTERS), intent=R.FILTER, name=f"entry {(i + 1) % N_FILTERS} off")
+        if N_FILTERS > 1:
+            off = (i + 1) % N_FILTERS
+            await rx.send(frame_for(full, off), intent=R.FILTER, name=f"entry {off} off")
 
-    dup = list(full.filters)
-    ip3, port3, _ = dup[3]
-    dup[1] = (ip3, port3, False)
-    dup[5] = (ip3, port3, True)
-    rx.apply(replace(full, filters=tuple(dup)))
-    await rx.send(frame_for(full, 3), intent=R.OK, name="duplicates 1 (off), 3, 5 -> 3")
+    # The lowest matching enabled entry wins: the first and the last entry, then three entries
+    # with the lowest one disabled.
+    last = N_FILTERS - 1
+    if N_FILTERS >= 2:
+        dup = list(full.filters)
+        dup[last] = (*full.filters[0][:2], True)
+        rx.apply(replace(full, filters=tuple(dup)))
+        await rx.send(frame_for(full, 0), intent=R.OK, name=f"duplicates 0, {last} -> 0")
+    if N_FILTERS >= 3:
+        mid = N_FILTERS // 2
+        dup = list(full.filters)
+        dup[0] = (*full.filters[mid][:2], False)
+        dup[last] = (*full.filters[mid][:2], True)
+        rx.apply(replace(full, filters=tuple(dup)))
+        await rx.send(frame_for(full, mid), intent=R.OK, name=f"duplicates 0 (off), {mid}, {last} -> {mid}")
 
     rx.apply(full)
     ip0, port0, _ = full.filters[0]
@@ -379,12 +394,18 @@ async def tc_filter_table(dut):
     await rx.send(with_field(f0, "dst_ip", "10.255.255.254"), intent=R.FILTER, name="port right, IP wrong")
     await rx.send(with_field(f0, "dst_mac", "02:00:00:00:00:77"), intent=R.MAC, name="foreign unicast MAC")
 
-    f1 = frame_for(full, 1)  # odd entries are multicast groups
+    await rx.send(with_field(f0, "dst_mac", mcast_mac(ip0)), intent=R.MAC, name="multicast MAC, unicast IP")
+
+    # A multicast group in entry 0, so this works for any N_FILTERS.
+    group = f"{random.randint(224, 239)}.{random.randrange(256)}.{random.randrange(256)}.{random.randint(1, 254)}"
+    mc = replace(full, filters=((group, random.randrange(1024, 65536), True), *full.filters[1:]))
+    rx.apply(mc)
+    f1 = frame_for(mc, 0)
     mac1 = int.from_bytes(f1[:6], "big")
     await rx.send(f1, intent=R.OK, name="multicast group")
     await rx.send(with_field(f1, "dst_mac", (mac1 ^ 0x1).to_bytes(6, "big")), intent=R.MAC, name="other group's MAC")
     await rx.send(with_field(f1, "dst_mac", (mac1 | 1 << 23).to_bytes(6, "big")), intent=R.MAC, name="MAC bit 23 set")
-    await rx.send(with_field(f0, "dst_mac", mcast_mac(ip0)), intent=R.MAC, name="multicast MAC, unicast IP")
+    rx.apply(full)
 
     bcast = with_field(f0, "dst_mac", "ff:ff:ff:ff:ff:ff")
     await rx.send(bcast, intent=R.MAC, name="broadcast, not accepted")
@@ -735,19 +756,85 @@ async def tc_size_limits(dut):
     await rx.finish()
 
 
+def header_sum_k(frame: bytes) -> int:
+    """k of a valid IPv4 header: its 10 words (checksum included) sum to k * 0xFFFF."""
+    total = sum(int.from_bytes(frame[i : i + 2], "big") for i in range(14, 34, 2))
+    assert total % 0xFFFF == 0, "not a valid header checksum"
+    return total // 0xFFFF
+
+
+def frame_with_header_sum(k: int) -> bytes:
+    """A frame with a valid IPv4 header whose words sum to exactly k * 0xFFFF. Field values
+    (tos, id, ttl, IPs, DF + reserved flag) rise together until the sum reaches k; k = 9 also
+    needs the largest datagram length. k = 10 cannot occur in a legal header."""
+    n = 65535 - 28 if k == 9 else 40
+    body = payload(n)
+    for flags in (0x0000, 0xC000):  # none, or DF + the reserved bit: ignored, not a fragment
+        for v in range(0, 0x10000, 0x0101):
+            ip = str(ipaddress.IPv4Address(v << 16 | v))
+            frame = udp_frame(body, src_ip=ip, dst_ip=ip, ident=v, ttl=v >> 8)
+            frame = frame[:15] + bytes([v >> 8]) + frame[16:]  # tos
+            frame = with_field(frame, "flags_frag", flags)
+            if header_sum_k(frame) == k:
+                return frame
+    raise AssertionError(f"no header with sum {k} * 0xFFFF")
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")
+async def tc_checksum_sums(dut):
+    """The checksum compare for every k the header sum can reach (k * 0xFFFF, k = 1..9): the
+    passing header is accepted, the same header with one checksum bit flipped is IP_HDR. Ordinary
+    headers only reach k <= 6, so the upper compares were never exercised."""
+    R = RxReason
+    rx = await start(dut)
+    for k in range(1, 10):
+        frame = frame_with_header_sum(k)
+        assert header_sum_k(frame) == k
+        dst = str(ipaddress.IPv4Address(frame[30:34]))
+        rx.apply(replace(CFG, filters=((dst, int.from_bytes(frame[36:38], "big"), True),)))
+        await rx.send(frame, intent=R.OK, name=f"header sum {k} * 0xFFFF")
+        bad = with_field(frame, "ip_csum", int.from_bytes(frame[24:26], "big") ^ 0x0100)
+        await rx.send(bad, intent=R.IP_HDR, name=f"header sum {k} * 0xFFFF, checksum bit 8 flipped")
+    await rx.finish()
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def tc_ts_wrap(dut):
+    """ts_now near 2^64: m_udp_sof_ts carries all 64 bits, also for frames whose SOF comes right
+    before and after the counter wraps to 0."""
+    rx = await start(dut, ts_start=TS_MASK - 40)
+    frames = []
+    for i in range(12):
+        f = await rx.send(udp_frame(payload(random.randint(18, 60))), intent=RxReason.OK, name=f"frame {i} around the wrap")
+        frames.append(f)
+        await rx.idle(random.randint(0, 3))
+    await rx.finish()
+    assert any(f.ts > TS_MASK - 1000 for f in frames), "no SOF before the wrap"
+    assert any(f.ts < 1000 for f in frames), "no SOF after the wrap"
+
+
 # The long tests run as their own pytest entries (parallel workers, one shared build); GROUP
 # only gives each entry its own run directory.
 LONG_TESTS = ("tc_random_golden", "tc_line_rate_b2b", "tc_k4_long_packet_no_spurious_event", "tc_size_limits")
-DIRECTED_TESTS = [name for name in dict(globals()) if name.startswith("tc_") and name not in LONG_TESTS]
 
 
-@pytest.mark.parametrize("group", ["directed", *LONG_TESTS])
-def test_eth_ip_udp_rx(group):
+def directed_tests() -> list[str]:
+    """Every tc_* of this module that is not a long test. Built when called, after the whole module
+    is loaded, so a test defined anywhere in the file is in exactly one group."""
+    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS]
+
+
+# N_FILTERS: 8 (the product value) for every group; 1 (FIDX_W special case) and 5 (not a
+# power of 2) for the directed tests.
+@pytest.mark.parametrize(
+    "group, n_filters", [("directed", 8), ("directed", 1), ("directed", 5), *((name, 8) for name in LONG_TESTS)]
+)
+def test_eth_ip_udp_rx(group, n_filters):
     run_cocotb(
         toplevel="eth_ip_udp_rx",
         filelists=["common.f", "core.f"],
         test_module="test_eth_ip_udp_rx",
-        parameters={"N_FILTERS": N_FILTERS},
-        testcase=DIRECTED_TESTS if group == "directed" else group,
-        extra_env={"GROUP": group},
+        parameters={"N_FILTERS": n_filters},
+        testcase=directed_tests() if group == "directed" else group,
+        extra_env={"GROUP": group, "N_FILTERS": n_filters},
     )

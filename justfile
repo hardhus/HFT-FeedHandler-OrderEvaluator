@@ -42,7 +42,11 @@ doctor:
 sv-files:
     set -euo pipefail
     # `|| true`: a filelist may hold only comments until its first file arrives.
-    files_of() { { grep -vE '^\s*(#|//)' "firmware/filelists/$1" || true; } | sed '/^\s*$/d; s|^|firmware/filelists/|'; }
+    # A missing filelist is an error, not an empty list (its files would silently skip lint).
+    files_of() {
+      [ -f "firmware/filelists/$1" ] || { echo "sv-files: missing filelist $1" >&2; exit 1; }
+      { grep -vE '^\s*(#|//)' "firmware/filelists/$1" || true; } | sed '/^\s*$/d; s|^|firmware/filelists/|'
+    }
     files_of common.f | sed 's/^/rtl /'
     files_of core.f | sed 's/^/core /'
     files_of synth_ooc.f | sed 's/^/ooc /'
@@ -56,6 +60,7 @@ lint:
     set -uo pipefail
     fail=0
     srcs=()
+    list=$(just sv-files) || { echo "lint: just sv-files failed"; exit 1; }
     while read -r kind f; do
       srcs+=("$f")
       [ "$kind" = style ] && continue
@@ -69,7 +74,7 @@ lint:
       esac
       echo "== verilator $top"
       verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
-    done < <(just sv-files)
+    done <<<"$list"
     [ ${#srcs[@]} -gt 0 ] || { echo "lint: no files found"; exit 1; }
     echo "== verible-verilog-lint"
     verible-verilog-lint --ruleset=all --rules_config=.rules.verible_lint "${srcs[@]}" || fail=1

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from common.runner import (
     BUILD,
+    ERROR_MARKERS,
     REPO,
     STAMP,
     X_BUILD_ARGS,
@@ -74,4 +75,7 @@ def run_svtb(
     assert proc.returncode == 0, f"{top}: simulator exited with {proc.returncode}"
     assert len(results) == 1, f"{top}: expected one '{SENTINEL}' line, got {len(results)}"
     assert f"{SENTINEL} PASS" in results[0], f"{top}: {results[0].strip()}"
+    # A PASS line does not count if an assertion or the simulator reported an error on the way.
+    errors = [line.strip() for line in out.splitlines() if any(m in line for m in ERROR_MARKERS)]
+    assert not errors, f"{top}: PASS printed, but the run reports errors: {errors[:3]}"
     return out

@@ -20,6 +20,7 @@ import json
 import os
 import random
 import sys
+import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator
 from importlib.metadata import version
 from contextlib import contextmanager
@@ -229,6 +230,42 @@ def run_cocotb(
             f"{toplevel} failed: seed={seed} env={env}\n"
             f"rerun: HFT_SEED={seed} (same parameters/env)\nlog: {log}\n{failure_lines(log)}"
         ) from exc
+    problems = run_problems(run_dir / "results.xml", log, testcase)
+    if problems:
+        raise AssertionError(
+            f"{toplevel}: the simulation passed, but {'; '.join(problems)}\nseed={seed} env={env}\nlog: {log}"
+        )
+
+
+# A sim log line with one of these means an assertion or the simulator reported an error.
+ERROR_MARKERS = ("Assertion failed", "%Error")
+
+
+def run_problems(results_xml: Path, log: Path, testcase: str | list[str] | None) -> list[str]:
+    """Reasons a passing cocotb run must still fail. Each catches a way a test can count as a
+    pass without having checked anything:
+    - no test ran (e.g. a `testcase` filter that matches nothing makes cocotb run zero tests);
+    - a requested test did not run;
+    - the log reports an assertion or simulator error that did not stop the run."""
+    try:
+        ran = [tc.get("name") for tc in ET.parse(results_xml).getroot().iter("testcase")]
+    except (OSError, ET.ParseError) as exc:
+        return [f"no readable {results_xml.name} ({exc})"]
+    problems = []
+    if not ran:
+        problems.append("no cocotb test ran")
+    wanted = [testcase] if isinstance(testcase, str) else list(testcase or [])
+    missing = [name for name in wanted if name not in ran]
+    if missing:
+        problems.append(f"requested test(s) did not run: {missing}")
+    try:
+        errors = [line.strip() for line in log.read_text(errors="replace").splitlines()
+                  if any(m in line for m in ERROR_MARKERS)]  # fmt: skip
+    except OSError:
+        errors = []
+    if errors:
+        problems.append(f"the log reports errors: {errors[:3]}")
+    return problems
 
 
 def failure_lines(log: Path, limit: int | None = None) -> str:
