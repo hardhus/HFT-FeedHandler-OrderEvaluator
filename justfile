@@ -231,6 +231,11 @@ synth-common:
     done
     [ $bad = 0 ] && echo "synth-common: all PASS" || { echo "synth-common: $bad run(s) FAILED"; exit 1; }
 
+# 250 MHz, for information only (not a gate): just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
+# OOC synth + timing/CDC gate for the core blocks at net_clk (156.25 MHz)
+synth-core:
+    just synth-ooc eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f
+
 # Remove build outputs (keeps .tools/ and .venv/)
 clean:
     @echo "removing {{ build }}"

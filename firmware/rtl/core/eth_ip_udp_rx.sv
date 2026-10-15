@@ -59,13 +59,15 @@ module eth_ip_udp_rx
   // ---- frame tracking (control: sync reset) ----
   logic              in_frame_q;  // a SOF has been seen, tlast not yet
   logic [BEAT_W-1:0] beat_cnt_q;  // index of the next beat in the frame, saturating (K4)
-  logic [      15:0] bytes_q;  // bytes before the next beat, saturating
+  logic [      15:0] bytes_q;  // bytes before the next beat: a multiple of 8, or saturated '1
+  logic [      15:0] bytes_next;  // bytes_q + 8, saturating
   logic              sof;  // first beat of a frame (beat 0)
   logic              eof;  // last beat of a frame
   logic [       4:1] at_beat;  // header beat k is accepted this cycle
 
-  assign sof = s_axis_rx_tvalid && !in_frame_q;
-  assign eof = s_axis_rx_tvalid && s_axis_rx_tlast;
+  assign sof        = s_axis_rx_tvalid && !in_frame_q;
+  assign eof        = s_axis_rx_tvalid && s_axis_rx_tlast;
+  assign bytes_next = (bytes_q > 16'hFFF7) ? '1 : bytes_q + 16'd8;
   for (genvar k = 1; k <= 4; k++) begin : g_at_beat
     assign at_beat[k] = s_axis_rx_tvalid && beat_cnt_q == BEAT_W'(k);
   end
@@ -84,7 +86,7 @@ module eth_ip_udp_rx
         if (beat_cnt_q != '1) begin
           beat_cnt_q <= beat_cnt_q + 1'b1;
         end
-        bytes_q <= (bytes_q > 16'hFFF7) ? '1 : bytes_q + 16'd8;  // non-last beats are full
+        bytes_q <= bytes_next;  // non-last beats are full
       end
     end
   end
@@ -93,11 +95,11 @@ module eth_ip_udp_rx
   logic [      47:0] dst_mac_q;
   logic [      63:0] sof_ts_q;
   logic              rx_en_q;
-  logic [      15:0] ethertype_q;
-  logic [       7:0] ver_ihl_q;
+  logic              eth_ok_q;  // EtherType is IPv4
+  logic              ver_ihl_ok_q;  // version 4, IHL 5
   logic [      15:0] ip_len_q;
-  logic [      15:0] frag_q;  // flags + fragment offset
-  logic [       7:0] proto_q;
+  logic              frag_ok_q;  // MF = 0 and offset = 0
+  logic              proto_ok_q;  // protocol is UDP
   logic [      31:0] src_ip_q;
   logic [      15:0] dst_ip_hi_q;
   logic [CSUM_W-1:0] csum_q;  // header words of beats 1..3
@@ -114,20 +116,50 @@ module eth_ip_udp_rx
       rx_en_q   <= cfg_rx_en;
     end
     if (at_beat[1]) begin
-      ethertype_q <= be16(s_axis_rx_tdata, 4);
-      ver_ihl_q   <= s_axis_rx_tdata[8*6+:8];
-      csum_q      <= CSUM_W'(be16(s_axis_rx_tdata, 6));  // loaded: no sum carried between frames
+      eth_ok_q     <= be16(s_axis_rx_tdata, 4) == ETHERTYPE_IPV4;
+      ver_ihl_ok_q <= s_axis_rx_tdata[8*6+:8] == IPV4_VER_IHL;
+      csum_q       <= CSUM_W'(be16(s_axis_rx_tdata, 6));  // loaded: no sum carried between frames
     end
     if (at_beat[2]) begin
-      ip_len_q <= be16(s_axis_rx_tdata, 0);
-      frag_q   <= be16(s_axis_rx_tdata, 4);
-      proto_q  <= s_axis_rx_tdata[8*7+:8];
-      csum_q   <= csum_q + CSUM_W'(sum4(s_axis_rx_tdata));
+      ip_len_q   <= be16(s_axis_rx_tdata, 0);
+      frag_ok_q  <= (be16(s_axis_rx_tdata, 4) & FRAG_MASK) == '0;
+      proto_ok_q <= s_axis_rx_tdata[8*7+:8] == IP_PROTO_UDP;
+      csum_q     <= csum_q + CSUM_W'(sum4(s_axis_rx_tdata));
     end
     if (at_beat[3]) begin
       src_ip_q    <= be32(s_axis_rx_tdata, 2);
       dst_ip_hi_q <= be16(s_axis_rx_tdata, 6);
       csum_q      <= csum_q + CSUM_W'(sum4(s_axis_rx_tdata));
+    end
+  end
+
+  // Datagram end relative to the next beat: left = 14 + ip_len - (bytes before that beat).
+  // Loaded with beat 2 (24 bytes before beat 3: left = ip_len - 10), then 8 less per beat;
+  // floored far below zero. Kept as flags, so at tlast the frame length compares with the
+  // datagram end through the contiguous tkeep alone. The flags of the next value come from
+  // compares of the current one with constants, never from the subtraction (timing).
+  // The flags are first valid for beat 4: a frame that ends earlier is shorter than 42 B, and
+  // "headers incomplete" decides it before any length check.
+  logic signed [17:0] left_q;
+  logic               left_dec;  // a later beat: left goes down by 8
+  logic        [15:0] ip_len_in;  // beat 2: IPv4 total length
+  logic               left_big_q;  // left >= 9: the datagram goes on past this beat
+  logic               left_nonpos_q;  // left <= 0: the datagram ended before this beat
+  logic        [ 8:1] left_lane_q;  // left == k: the datagram ends with lane k - 1 of this beat
+
+  assign ip_len_in = be16(s_axis_rx_tdata, 0);
+  assign left_dec  = s_axis_rx_tvalid && beat_cnt_q > BEAT_W'(2) && left_q > -18'sd65536;
+
+  always_ff @(posedge clk) begin
+    if (at_beat[2]) begin
+      left_q <= $signed({2'b00, ip_len_in}) - 18'sd10;
+    end else if (left_dec) begin
+      left_q        <= left_q - 18'sd8;
+      left_big_q    <= left_q > 18'sd16;
+      left_nonpos_q <= left_q <= 18'sd8;
+      for (int k = 1; k <= 8; k++) begin
+        left_lane_q[k] <= left_q == 18'(k + 8);
+      end
     end
   end
 
@@ -185,25 +217,36 @@ module eth_ip_udp_rx
   end
 
   // ---- stage B: header verdict (independent of tvalid) ----
-  logic       [      16:0] csum_fold1;
-  logic       [      15:0] csum_fold2;
+  logic                    csum_ok_b;
+  logic                    hdr_ok_b;  // every header check passed
   rx_reason_e              hdr_reason_b;
   logic       [FIDX_W-1:0] filter_idx_b;
 
-  assign csum_fold1 = 17'(csum_b_q[15:0]) + 17'(csum_b_q[CSUM_W-1:16]);
-  assign csum_fold2 = csum_fold1[15:0] + 16'(csum_fold1[16]);
+  // The 10 words fold (one's complement) to 16'hFFFF exactly when their plain sum is a nonzero
+  // multiple of 16'hFFFF, and the sum is at most 10 * 16'hFFFF: constant compares, no carry chain.
+  always_comb begin
+    csum_ok_b = 1'b0;
+    for (int k = 1; k <= 10; k++) begin
+      if (csum_b_q == CSUM_W'(k * 32'hFFFF)) begin
+        csum_ok_b = 1'b1;
+      end
+    end
+  end
+
+  assign hdr_ok_b = mac_ok_q && eth_ok_q && ver_ihl_ok_q && csum_ok_b && frag_ok_q && proto_ok_q &&
+      hit_q != '0 && len_ok_q;
 
   // Priority order of 09 §2.2 (DISABLED, FCS and "headers incomplete" are decided at tlast).
   always_comb begin
     if (!mac_ok_q) begin
       hdr_reason_b = RX_DROP_MAC;
-    end else if (ethertype_q != ETHERTYPE_IPV4) begin
+    end else if (!eth_ok_q) begin
       hdr_reason_b = RX_DROP_ETHERTYPE;
-    end else if (ver_ihl_q != IPV4_VER_IHL || csum_fold2 != 16'hFFFF) begin
+    end else if (!ver_ihl_ok_q || !csum_ok_b) begin
       hdr_reason_b = RX_DROP_IP_HDR;
-    end else if ((frag_q & FRAG_MASK) != '0) begin
+    end else if (!frag_ok_q) begin
       hdr_reason_b = RX_DROP_FRAG;
-    end else if (proto_q != IP_PROTO_UDP) begin
+    end else if (!proto_ok_q) begin
       hdr_reason_b = RX_DROP_PROTO;
     end else if (hit_q == '0) begin
       hdr_reason_b = RX_DROP_FILTER;
@@ -249,28 +292,46 @@ module eth_ip_udp_rx
   end
 
   // ---- end of frame: final reason and the stat event ----
-  logic       [16:0] frame_len_w;  // bytes including this beat
+  // Frame length = bytes_q (a multiple of 8, the earlier beats are full) + the bytes of this beat
+  // (contiguous tkeep). "Shorter than X" then needs no adder: bytes_q below X rounded down to 8,
+  // or equal to it with tkeep's lane (X mod 8) - 1 empty.
+  localparam int unsigned HDR_FLOOR = UDP_PAYLOAD_OFS / 8 * 8;
+  localparam int unsigned HDR_LANE = UDP_PAYLOAD_OFS % 8;  // 42 B: 40 + 2
+  localparam int unsigned MIN_FLOOR = ETH_MIN_FRAME / 8 * 8;
+  localparam int unsigned MIN_LANE = ETH_MIN_FRAME % 8;  // 60 B: 56 + 4
+
+  logic       [ 3:0] n_cur;  // bytes in the current input beat
   logic       [15:0] frame_len;  // saturating
-  logic       [16:0] ip_end;  // 14 + IPv4 total length: end of the datagram
+  logic              hdr_short;  // frame < 42 B: headers incomplete
+  logic              runt;  // frame < 60 B
+  logic              is_min;  // frame == 60 B (a padded frame)
+  logic              truncated;  // frame ends inside the datagram
+  logic              trailing;  // frame goes on after the datagram
   rx_reason_e        hdr_reason;  // stage B verdict of this frame
   rx_reason_e        reason;
 
-  assign frame_len_w = 17'(bytes_q) + 17'($countones(s_axis_rx_tkeep));
-  assign frame_len   = frame_len_w[16] ? '1 : frame_len_w[15:0];
-  assign ip_end      = 17'(ip_len_q) + 17'd14;
-  assign hdr_reason  = hdr_done_q ? hdr_reason_q : hdr_reason_b;  // tlast may meet stage B
+  assign n_cur = 4'($countones(s_axis_rx_tkeep));
+  // bytes_q + n_cur without an adder after the popcount: a full beat adds 8, else n_cur fills
+  // bytes_q's three zero bits.
+  assign frame_len = (bytes_q == '1) ? '1 : s_axis_rx_tkeep[7] ? bytes_next : {bytes_q[15:3], n_cur[2:0]};
+  assign hdr_short   = bytes_q < 16'(HDR_FLOOR) ||
+      (bytes_q == 16'(HDR_FLOOR) && !s_axis_rx_tkeep[HDR_LANE-1]);
+  assign runt = bytes_q < 16'(MIN_FLOOR) || (bytes_q == 16'(MIN_FLOOR) && !s_axis_rx_tkeep[MIN_LANE-1]);
+  assign is_min = bytes_q == 16'(MIN_FLOOR) && s_axis_rx_tkeep[MIN_LANE-1] && !s_axis_rx_tkeep[MIN_LANE];
+  assign truncated = left_big_q || (left_lane_q & ~s_axis_rx_tkeep) != '0;  // bytes < left
+  assign trailing = left_nonpos_q || (left_lane_q[7:1] & s_axis_rx_tkeep[7:1]) != '0;  // bytes > left
+  assign hdr_reason = hdr_done_q ? hdr_reason_q : hdr_reason_b;  // tlast may meet stage B
 
   always_comb begin
     if (!(sof ? cfg_rx_en : rx_en_q)) begin
       reason = RX_DROP_DISABLED;
     end else if (s_axis_rx_tuser) begin
       reason = RX_DROP_FCS;
-    end else if (frame_len < 16'(UDP_PAYLOAD_OFS)) begin
+    end else if (hdr_short) begin
       reason = RX_DROP_LEN;  // headers incomplete: no check on missing bytes
     end else if (hdr_reason != RX_OK) begin
       reason = hdr_reason;
-    end else if (frame_len < 16'(ETH_MIN_FRAME) || 17'(frame_len) < ip_end ||
-                 (17'(frame_len) > ip_end && frame_len != 16'(ETH_MIN_FRAME))) begin
+    end else if (runt || truncated || (trailing && !is_min)) begin
       reason = RX_DROP_LEN;  // runt, truncated datagram, or bytes after it that are not padding
     end else begin
       reason = RX_OK;
@@ -301,7 +362,6 @@ module eth_ip_udp_rx
   logic        pay;  // ... including the stage-B cycle
   logic [47:0] prev_q;  // lanes 2..7 of the previous input beat
   logic [15:0] remain_q;  // payload bytes still to emit (loaded in stage B)
-  logic [ 3:0] n_cur;  // bytes in the current input beat
   logic [ 3:0] avail;  // payload bytes the current beat completes: 6 of prev + up to 2 of cur
   logic [ 3:0] emit_n;  // bytes in the formed output beat
   logic        form;  // an output beat is formed this cycle
@@ -322,15 +382,16 @@ module eth_ip_udp_rx
     return 8'((9'd1 << n) - 9'd1);
   endfunction
 
-  assign pass_b    = rx_en_q && hdr_reason_b == RX_OK;
-  assign pay       = pay_q || (stage_b_q && pass_b);
-  assign n_cur     = 4'($countones(s_axis_rx_tkeep));
-  assign avail     = 4'd6 + ((n_cur > 4'd2) ? 4'd2 : n_cur);
-  assign form      = s_axis_rx_tvalid && pay && beat_cnt_q >= BEAT_W'(6) && remain_q != '0;
-  assign done      = 16'(avail) >= remain_q;
-  assign emit_n    = done ? remain_q[3:0] : avail;
-  assign tail_set  = eof && pay && n_cur > 4'd2 && (beat_cnt_q == BEAT_W'(5) || (form && !done));
-  assign last_now  = eof && !tail_set;
+  assign pass_b = rx_en_q && hdr_ok_b;
+  assign pay = pay_q || (stage_b_q && pass_b);
+  // tkeep is contiguous from lane 0: lane 1 tells 1 or 2 bytes of cur, lane 2 "more than 2".
+  assign avail = s_axis_rx_tkeep[1] ? 4'd8 : 4'd7;
+  // Beat 6 comes at least one cycle after stage B, so the registered pay_q is enough here.
+  assign form = s_axis_rx_tvalid && pay_q && beat_cnt_q >= BEAT_W'(6) && remain_q != '0;
+  assign done = remain_q[15:4] == '0 && remain_q[3:0] <= avail;  // remain_q <= avail
+  assign emit_n = done ? remain_q[3:0] : avail;
+  assign tail_set  = eof && pay && s_axis_rx_tkeep[2] && (beat_cnt_q == BEAT_W'(5) || (form && !done));
+  assign last_now = eof && !tail_set;
   assign tail_emit = (16'(tail_n_q) > remain_q) ? remain_q[3:0] : tail_n_q;
 
   always_ff @(posedge clk) begin
