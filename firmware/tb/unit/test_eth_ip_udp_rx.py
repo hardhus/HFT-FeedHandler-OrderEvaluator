@@ -10,6 +10,7 @@ Every frame is checked against the golden model (model/net.py):
 The monitor numbers the cycles, so latency tests check 09 §2.3 exactly.
 """
 
+import ipaddress
 import math
 import random
 from collections import deque
@@ -418,16 +419,22 @@ async def tc_k1_sticky_ip_regression(dut):
 @cocotb.test(timeout_time=1, timeout_unit="ms")
 async def tc_cfg_change_no_tearing(dut):
     """09 §2.6: the filter changes from (A, P1) to (B, P2) at each cycle 0..8 after the SOF.
-    The mixed packets (A, P2) and (B, P1) are never accepted; the control packets follow
-    exactly the config of the stage-A cycle (beat 4)."""
+    A and B differ in both 16-bit halves, so a config read in pieces (port vs IP, or the two IP
+    halves in different cycles) would accept a mixed packet: (A, P2), (B, P1), or a dst IP
+    made of one half of A and one of B, with either port. Mixed packets are never accepted;
+    the control packets (A, P1) and (B, P2) follow exactly the config of the stage-A cycle
+    (beat 4)."""
     R = RxReason
-    a, b, p1, p2 = "10.0.0.2", "10.0.0.3", 5000, 6000
+    a, b, p1, p2 = "10.0.0.2", "192.168.1.3", 5000, 6000
+    a_hi_b_lo = str(ipaddress.IPv4Address(ip_int(a) & 0xFFFF0000 | ip_int(b) & 0xFFFF))
+    b_hi_a_lo = str(ipaddress.IPv4Address(ip_int(b) & 0xFFFF0000 | ip_int(a) & 0xFFFF))
+    mixed = [(a, p2), (b, p1), *((ip, p) for ip in (a_hi_b_lo, b_hi_a_lo) for p in (p1, p2))]
     old = RxConfig(local_mac=LOCAL_MAC, filters=((a, p1, True),))
     new = replace(old, filters=((b, p2, True),))
     rx = await start(dut, old)
     for k in range(9):
         seen = new if k <= STAGE_A_BEAT else old
-        for ip, port in [(a, p2), (b, p1), (a, p1), (b, p2)]:
+        for ip, port in [*mixed, (a, p1), (b, p2)]:
             rx.apply(old)
             intent = R.OK if seen.filters[0][:2] == (ip, port) else R.FILTER
             await rx.send(
