@@ -102,3 +102,13 @@ The blocks are described in [`rtl/common/README.md`](rtl/common/README.md).
 - Tests are never loosened or trimmed (fewer frames, smaller ranges, weaker checks) to pass or to save time. A
   test changes only when the test itself is wrong. A planned negative check (mutation, violation) that does not
   bite is explained and replaced or strengthened.
+- A reference model only guards the inputs a test actually sends. Every counter, saturation, floor and width limit
+  therefore gets a directed test at and beyond the limit. Example: the largest legal IPv4 datagram in
+  `tc_size_limits`.
+- A rewrite that must keep behaviour (timing, cleanup) is checked against the previous RTL: run both in lockstep on
+  the same stimulus, or compare the rewritten formulas over their whole input range.
+- A test bound equals the documented bound (latency, capacity, throughput), never one cycle looser.
+- A bound in a module header is a requirement derived from the block's users (the target architecture and
+  phase plans), not a measurement. When a test shows the requirement does not hold for some parameters, the
+  allowed parameter range is narrowed (or the RTL fixed). A bound is never lowered to whatever was measured.
+  Measured values may be noted, marked as measured.
