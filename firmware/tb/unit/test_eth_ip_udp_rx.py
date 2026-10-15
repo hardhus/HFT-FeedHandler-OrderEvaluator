@@ -710,9 +710,34 @@ async def tc_k4_long_packet_no_spurious_event(dut):
     await rx.finish()
 
 
+@cocotb.test(timeout_time=50, timeout_unit="ms")
+async def tc_size_limits(dut):
+    """Frames at and past the 16-bit limits. Regression: before S7 the RTL compared a saturated
+    16-bit frame length with the datagram end and dropped the largest legal datagram; no test
+    sent frames this large. Covers the largest datagram (ip_len 65535, 65549 B) and its +-1
+    byte neighbours, bytes_q/stat_bytes saturation (65535, 65536 B), payload and remain_q above
+    32767 bytes, and a 70000 B frame whose short datagram drives left_q to its floor."""
+    R = RxReason
+    rx = await start(dut)
+    largest = udp_frame(payload(65535 - 28))  # ip_len 65535
+    assert len(largest) == 65549
+    cases = [
+        ("largest datagram, 65549 B", largest, R.OK),
+        ("largest datagram, frame cut to 65548 B", largest[:-1], R.LEN),
+        ("largest datagram + 1 byte, 65550 B", largest + b"\x00", R.LEN),
+        ("ip_len 65530, 65544 B", udp_frame(payload(65530 - 28)), R.OK),
+        ("65535 B frame", udp_frame(payload(65535 - 42)), R.OK),
+        ("65536 B frame (stat_bytes saturates)", udp_frame(payload(65536 - 42)), R.OK),
+        ("70000 B frame, 128 B datagram", udp_frame(payload(100)) + bytes(70000 - 142), R.LEN),
+    ]
+    for name, frame, intent in cases:
+        await rx.send(frame, intent=intent, name=name)
+    await rx.finish()
+
+
 # The long tests run as their own pytest entries (parallel workers, one shared build); GROUP
 # only gives each entry its own run directory.
-LONG_TESTS = ("tc_random_golden", "tc_line_rate_b2b", "tc_k4_long_packet_no_spurious_event")
+LONG_TESTS = ("tc_random_golden", "tc_line_rate_b2b", "tc_k4_long_packet_no_spurious_event", "tc_size_limits")
 DIRECTED_TESTS = [name for name in dict(globals()) if name.startswith("tc_") and name not in LONG_TESTS]
 
 

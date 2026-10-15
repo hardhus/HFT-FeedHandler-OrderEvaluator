@@ -110,6 +110,20 @@ was made shallower:
 - Frame-length checks at `tlast` use `bytes_q` (a multiple of 8) and the contiguous `tkeep`. The datagram end is a
   down-counter `left_q` whose flags are precomputed with constant compares.
 
+These are rewrites of the same function, not reduced checks. They were verified three ways:
+- Every rewritten formula was compared with the old one over its whole input range. Example: all 655 351 reachable
+  checksum sums. The frame-length logic was compared beat by beat over 1–1699 B frames × ip_len 0–1600.
+- The old RTL ran in lockstep with the new one on random traffic.
+- All tests passed unchanged.
+
+They rely on the input contract above: full beats before `tlast`, and a contiguous `tkeep` on the `tlast` beat
+(SVA `a_in_keep_full`, `a_in_keep_contig`).
+
+The only difference is a fix. The old logic compared a 16-bit saturated frame length with the datagram end. It
+dropped the largest legal datagrams (ip_len above 65521) as `LEN`, while the model accepts them.
+`tc_size_limits` covers this. The `left_q` floor (−65536) only stops wrapping on frames past about 131 KB; there the
+verdict is `LEN` either way.
+
 ### Verification
 
 | What | Where |
