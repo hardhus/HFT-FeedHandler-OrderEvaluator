@@ -2,7 +2,9 @@
 // Clock domain : wr_clk (rst, wr_*, full, overflow, wr_rst_busy)
 //                rd_clk (rd_*, dout, empty, underflow, rd_rst_busy)
 // Latency      : write -> !empty within SYNC_STAGES+3 rd cycles
-// Throughput   : 1 word/cycle on each side
+// Throughput   : 1 word/cycle on each side (>= 95 % of the slower clock's rate) for SYNC_STAGES <= 3.
+//                This needs a FIFO deeper than the pointer round trip, hence DEPTH_LOG2 >= 4 (as XPM);
+//                a 4-word FIFO measured only 0.43..0.68 and is not allowed.
 // Reset        : rst is synchronous to wr_clk. After power-up hold it for at least
 //                2*SYNC_STAGES+2 cycles of the slower clock; later a 1-cycle pulse is enough.
 //                While wr_rst_busy / rd_rst_busy are high, writes / reads are ignored and
@@ -30,8 +32,8 @@ module cdc_async_fifo #(
     output logic             underflow,
     output logic             rd_rst_busy
 );
-  if (DEPTH_LOG2 < 2 || SYNC_STAGES < 2) begin : g_check
-    $error("cdc_async_fifo: DEPTH_LOG2 and SYNC_STAGES must be >= 2");
+  if (DEPTH_LOG2 < 4 || SYNC_STAGES < 2) begin : g_check
+    $error("cdc_async_fifo: DEPTH_LOG2 must be >= 4 (full rate, as XPM) and SYNC_STAGES >= 2");
   end
 
   if (IMPL == "xpm") begin : g_xpm

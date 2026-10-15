@@ -13,10 +13,11 @@ def test_fifo_props_ignores_power_up_busy_glitch():
     run_svtb(top="tb_fifo_props_arming", filelists=[], tb_files=TB)
 
 
-def test_fifo_props_flags_non_empty_after_reset():
+def test_fifo_props_flags_non_empty_after_reset(capsys):
     """The real end of reset with a non-empty FIFO must fire a_empty_after_reset."""
     with pytest.raises(AssertionError, match="exited with|expected one"):
         run_svtb(top="tb_fifo_props_arming", filelists=[], tb_files=TB, defines={"HFT_VIOLATE": 1})
+    assert "FIFO not empty when rd_rst_busy fell" in capsys.readouterr().out, "a_empty_after_reset did not fire"
 
 
 UDP_TB = ["firmware/tb/sva/udp_rx_props.sv", "firmware/tb/sv/tb_udp_rx_props.sv"]
@@ -49,3 +50,42 @@ def test_udp_rx_props_fires(prop, capsys):
     out = capsys.readouterr().out
     fired = [name for name, (_, msg) in UDP_RX_VIOLATIONS.items() if msg in out]
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
+
+
+FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
+# HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
+FIFO_VIOLATIONS = {
+    "a_reject_full": (1, "write while full did not pulse overflow"),
+    "a_reject_busy": (2, "write while wr_rst_busy did not pulse overflow"),
+    "a_overflow_cause": (3, "overflow without a rejected write"),
+    "a_reject_empty": (4, "read while empty did not pulse underflow"),
+    "a_underflow_cause": (5, "underflow without a rejected read"),
+    "a_fwft_hold": (6, "FWFT word vanished or changed without rd_en"),
+}
+AXIS_TB = ["firmware/tb/sva/axis_props.sv", "firmware/tb/sv/tb_axis_props.sv"]
+AXIS_VIOLATIONS = {
+    "a_stall_stable": (1, "payload changed or tvalid dropped while stalled"),
+    "a_last_keep": (2, "tlast beat with empty tkeep"),
+}
+
+
+@pytest.mark.parametrize("top, tb", [("tb_fifo_props", FIFO_TB), ("tb_axis_props", AXIS_TB)], ids=["fifo", "axis"])
+def test_checker_quiet_on_legal_traffic(top, tb):
+    """Legal traffic that hits every property's antecedent fires nothing."""
+    run_svtb(top=top, filelists=[], tb_files=tb)
+
+
+@pytest.mark.parametrize(
+    "top, tb, table, prop",
+    [("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS, p) for p in FIFO_VIOLATIONS]
+    + [("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS, p) for p in AXIS_VIOLATIONS],
+    ids=lambda x: x if isinstance(x, str) and x.startswith("a_") else "",
+)
+def test_checker_fires(top, tb, table, prop, capsys):
+    """Each violation fires its own assertion, and only that one."""
+    k, _ = table[prop]
+    with pytest.raises(AssertionError, match="exited with|expected one"):
+        run_svtb(top=top, filelists=[], tb_files=tb, defines={"HFT_VIOLATE": k})
+    out = capsys.readouterr().out
+    fired = [name for name, (_, msg) in table.items() if msg in out]
+    assert fired == [prop], f"{top} HFT_VIOLATE={k}: fired {fired}"

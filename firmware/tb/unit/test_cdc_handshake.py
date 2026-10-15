@@ -13,7 +13,7 @@ from common.runner import run_cocotb
 from common.scoreboard import Scoreboard
 
 RUNTIME_PARAMS = ("ratio",)
-WIDTH = 64
+WIDTH = int(os.environ.get("WIDTH", "64"))  # the build parameter, passed to the simulation via env
 STAGES = 2
 
 
@@ -30,6 +30,13 @@ async def start(dut) -> None:
     dut.dst_rst.value = 1
     start_clock(dut.src_clk, src_ps, jit)
     start_clock(dut.dst_clk, dst_ps, jit)
+    await reset(dut)
+
+
+async def reset(dut) -> None:
+    """Hold both resets (asserted together), then release each in its own domain."""
+    dut.src_rst.value = 1
+    dut.dst_rst.value = 1
     for _ in range(STAGES + 4):
         await RisingEdge(dut.src_clk)
         await RisingEdge(dut.dst_clk)
@@ -96,7 +103,7 @@ async def tc_single_transfer(dut):
             break
         assert edges < 20, "dst_valid never came"
     assert int(dut.dst_data.value) == word
-    assert edges <= STAGES + 2 + jitter(), f"latency {edges} dst edges"
+    assert edges <= STAGES + 1 + jitter(), f"latency {edges} dst edges, documented STAGES+1 (+1 jitter)"
     await quiet(dut, 20)
 
 
@@ -176,14 +183,61 @@ async def tc_data_stable_window(dut):
     assert violations == 0, f"data_q changed {violations}x while req_q was high"
 
 
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_reset_mid_transfer(dut):
+    """Both resets together (the contract) at a random point of a transfer: the interrupted
+    word arrives at most once, nothing else appears, and the words sent after the reset arrive
+    exactly once and in order."""
+    await start(dut)
+    received: list[int] = []
+
+    async def collect():
+        while True:
+            await RisingEdge(dut.dst_clk)
+            await ReadOnly()
+            if dut.dst_valid.value:
+                received.append(int(dut.dst_data.value))
+
+    rx = cocotb.start_soon(collect())
+    rounds = []
+    for _ in range(20):
+        word = random.getrandbits(WIDTH)
+        await FallingEdge(dut.src_clk)
+        assert dut.src_ready.value, "not ready at the start of a round"
+        dut.src_valid.value = 1
+        dut.src_data.value = word
+        await FallingEdge(dut.src_clk)
+        dut.src_valid.value = 0
+        for _ in range(random.randint(0, 2 * STAGES + 4)):  # anywhere in the req/ack round trip
+            await RisingEdge(dut.dst_clk)
+        await FallingEdge(dut.src_clk)
+        await reset(dut)
+        clean = [random.getrandbits(WIDTH) for _ in range(3)]
+        sb = Scoreboard("after reset")
+        await cocotb.start_soon(sender(dut, clean, sb))
+        for _ in range(4 * STAGES + 10):
+            await RisingEdge(dut.dst_clk)
+        rounds.append((word, clean))
+    rx.cancel()
+    pos = 0
+    for word, clean in rounds:
+        if received[pos : pos + 1] == [word]:
+            pos += 1  # the interrupted word made it through (at most once)
+        assert received[pos : pos + len(clean)] == clean, f"words after a reset: {received[pos : pos + 3]}, want {clean}"
+        pos += len(clean)
+    assert pos == len(received), f"{len(received) - pos} unexpected word(s) after the last round"
+
+
+# WIDTH 64 (the counter snapshot use) and 32 (the default) at every clock ratio.
 @pytest.mark.parametrize("ratio", list(PROFILES))
 @pytest.mark.parametrize("jitter", [0, 1], ids=["nojit", "jit"])
-def test_cdc_handshake(jitter, ratio):
+@pytest.mark.parametrize("width", [64, 32], ids=["w64", "w32"])
+def test_cdc_handshake(width, jitter, ratio):
     run_cocotb(
         toplevel="cdc_handshake",
         filelists=["common.f"],
         test_module="test_cdc_handshake",
-        parameters={"WIDTH": WIDTH, "STAGES": STAGES},
+        parameters={"WIDTH": width, "STAGES": STAGES},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
-        extra_env={"JITTER": jitter, "RATIO": ratio},
+        extra_env={"JITTER": jitter, "RATIO": ratio, "WIDTH": width},
     )

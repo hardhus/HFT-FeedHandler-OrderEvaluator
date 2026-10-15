@@ -8,14 +8,16 @@ import random
 import cocotb
 import pytest
 from cocotb.triggers import Combine, FallingEdge, ReadOnly, RisingEdge
+from cocotb.utils import get_sim_time
 
 from common.clocks import PROFILES, profile, start_clock
 from common.runner import run_cocotb
 from common.scoreboard import Scoreboard
 
 RUNTIME_PARAMS = ("ratio",)
-WIDTH = 32
-SYNC_STAGES = 2
+# Build parameters, passed to the simulation via env.
+WIDTH = int(os.environ.get("WIDTH", "32"))
+SYNC_STAGES = int(os.environ.get("SYNC_STAGES", "2"))
 
 
 def depth() -> int:
@@ -57,6 +59,7 @@ async def start(dut) -> Pulses:
         await RisingEdge(dut.wr_clk)
         await RisingEdge(dut.rd_clk)
     await FallingEdge(dut.wr_clk)
+    assert dut.full.value, "full must be 1 during reset (like XPM FULL_RESET_VALUE=1)"
     dut.rst.value = 0
     await wait_not_busy(dut)
     return Pulses(dut)
@@ -227,6 +230,7 @@ async def tc_reset_mid_traffic(dut):
     dut.din.value = 0xDEAD
     await FallingEdge(dut.wr_clk)
     dut.rst.value = 0
+    assert dut.full.value, "full must be 1 during reset (like XPM FULL_RESET_VALUE=1)"
     rejected_wr = 2  # the edge with rst high, and the next edge (wr_en still high, busy already set)
     while True:  # keep trying to write while wr_rst_busy (registered: its falling-edge value holds)
         await FallingEdge(dut.wr_clk)
@@ -280,15 +284,61 @@ async def tc_gray_one_bit_step(dut):
     assert min(steps.values()) > 2 * depth(), f"pointers did not wrap: {steps}"
 
 
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_capacity_after_wrap(dut):
+    """Exactly 2**DEPTH_LOG2 words fit whatever the pointer position: the read pointer is moved
+    to a random offset (and around the wrap) before each fill, not only to 0 after reset."""
+    await start(dut)
+    for _ in range(6):
+        await traffic(dut, random.randint(1, 2 * depth() - 1), 1.0, 1.0, "move pointers")
+        for _ in range(2 * SYNC_STAGES + 6):  # let the read pointer reach the write side
+            await RisingEdge(dut.wr_clk)
+        sb = Scoreboard("fill")
+        accepted = 0
+        for _ in range(4 * depth() + 20):
+            await FallingEdge(dut.wr_clk)
+            if dut.full.value:
+                dut.wr_en.value = 0
+                continue
+            word = random.getrandbits(WIDTH)
+            dut.wr_en.value = 1
+            dut.din.value = word
+            sb.push(word)
+            accepted += 1
+        assert accepted == depth(), f"accepted {accepted} words at a non-zero offset, depth is {depth()}"
+        await reader(dut, sb, depth())
+        sb.check_empty()
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_throughput(dut):
+    """Both sides enabled every cycle: 1 word/cycle on each side, i.e. at least 95 % of the
+    slower clock's word rate (module header). Checked at the minimum depth (16)."""
+    wr_ps, rd_ps, _ = profile()
+    await start(dut)
+    n = 400
+    sb = Scoreboard("rate")
+    words = [random.getrandbits(WIDTH) for _ in range(n)]
+    t0 = get_sim_time("ps")
+    await Combine(cocotb.start_soon(writer(dut, words, sb)), cocotb.start_soon(reader(dut, sb, n)))
+    elapsed = get_sim_time("ps") - t0
+    rate = n * max(wr_ps, rd_ps) / elapsed
+    dut._log.info(f"throughput: depth {depth()}, {rate:.3f} of the slower side's word rate")
+    assert rate >= 0.95, f"throughput {rate:.3f} of the slower side's rate, documented >= 0.95"
+
+
+# (DEPTH_LOG2, WIDTH, SYNC_STAGES) at the minimum depth 16: the default synchronizer, and the
+# longest pointer round trip the contract covers (3 stages) with 64-bit words.
 @pytest.mark.parametrize("ratio", list(PROFILES))
 @pytest.mark.parametrize("jitter", [0, 1], ids=["nojit", "jit"])
-@pytest.mark.parametrize("depth_log2", [2, 4], ids=["d4", "d16"])
-def test_cdc_async_fifo(depth_log2, jitter, ratio):
+@pytest.mark.parametrize("depth_log2, width, sync_stages", [(4, 32, 2), (4, 64, 3)], ids=["d16s2", "d16w64s3"])
+def test_cdc_async_fifo(depth_log2, width, sync_stages, jitter, ratio):
     run_cocotb(
         toplevel="cdc_async_fifo",
         filelists=["common.f"],
         test_module="test_cdc_async_fifo",
-        parameters={"WIDTH": WIDTH, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": SYNC_STAGES},
+        parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
-        extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio},
+        extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
+                   "SYNC_STAGES": sync_stages},  # fmt: skip
     )

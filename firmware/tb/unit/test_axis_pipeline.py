@@ -204,7 +204,8 @@ async def tc_reset_mid_stream(dut):
     assert got == [after], f"expected only the post-reset beat, got {len(got)} beat(s)"
 
 
-@pytest.mark.parametrize("data_w,user_w", [(8, 1), (64, 4)], ids=["d8", "d64"])
+# (8, 1) narrowest, (64, 4) wide user, (64, 1) the default.
+@pytest.mark.parametrize("data_w,user_w", [(8, 1), (64, 4), (64, 1)], ids=["d8", "d64u4", "d64u1"])
 @pytest.mark.parametrize("kind", ["axis_register", "axis_skid_buffer"])
 def test_axis_pipeline(kind, data_w, user_w):
     run_cocotb(
