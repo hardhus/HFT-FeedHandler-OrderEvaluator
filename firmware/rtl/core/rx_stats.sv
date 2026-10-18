@@ -32,8 +32,13 @@ module rx_stats
     end else if (stat_valid) begin
       cnt[RX_CNT_PKTS]  <= cnt[RX_CNT_PKTS] + CNT_W'(1);
       cnt[RX_CNT_BYTES] <= cnt[RX_CNT_BYTES] + CNT_W'(stat_bytes);
-      if (stat_reason != RX_OK) begin
-        cnt[1+int'(stat_reason)] <= cnt[1+int'(stat_reason)] + CNT_W'(1);
+      // One incrementer per drop counter, selected by a constant compare. A variable index
+      // (cnt[1+stat_reason]) made synthesis share one 64-bit adder behind a 9:1 mux: 18 logic
+      // levels and no slack at 156.25 MHz on the A7.
+      for (int r = 1; r <= int'(RX_DROP_LEN); r++) begin
+        if (stat_reason == rx_reason_e'(r)) begin
+          cnt[1+r] <= cnt[1+r] + CNT_W'(1);
+        end
       end
     end
   end
