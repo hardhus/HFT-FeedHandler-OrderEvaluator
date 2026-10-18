@@ -44,11 +44,12 @@ STAMP = ".hft-build-ok"
 # out of sva.f means a change to core assertions does not rebuild the common-block tests.
 SVA_FOR = {"core.f": "sva_core.f", "csr.f": "sva_csr.f"}
 
-# Verilator waiver files a filelist needs: generated RTL (csr.f, PeakRDL) has waived lint
-# warnings that -Wall would otherwise turn into build errors. Only the builds that compile
-# generated code get the file, so a new waiver does not rebuild the F1/F2 tests.
+# Verilator waiver files a filelist needs: generated RTL (csr.f, PeakRDL) and the shared
+# hft_pkg constants (core.f) have waived lint warnings that -Wall would otherwise turn into
+# build errors. The common-block (F1) builds do not get the file, so a new waiver does not
+# rebuild them.
 WAIVERS = REPO / "firmware" / "lint" / "waivers.vlt"
-WAIVERS_FOR = {"csr.f": WAIVERS}
+WAIVERS_FOR = {"core.f": WAIVERS, "csr.f": WAIVERS}
 
 
 # Rough peak memory of one simulator build job (C++ compiler) plus its share of the

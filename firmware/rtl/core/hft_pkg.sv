@@ -29,4 +29,10 @@ package hft_pkg;
     RX_DROP_FILTER    = 4'd8,
     RX_DROP_LEN       = 4'd9
   } rx_reason_e;
+
+  // Receive counters (rx_stats, STATS block of the CSR map): index RX_CNT_PKTS, RX_CNT_BYTES,
+  // then one drop counter per reason at index 1 + reason (RX_DROP_LEN is the last reason).
+  localparam int unsigned RX_CNT_PKTS = 0;
+  localparam int unsigned RX_CNT_BYTES = 1;
+  localparam int unsigned RX_N_CNT = 2 + int'(RX_DROP_LEN);
 endpackage

@@ -18,6 +18,6 @@ lint_off -rule GENUNNAMED -file "*/rtl/core/gen/hft_csr.sv"
 // Map constants for users of the package; a build need not use all of them.
 lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_csr_pkg.sv" -match "*Parameter is not used: 'HFT_CSR_*'"
 
-// hft_pkg holds the constants of several core blocks; a top that uses some of them (the CSR
-// block, rx_stats) need not use all. Parameters only: an unused signal is still an error.
+// hft_pkg holds the constants of several core blocks; a top that uses some of them
+// (eth_ip_udp_rx, rx_stats, the CSR block) need not use all. Parameters only: an unused signal is still an error.
 lint_off -rule UNUSEDPARAM -file "*/rtl/core/hft_pkg.sv"

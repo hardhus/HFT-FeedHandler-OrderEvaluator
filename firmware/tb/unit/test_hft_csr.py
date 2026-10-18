@@ -64,4 +64,4 @@ async def tc_smoke(dut):
 
 
 def test_hft_csr():
-    run_cocotb(toplevel="hft_csr", filelists=["common.f", "csr.f"], test_module="test_hft_csr")
+    run_cocotb(toplevel="hft_csr", filelists=["common.f", "core.f", "csr.f"], test_module="test_hft_csr")

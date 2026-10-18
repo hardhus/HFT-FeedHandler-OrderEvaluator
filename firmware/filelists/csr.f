@@ -3,3 +3,4 @@
 # Order matters: packages first.
 ../rtl/core/gen/hft_csr_pkg.sv
 ../rtl/core/gen/hft_csr.sv
+../rtl/core/rx_stats.sv

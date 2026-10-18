@@ -95,12 +95,13 @@ def test_sim_filelists_adds_sva_partners():
     ]  # fmt: skip
 
 
-def test_waivers_only_in_builds_with_generated_rtl():
-    """Generated RTL (csr.f) builds get the Verilator waiver file; F1/F2 builds do not, so a new
-    waiver does not rebuild them."""
+def test_waivers_only_in_builds_with_core_or_generated_rtl():
+    """Builds with hft_pkg (core.f) or generated RTL (csr.f) get the Verilator waiver file, once;
+    the common-block (F1) builds do not, so a new waiver does not rebuild them."""
     csr = sources_for(["common.f", "core.f", "csr.f"])
     assert csr[0] == WAIVERS and csr.count(WAIVERS) == 1
-    assert WAIVERS not in sources_for(["common.f", "core.f"])
+    assert sources_for(["common.f", "core.f"])[0] == WAIVERS
+    assert WAIVERS not in sources_for(["common.f"])
 
 
 def test_coverage_empty_required_bin_fails(tmp_path):
