@@ -125,12 +125,14 @@ waves NAME:
     WAVES=1 uv run pytest -k '{{ NAME }}' -p no:xdist
     @find "$HFT_BUILD_DIR/sim" -name '*.fst' -newer pyproject.toml -print
 
-# Format every file under the style gate in place (same flags as the editor: firmware/lint/verible-format.flags)
+# Format every file under the style gate in place (same flags as the editor: firmware/lint/verible-format.flags).
+# Generated files (kind gen) are left alone: only `just gen` writes them (just gen-check).
 [script("bash")]
 [unix]
 fmt:
     set -euo pipefail
-    just sv-files | while read -r _ f; do
+    just sv-files | while read -r kind f; do
+      [ "$kind" = gen ] && continue
       verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "$f"
     done
 
