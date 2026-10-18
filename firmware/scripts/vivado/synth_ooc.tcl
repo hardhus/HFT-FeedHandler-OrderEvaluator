@@ -40,7 +40,9 @@ set clock_periods [dict create clk $a wr_clk $a src_clk $a rd_clk $b dst_clk $b 
   clk_net $net net_clk $net clk_host $host host_clk $host clk_pcie 8.000]
 
 # Synchronous ports -> clock (for I/O delays, so report_cdc knows every port's domain).
-# Asynchronous inputs (sync_bit.d, reset_sync.rst_in) are deliberately left unclocked.
+# Asynchronous inputs (sync_bit.d, reset_sync.rst_in) are deliberately left unclocked; any other
+# port that no entry clocks fails the run (its crossings would be missing from report_cdc).
+set async_ports {^(d|rst_in)$}
 set port_clock {
   {^(wr_|din$|full$|overflow$)}        wr_clk
   {^(rd_|dout|empty$|underflow$)}      rd_clk
@@ -76,13 +78,16 @@ dict for {p period} $clock_periods {
     create_clock -name $p -period $period [get_ports $p]
   }
 }
+set unclocked {}
 foreach port [get_ports -quiet -filter {DIRECTION != INOUT}] {
   if {[llength [get_clocks -quiet $port]]} {
     continue ;# clock port
   }
   set name [get_property NAME $port]
+  set base [regsub {\[\d+\]$} $name {}] ;# bus bit din[3] -> din, so "din$" matches every bit
+  set done 0
   foreach {re clks} $port_clock {
-    if {![regexp $re $name]} {
+    if {![regexp $re $base]} {
       continue
     }
     foreach c $clks {
@@ -92,10 +97,14 @@ foreach port [get_ports -quiet -filter {DIRECTION != INOUT}] {
         } else {
           set_output_delay -clock $c 0 $port
         }
+        set done 1
         break
       }
     }
     break
+  }
+  if {!$done && ![regexp $async_ports $base]} {
+    lappend unclocked $base
   }
 }
 
@@ -109,6 +118,9 @@ report_cdc -details   -file [file join $out cdc.rpt]
 # Timing: register-to-register only. The I/O delays above exist so report_cdc knows each
 # port's domain; with 0 ns they create artificial hold violations at the block boundary.
 set fail {}
+if {[llength $unclocked]} {
+  lappend fail "ports without a clock in port_clock: [lrange [lsort -unique $unclocked] 0 9]"
+}
 if {$hft_cdc_n_unconstrained > 0} {
   lappend fail "cdc.tcl: $hft_cdc_n_unconstrained CDC path(s) could not be constrained"
 }
@@ -144,10 +156,12 @@ foreach line [split $cdc_text "\n"] {
   }
 }
 
-set luts [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == LUT}]]
-set ffs  [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH}]]
-set rams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM}]]
-set brams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == BLOCKRAM}]]
+# Primitive groups differ per family (7-series | UltraScale+): LUT | CLB.LUT, FLOP_LATCH | REGISTER,
+# DMEM | CLB.LUTRAM; block RAMs by name (RAMB18/36 on both).
+set luts [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == LUT || PRIMITIVE_SUBGROUP == LUT}]]
+set ffs  [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH || PRIMITIVE_GROUP == REGISTER}]]
+set rams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIVE_SUBGROUP == LUTRAM}]]
+set brams [llength [get_cells -quiet -hier -filter {IS_PRIMITIVE && REF_NAME =~ RAMB*}]]
 puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams WNS=$wns WHS=$whs CDC=[join $cdc_summary ,]"
 if {[llength $fail]} {
   puts "HFT_SYNTH_RESULT: FAIL ($tag) [join $fail {; }] -> $out"

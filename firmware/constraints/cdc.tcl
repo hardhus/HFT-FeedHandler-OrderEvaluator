@@ -81,7 +81,8 @@ foreach src $hft_cdc_marked {
 # pointer has crossed); report_cdc still lists these paths for review.
 set hft_cdc_n_ram 0
 set hft_cdc_n_unconstrained 0
-foreach ram [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM}] {
+# Primitive groups differ per family: DMEM on 7-series, CLB with subgroup LUTRAM on UltraScale(+).
+foreach ram [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIVE_SUBGROUP == LUTRAM}] {
   set wclk [get_clocks -quiet -of_objects [get_pins -quiet -of_objects $ram -filter {IS_CLOCK}]]
   if {$wclk eq ""} {
     continue
