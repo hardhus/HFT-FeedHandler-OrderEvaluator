@@ -54,7 +54,9 @@ Optional per-machine settings go in `.env.local` (git-ignored). Copy them from [
 
 ```bash
 just lint                 # Verilator -Wall + Verible lint + format check (blocking)
-just fmt                  # format every file under the lint gate in place
+just fmt                  # format every file under the lint gate in place (not generated files)
+just gen                  # regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl
+just gen-check            # fail if a generated file differs from a fresh `just gen` (part of `just ci`)
 just test                 # all cocotb tests, in parallel
 just test-one reset_sync  # tests matching a name (pytest -k)
 just test-one net_model   # golden-model self-tests only (no simulator, seconds)
@@ -63,11 +65,15 @@ just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.
 ```
 
 `just lint` covers:
-- **Verilator `-Wall` + Verible:** every module in `common.f` and `core.f` (each as its own top, `core.f` together
-  with `common.f`) and the OOC synthesis harnesses in `synth_ooc.f` and `synth_ooc_core.f`. Packages (`*_pkg.sv`)
-  are not a top of their own: Verilator checks them through their users, so an unused package constant fails lint;
+- **Verilator `-Wall` + Verible:** every module in `common.f`, `core.f`, `csr.f` and `system.f` (each as its own
+  top, with the lists it needs) and the OOC synthesis harnesses in `synth_ooc*.f`. Packages (`*_pkg.sv`) are not a
+  top of their own: Verilator checks them through their users. One top need not use every `hft_pkg` constant, so
+  that warning is waived for `hft_pkg`; the selftest `test_every_package_constant_has_a_user` checks that every
+  constant has a user somewhere;
+- **Verilator only:** the generated files under `rtl/core/gen/` (they are never restyled by hand; their waivers in
+  `firmware/lint/waivers.vlt` match file, rule and message);
 - **Verible only (lint + format):** the XPM wrappers in `xilinx.f` (Verilator cannot compile XPM), the SVA checkers
-  in `sva.f` and `sva_core.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
+  in `sva*.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
 
 The list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
 
@@ -85,7 +91,9 @@ Build outputs go to `build/`:
   every test that uses that list. Expect a cold `just test` after such a change. Core assertions therefore live in
   their own list: a build with `core.f` also compiles `sva_core.f` (`SVA_FOR` in `runner.py`), and editing them
   rebuilds only the core tests.
-  For reference (WSL, 2 workers, 173 tests after F2): a warm `just test` takes about 2.3 minutes. The longest test
+  For reference (WSL, 2 workers, 173 tests after F2): a warm `just test` takes about 2.3 minutes. After F5
+  (235 tests) a full `just ci` takes about 11.5 minutes on WSL and 12 minutes on the Raspberry Pi 5; the longest
+  entries are the two `tc_rx_csr_random` runs (2000 frames with commits and snapshots, about 75 s each). The longest test
   is `tc_random_golden` (10⁴ frames, about 50 s); the cocotb harness runs about 6k cycles/s. Right after a WSL
   restart (cold file cache) the same run took 4 minutes. A cold build of all F1 tests took 10 to 36 minutes on
   `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
@@ -133,9 +141,26 @@ Build outputs go to `build/`:
 | `clocks.py` | `start_clock(sig, period_ps, jitter_pct)`, plus clock-ratio profiles selected by `RATIO` (`same`, `net2host`, `host2net`, `jitter`) |
 | `scoreboard.py` | In-order scoreboard (catches loss, duplication and reordering) |
 | `coverage.py` | `Coverage(name, required_bins)`: `hit(bin)` (an unknown bin fails at once), `check(out_dir)` writes `coverage.json` and fails if a required bin is empty |
+| `axil.py` | `AxilDriver`: AXI4-Lite manager for what cocotbext-axi does not do (W before AW, garbage after each handshake, random `bready`/`rready`, many requests in flight) |
+| `csr_env.py` | `hft_csr_wrap` harness shared by its unit test and the system test: NET configurations and commit, the `cfg_*` atomicity monitor, the counter snapshot and its model |
+
+### Generated CSR code (F5)
+
+The register map has one source, [`firmware/rdl/hft_csr.rdl`](../firmware/rdl/hft_csr.rdl). `just gen` runs
+PeakRDL through `scripts/gen_csr.sh` (the only place it is called; options in `firmware/rdl/peakrdl.toml`) and
+writes `firmware/rtl/core/gen/`, `software/include/gen/hft_csr.h` and `firmware/rdl/hft_csr.md`. These files are
+committed, so the Vivado flow on Windows needs no Python, and never edited by hand. `just gen-check` regenerates
+into a temporary directory and fails on any difference: an RDL change without `just gen`, or a hand edit of a
+generated file. The output is byte-identical on x86_64 and arm64.
+
+To change the map: edit the RDL, `just gen`, update the hand-written address table in
+`tb/selftest/test_csr_map.py` and `tb/selftest/csr_header_check.cpp` (they are independent of the RDL on purpose,
+so an unintended shift fails), then `just fmt lint test`.
 
 ### Golden models (`firmware/tb/model/`) and coverage
 
+- `csr.py` is the register model: it compiles the RDL with `systemrdl-compiler` (not the generated SV) and
+  answers each access like the block should (read data, `OKAY`/`SLVERR`, `wstrb`, singlepulse fields).
 - `net.py` is the reference for `eth_ip_udp_rx`, in pure Python. `expect(frame, tuser, cfg)` parses the frame with
   scapy and applies the receive rules in the documented priority order. It never uses the RTL's byte offsets, so
   the model and the DUT cannot share a byte-order mistake. Frame builders and `random_traffic()` produce the
@@ -158,8 +183,8 @@ Open waveforms with GTKWave or Surfer. Both ship with OSS CAD Suite and open thr
 ### Adding a module
 
 1. Add `firmware/rtl/<area>/<name>.sv` (file name = module name) and list it in a filelist under `firmware/filelists/`.
-2. Add `firmware/tb/unit/test_<name>.py` with `tc_*` cocotb coroutines and a `test_<name>()` pytest entry point
-   that calls `common.runner.run_cocotb`.
+2. Add `firmware/tb/unit/test_<name>.py` (or `tb/system/` for a top joining several blocks) with `tc_*` cocotb
+   coroutines and a `test_<name>()` pytest entry point that calls `common.runner.run_cocotb`.
 3. Run `just fmt lint test`.
 
 See [`firmware/CODING_STYLE.md`](../firmware/CODING_STYLE.md) for the rules.
@@ -176,15 +201,20 @@ Lint rules and formatting flags are stored in the repo, so editors and `just lin
 
 ## Vivado (optional, Windows)
 
-Vivado is not needed for lint or tests. It is used for synthesis sanity checks and timing/utilization reports, and to
-run the legacy XSIM testbench.
+Vivado is not needed for lint or tests. It is used for the synthesis gates and timing/utilization reports, and to
+run the cross-simulator FIFO testbench. Simulation runs anywhere (also in GitHub Actions); the synthesis gates run
+only on a machine with Vivado. The reference part of the CSR gate needs the Kintex UltraScale+ device files: add
+them with the installer's "Add Design Tools or Devices" and check with `get_parts xcku5p-ffvb676-2-e` in the Tcl
+console.
 
 ```powershell
 just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr (no board part)
-just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>/{timing_summary,utilization,cdc}.rpt
+just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>_<part>/{timing_summary,utilization,cdc}.rpt
 just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
+just synth-ooc-on xcku5p-ffvb676-2-e eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f   # another part
 just synth-common                         # every common block, both clock directions, gated
 just synth-core                           # eth_ip_udp_rx at 156.25 MHz, gated (250 MHz: synth-ooc ... host2net)
+just synth-csr                            # hft_csr_wrap placed and routed: xcku5p 156.25/250 MHz, A7 156.25/125 MHz (about 15 min)
 just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```
 
@@ -193,8 +223,11 @@ under Verilator (seeds 1–3). The TB uses its own random generator, so for the 
 identical results in both simulators. The XPM variant (`IMPL=xpm`) can only be simulated in Vivado. It is checked
 against the same contract and stimulus; its FWFT capacity is one word larger.
 
-`synth-ooc` (and therefore `synth-common`) **fails** in any of these cases:
-- negative register-to-register setup or hold slack;
+`synth-ooc` (and therefore every `synth-*` gate) **fails** in any of these cases:
+- negative register-to-register setup or hold slack (after routing when the `impl` flag is given);
+- a port that the port-to-clock map does not clock (except the asynchronous `d` and `rst_in`): its crossings would
+  be missing from `report_cdc`;
+- with `impl`, a net that `route_design` left unrouted;
 - a Critical `report_cdc` finding, or any warning ID other than CDC-6 (gray-coded multi-bit synchronizer) and CDC-15
   (enable-captured stable data);
 - a crossing that `firmware/constraints/cdc.tcl` could not constrain.
@@ -204,7 +237,11 @@ against the same contract and stimulus; its FWFT capacity is one word larger.
 - cells marked `(* hft_cdc_data = "TRUE" *)`;
 - LUTRAM read across clocks (FIFO storage).
 
-Clock profiles: `net2host` is 156.25 MHz → 250 MHz (`wr`/`src`/`clk` at 156.25), and `host2net` is the reverse.
+Clock profiles: `net2host` is 156.25 MHz → 250 MHz (`wr`/`src`/`clk` at 156.25), `host2net` is the reverse, and
+`net2host125` has a 125 MHz host. The flag `impl` (as an extra argument) also runs `opt_design`, `place_design` and
+`route_design` out of context: the gate then uses the routed timing, and the synthesis estimate is printed as
+`SYNTH_WNS`. The estimate can be about 1 ns too optimistic (it missed a failing read path on the A7 in F5).
+Cell counts and the LUTRAM rule of `cdc.tcl` cover both 7-series and UltraScale+ primitive names.
 The legacy top also synthesizes, but its port names are not in the port-to-clock map, so its CDC check is only partial:
 `just synth-ooc HFT_Top_Core net2host legacy.f`.
 
@@ -217,6 +254,7 @@ The project file is generated and never committed. Sources come from the same fi
 | `fatal: detected dubious ownership` in WSL | `git config --global --add safe.directory /mnt/d/<path-to-repo>` |
 | `just: command not found` in WSL | Use a login shell (`bash -l`) or add `~/.local/bin` to `PATH` |
 | `Permission denied` running a recipe script | `XDG_RUNTIME_DIR` is `noexec`; script recipes already use `[script("bash")]`. Keep it that way for new ones |
+| A long background job in WSL dies when the last `wsl.exe` session closes | WSL stops the distro and its processes; `setsid`/`nohup` do not help. Keep a `wsl` session open for the job's whole run |
 | `Wsl/Service/E_UNEXPECTED` during `just test` | The Windows host could not supply the memory the WSL VM asked for during parallel builds. Cap the VM in `%USERPROFILE%\.wslconfig` (`[wsl2]` `memory=3GB`, `swap=4GB`), run `wsl --shutdown`, and/or set `HFT_JOBS=1` |
 | `.venv/bin/python` disappears, builds fail with missing `cocotb/share/...` files | Something on the Windows side touched the repo's `.venv` (it is shared through `/mnt/d`). On WSL set `UV_PROJECT_ENVIRONMENT=/home/<you>/.cache/hft-feedhandler/venv` in `.env.local` and run `just setup`; the venv then lives on ext4, out of Windows' reach |
 | `SRE module mismatch` in a build log | A Verilator helper (`verilator_includer`) ran with another Python than the venv's stdlib on `PYTHONPATH`. The runner sets `PYTHON3` for make to the venv interpreter; keep that when changing the runner |

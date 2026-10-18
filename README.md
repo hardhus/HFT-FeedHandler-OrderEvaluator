@@ -29,7 +29,8 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core (parser, book, rules, DMA engine): planned |
+| `firmware/rtl/core/` | Board-agnostic core: receive filter, CSR block and counters; parser, book, rules and DMA engine planned |
+| `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
 | `firmware/filelists/` | `.f` filelists shared by Verilator, cocotb and Vivado |
@@ -37,7 +38,7 @@ for the RTL rules.
 | `firmware/scripts/vivado/` | Vivado Tcl: project generation, OOC synthesis gate, XSIM runs |
 | `firmware/constraints/` | Netlist-driven CDC constraints (`cdc.tcl`) |
 | `firmware/lint/` | Verilator waivers and Verible format flags |
-| `scripts/` | Bootstrap, setup and doctor scripts |
+| `scripts/` | Bootstrap, setup and doctor scripts; `gen_csr.sh` (PeakRDL) |
 | `software/` | C++ host side: early stage, to be rebuilt around the DMA ring interface |
 
 ## Stack
@@ -45,6 +46,7 @@ for the RTL rules.
 - **RTL:** SystemVerilog
 - **Verification:** Verilator 5, cocotb 2, pytest; Verible for style lint and formatting
 - **Synthesis checks (optional):** AMD Vivado (OOC timing/`report_cdc` gate, XSIM for the cross-simulator FIFO test)
+- **Registers:** SystemRDL 2.0, PeakRDL (regblock, C header, Markdown)
 - **Tooling:** just, uv, pinned OSS CAD Suite (Linux x86_64 and arm64)
 - **Software:** C++20
 
@@ -67,6 +69,17 @@ for the RTL rules.
     plus directed regressions for the legacy parser's bugs (sticky match, byte order, counter overflow).
   - SVA checkers are bound in every test.
   - Timing passes at 156.25 MHz in OOC synthesis.
+- **F5, host registers:** a SystemRDL map generates the AXI4-Lite register block, the C header and the register
+  reference ([`firmware/rtl/core/`](firmware/rtl/core/README.md#csr-block-hft_csr-hft_csr_wrap-rx_stats)); CI
+  fails if a generated file is stale.
+  - The receiver's configuration is committed atomically across clock domains, and the counters are read through
+    a snapshot taken in one network clock cycle.
+  - Regressions for the legacy register bank's bugs (lost writes, unlatched write data, lost responses under
+    backpressure) and an AXI4-Lite assertion checker.
+  - A system test runs the receiver through the CSR block: 2000 random frames while software commits new
+    configurations and takes snapshots, each frame checked against the model.
+  - Placed and routed out of context: Kintex UltraScale+ at 156.25/250 MHz and Artix-7 at 156.25/125 MHz.
+  - `just ci` is green on GitHub Actions (x64, arm64) and on a Raspberry Pi 5 (235 tests).
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.

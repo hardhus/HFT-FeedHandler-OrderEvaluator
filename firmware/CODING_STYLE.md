@@ -14,6 +14,12 @@ read-only reference and is replaced phase by phase; do not copy its patterns.
 - Every RTL file is listed in a filelist under `firmware/filelists/`. Paths in a `.f` file are relative to the
   `.f` file itself. Packages come before their users.
 - Packages are imported inside the module (`module m import foo_pkg::*; (...)`), never at file (`$unit`) scope.
+- Generated RTL lives under `gen/` (PeakRDL, from `firmware/rdl/hft_csr.rdl`), is committed, is never edited by
+  hand and is checked by `just gen-check`. It is linted by Verilator only; a waiver for it names the file, the rule
+  and the message (`firmware/lint/waivers.vlt`). Hand-written RTL gets no waivers for its own warnings.
+- Software and hardware never write the same register field: put the host's value, a command and the hardware's
+  status in separate registers (legacy K5: a hardware update overwrote a host write that still answered OKAY).
+  `tb/selftest/test_csr_map.py` checks this on the RDL.
 - A package (`*_pkg.sv`) comes first in its filelist and is not linted as a Verilator top of its own; Verilator
   checks it through the modules that import it. Every constant in it must have a user, so a constant is added
   together with its first user. One top need not use every constant of a shared package, so Verilator's per-top

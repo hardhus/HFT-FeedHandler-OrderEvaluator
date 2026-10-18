@@ -1,10 +1,13 @@
 # Core blocks (`firmware/rtl/core/`)
 
-The hot path from the MAC to the order logic. Every block runs in the network clock domain (`net_clk`, 156.25 MHz)
-at line rate, without backpressure. All of them are listed in [`filelists/core.f`](../../filelists/core.f), after
-`hft_pkg`. Their assertions are in [`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis
-harnesses in [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The design decisions behind
-`eth_ip_udp_rx` are recorded in the F2 plan (audit 09); this file is the contract.
+The hot path from the MAC to the order logic, and the host register interface that configures and counts it.
+The hot-path blocks run in the network clock domain (`net_clk`, 156.25 MHz) at line rate, without backpressure;
+they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`, with their assertions in
+[`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis harnesses in
+[`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The CSR blocks are in
+[`filelists/csr.f`](../../filelists/csr.f) (assertions [`sva_csr.f`](../../filelists/sva_csr.f), harness
+[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2 and F5 plans
+(audit 09, 10); this file is the contract.
 
 ## Catalog
 
@@ -12,6 +15,9 @@ harnesses in [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). T
 |-------|--------------|-------|
 | `hft_pkg` | Protocol constants, big-endian lane helpers `be16`/`be32`, receive reason codes `rx_reason_e` | F2 |
 | `eth_ip_udp_rx` | Ethernet/IPv4/UDP receive filter: header checks, 8-entry (IP, port) filter table, UDP payload realigned to byte 0 | F2 |
+| `gen/hft_csr` | AXI4-Lite register block, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL) | F5 |
+| `rx_stats` | Receive counters: packets, bytes, one drop counter per reason (64 bit) | F5 |
+| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic config commit, counter snapshot | F5 |
 
 ## `eth_ip_udp_rx`
 
@@ -89,11 +95,9 @@ Latency (no `tvalid` gaps), checked with exact equality by `tc_latency`:
 ### Contract for the CSR block (F5 `hft_csr_wrap`)
 
 - Every `cfg_*` input except `cfg_rx_en` is read in **one** cycle per frame (stage A); `cfg_rx_en` at the SOF.
-  F5 updates the configuration registers of the net domain in one cycle (commit strobe + `cdc_handshake`), so
-  each frame sees either the old or the new configuration as a whole (`tc_cfg_change_no_tearing`).
-- Counters: on each `stat_valid`, `rx_pkts += 1`, `rx_bytes += stat_bytes`, and `drop_<reason> += 1` unless
-  `RX_OK`. Counter list: `rx_pkts`, `rx_bytes`, `drop_disabled`, `drop_fcs`, `drop_mac`, `drop_ethertype`,
-  `drop_ip_hdr`, `drop_frag`, `drop_proto`, `drop_filter`, `drop_len`.
+  `hft_csr_wrap` changes all `cfg_*` in one cycle (config commit, below), so each frame sees either the old or
+  the new configuration as a whole (`tc_cfg_change_no_tearing` here, `tc_rx_csr_random` in the system test).
+- Counters: the `stat_*` event feeds `rx_stats` (below).
 
 ### Reset
 
@@ -148,4 +152,113 @@ every path is register to register.
 ### Out of scope
 
 VLAN and IP options are dropped and counted, not supported. UDP checksum, IPv6, and ARP/ICMP/IGMP replies are
-the host's job. Counters live in F5, the timestamp counter in F8.
+the host's job. The timestamp counter comes in F8.
+
+## CSR block: `hft_csr`, `hft_csr_wrap`, `rx_stats`
+
+The host register interface, generated from one source: [`firmware/rdl/hft_csr.rdl`](../../rdl/hft_csr.rdl)
+(SystemRDL 2.0). `just gen` runs PeakRDL (`scripts/gen_csr.sh`) and writes:
+- `gen/hft_csr.sv` and `gen/hft_csr_pkg.sv`: the register block (PeakRDL-regblock, AXI4-Lite);
+- `software/include/gen/hft_csr.h`: the C header (packed structs and field macros);
+- `firmware/rdl/hft_csr.md`: the register reference.
+
+The generated files are committed and never edited by hand; `just gen-check` (part of `just ci`) fails when
+they differ from a fresh `just gen`. The blocks are listed in [`filelists/csr.f`](../../filelists/csr.f).
+
+### Bus
+
+- AXI4-Lite subordinate, 32-bit data, 16-bit address: the whole 64 KiB window. `wstrb` writes single bytes.
+- `SLVERR` (and read data 0) for an unmapped address, a write to a read-only register and a read from a
+  write-only register; such an access changes nothing.
+- AW and W are accepted in any order and stored; every accepted request gets exactly one response, in order,
+  also while `bready`/`rready` are held low (legacy K5–K8).
+- Read latency includes one register stage inside the read mux (`--rt-read-fanin`, for timing).
+
+### Map
+
+Only blocks with a user are defined; the rest of the window is reserved (unmapped, `SLVERR`). Field details:
+[`hft_csr.md`](../../rdl/hft_csr.md).
+
+| Base | Block | Registers |
+|------|-------|-----------|
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0000`), `SCRATCH` (RW) |
+| `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
+| `0x0200` | FEED | reserved (F3) |
+| `0x0300` | RING | reserved (F6) |
+| `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
+| `0x0500`+ | RISK, STRATEGY, TX, SYMBOL | reserved (F4, F7) |
+
+Software never writes a field that hardware also writes: shadow, command and status fields are in separate
+registers, so a hardware update cannot overwrite a host write (legacy K5). A selftest checks this rule on the RDL.
+
+### Config commit (NET)
+
+The NET registers are a shadow: writing them changes nothing in the receiver.
+1. Write the registers (any order).
+2. Write `NET_COMMIT` = 1. The whole shadow is copied into a commit buffer and sent to the net clock domain in
+   one `cdc_handshake` transfer. `eth_ip_udp_rx`'s `cfg_*` then change together in one `net_clk` cycle, so a frame
+   sees the old or the new configuration as a whole.
+3. Read `NET_STATUS.commit_busy` until it is 0: the last commit is in effect.
+
+A commit while one is in flight is not lost: the buffer takes the newer shadow and is sent when the handshake is
+free (commits coalesce, the newest wins). Writes after a commit never reach the receiver without a new commit.
+Reads return the shadow (what was written), not what the receiver uses.
+
+Latency: `NET_COMMIT` pulse → transfer accepted 2 `host_clk` edges; accepted → `cfg_*` changed `STAGES` + 1 = 3
+`net_clk` edges (one more with CDC jitter). After reset `cfg_rx_en` = 0 and the other `cfg_*` are undefined until
+the first commit; the receiver drops every frame as `DISABLED` until then.
+
+### Counters and snapshot (STATS)
+
+`rx_stats` counts in the net clock domain, on each `stat_valid` of `eth_ip_udp_rx`: `RX_PKTS` += 1,
+`RX_BYTES` += `stat_bytes`, and `DROP_<reason>` += 1 unless `RX_OK`. The counters are 64 bits, wrap, and are
+cleared only by reset (no software clear: no race between host and hardware).
+
+The STATS counter registers change only when a snapshot lands. Protocol (one software owner):
+1. Read `STATS_SEQ`.
+2. Write `STATS_CTRL` = 1.
+3. Read `STATS_SEQ` until it changes.
+4. Read the counters. `LO` and `HI` of one counter, and all counters, belong to the same snapshot.
+
+A snapshot takes all eleven counters in **one** `net_clk` cycle: the acceptance edge of the net → host
+`cdc_handshake`. A frame event sampled on that edge is in the next snapshot. Requests while one is in flight
+coalesce; none is lost (a snapshot taken after the last request always lands). The counters read 0 before the
+first snapshot. `STATS_SEQ` counts landed snapshots and changes one `host_clk` edge after the counters.
+
+Latency (handshakes free): `STATS_CTRL` pulse → request accepted 1 `host_clk` edge; request at net → counters
+taken 1 `net_clk` edge.
+
+### Clocks and reset
+
+Two domains: `host_clk`/`host_rst` (bus, register block, commit buffer) and `net_clk`/`net_rst` (`cfg_*`,
+`rx_stats`). Both resets come from one source through one `reset_sync` per domain and are asserted together
+(`cdc_handshake` contract). The only crossings are three `cdc_handshake` instances: config (442 bits, host → net),
+snapshot request (1 bit, host → net) and counters (704 bits, net → host).
+
+### Verification
+
+| What | Where |
+|------|-------|
+| Map: every address against a hand-written table, reason-code formula, access kinds, the K5 rule (and that it bites), C++20 compile of the header with hand-written `offsetof` asserts | `tb/selftest/test_csr_map.py`, `tb/selftest/csr_header_check.cpp` |
+| Register model built from the RDL (not from the generated SV) | `tb/model/csr.py` |
+| Bus: reset values, every register, every `wstrb`, `SLVERR` cases, K6/K7/K8 regressions, random traffic with an 86-bin coverage gate | `tb/unit/test_hft_csr.py` (AXI driver `tb/common/axil.py`) |
+| AXI4-Lite assertions (bound to `hft_csr`) and their own tests | `tb/sva/axil_props.sv`, `tb/sv/tb_axil_props.sv` |
+| Counters: every edge against a model, every reason, wrap (8-bit build), carry past 2³² | `tb/unit/test_rx_stats.py` |
+| Commit and snapshot at five clock/jitter profiles: exact latencies, atomicity monitor on every net edge, coalescing, snapshot = counters of its acceptance edge, K5 writes while snapshots land, LO/HI past 2³² | `tb/unit/test_hft_csr_wrap.py` (harness `tb/common/csr_env.py`) |
+| System: `eth_ip_udp_rx` + `hft_csr_wrap`, each frame against the F2 model under the configuration it used, 2000 random frames with random commits and snapshots | `tb/system/test_rx_csr.py` |
+
+### Synthesis (`just synth-csr`, OOC place & route)
+
+The harness `rtl/platform/synth_ooc/hft_csr_wrap_ooc.sv` registers every input in its own clock domain. The two
+gates are placed and routed out of context (no board or pins); the table also gives the synthesis estimate.
+
+| Part | net / host clock | Flow | LUT | FF | WNS (ns) | WHS (ns) | Gate |
+|------|------------------|------|-----|----|----------|----------|------|
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 1329 | 4349 | +0.758 (synthesis +1.988) | +0.044 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 1328 | 4349 | +0.324 (synthesis +1.049) | +0.098 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 1328 | 4349 | −2.951 | +0.164 | information only |
+
+`report_cdc`: CDC-3 (synchronizers) and CDC-15 (handshake data captured with an enable, constrained by `cdc.tcl`),
+no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
+user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
+read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.
