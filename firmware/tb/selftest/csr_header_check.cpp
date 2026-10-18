@@ -1,0 +1,72 @@
+// Compile-time check of the generated CSR header (software/include/gen/hft_csr.h) against
+// addresses written by hand here, independently of the RDL. Built by
+// firmware/tb/selftest/test_csr_map.py with g++ -std=c++20 -fsyntax-only.
+#include <cstddef>
+
+#include "gen/hft_csr.h"
+
+#define OFS(member, addr) static_assert(offsetof(hft_csr_t, member) == (addr), #member)
+
+// GLOBAL
+OFS(GLOBAL.ID, 0x0000);
+OFS(GLOBAL.VERSION, 0x0004);
+OFS(GLOBAL.SCRATCH, 0x0008);
+
+// NET
+OFS(NET.NET_CTRL, 0x0100);
+OFS(NET.LOCAL_MAC_LO, 0x0104);
+OFS(NET.LOCAL_MAC_HI, 0x0108);
+OFS(NET.NET_COMMIT, 0x010C);
+OFS(NET.NET_STATUS, 0x0110);
+OFS(NET.FILTER[0].IP, 0x0120);
+OFS(NET.FILTER[0].PORT_EN, 0x0124);
+OFS(NET.FILTER[1].IP, 0x0128);
+OFS(NET.FILTER[1].PORT_EN, 0x012C);
+OFS(NET.FILTER[2].IP, 0x0130);
+OFS(NET.FILTER[2].PORT_EN, 0x0134);
+OFS(NET.FILTER[3].IP, 0x0138);
+OFS(NET.FILTER[3].PORT_EN, 0x013C);
+OFS(NET.FILTER[4].IP, 0x0140);
+OFS(NET.FILTER[4].PORT_EN, 0x0144);
+OFS(NET.FILTER[5].IP, 0x0148);
+OFS(NET.FILTER[5].PORT_EN, 0x014C);
+OFS(NET.FILTER[6].IP, 0x0150);
+OFS(NET.FILTER[6].PORT_EN, 0x0154);
+OFS(NET.FILTER[7].IP, 0x0158);
+OFS(NET.FILTER[7].PORT_EN, 0x015C);
+
+// STATS: DROP_<reason> at 0x0420 + 8 * (reason - 1)
+OFS(STATS.STATS_CTRL, 0x0400);
+OFS(STATS.STATS_SEQ, 0x0404);
+OFS(STATS.RX_PKTS.LO, 0x0410);
+OFS(STATS.RX_PKTS.HI, 0x0414);
+OFS(STATS.RX_BYTES.LO, 0x0418);
+OFS(STATS.RX_BYTES.HI, 0x041C);
+OFS(STATS.DROP_DISABLED.LO, 0x0420);
+OFS(STATS.DROP_DISABLED.HI, 0x0424);
+OFS(STATS.DROP_FCS.LO, 0x0428);
+OFS(STATS.DROP_FCS.HI, 0x042C);
+OFS(STATS.DROP_MAC.LO, 0x0430);
+OFS(STATS.DROP_MAC.HI, 0x0434);
+OFS(STATS.DROP_ETHERTYPE.LO, 0x0438);
+OFS(STATS.DROP_ETHERTYPE.HI, 0x043C);
+OFS(STATS.DROP_IP_HDR.LO, 0x0440);
+OFS(STATS.DROP_IP_HDR.HI, 0x0444);
+OFS(STATS.DROP_FRAG.LO, 0x0448);
+OFS(STATS.DROP_FRAG.HI, 0x044C);
+OFS(STATS.DROP_PROTO.LO, 0x0450);
+OFS(STATS.DROP_PROTO.HI, 0x0454);
+OFS(STATS.DROP_FILTER.LO, 0x0458);
+OFS(STATS.DROP_FILTER.HI, 0x045C);
+OFS(STATS.DROP_LEN.LO, 0x0460);
+OFS(STATS.DROP_LEN.HI, 0x0464);
+
+// Field layout and constants used by software.
+static_assert(HFT_CSR__GLOBAL__ID__ID_reset == 0x48465431, "ID is \"HFT1\"");
+static_assert(HFT_CSR__GLOBAL__VERSION__VERSION_reset == 0x00050000, "F5 map version");
+static_assert(HFT_CSR__NET__NET_CTRL__RX_EN_bp == 0 && HFT_CSR__NET__NET_CTRL__ACCEPT_BCAST_bp == 1, "NET_CTRL");
+static_assert(HFT_CSR__NET__LOCAL_MAC_HI__MAC_bw == 16, "LOCAL_MAC_HI holds MAC[47:32]");
+static_assert(HFT_CSR__NET__FILTER__PORT_EN__PORT_bp == 0 && HFT_CSR__NET__FILTER__PORT_EN__PORT_bw == 16, "port");
+static_assert(HFT_CSR__NET__FILTER__PORT_EN__EN_bm == 0x10000, "filter enable is bit 16");
+static_assert(HFT_CSR__NET__NET_COMMIT__COMMIT_bm == 0x1 && HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm == 0x1, "pulses");
+static_assert(HFT_CSR__NET__NET_STATUS__COMMIT_BUSY_bm == 0x1, "commit_busy");

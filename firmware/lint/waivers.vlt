@@ -8,6 +8,13 @@ lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
 // Registers are 32-bit aligned: the two byte-address bits are not decoded.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
+// The next-state logic and the storage of each field is its own always block that writes one
+// member of the shared field_combo and field_storage structs. Different members, so no real
+// multiple driver. Verilator documents that this warning only costs speed, not correctness.
+lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_csr.sv" -match "*'field_combo'"
+lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_csr.sv" -match "*'field_storage'"
+// Register arrays (NET.FILTER[]) are generate loops without a block name.
+lint_off -rule GENUNNAMED -file "*/rtl/core/gen/hft_csr.sv"
 // Map constants for users of the package; a build need not use all of them.
 lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_csr_pkg.sv" -match "*Parameter is not used: 'HFT_CSR_*'"
 

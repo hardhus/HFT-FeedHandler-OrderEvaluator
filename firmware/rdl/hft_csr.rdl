@@ -41,4 +41,129 @@ addrmap hft_csr {
             } value[31:0] = 32'h0;
         } SCRATCH @ 0x8;
     } GLOBAL @ 0x0000;
+
+    regfile {
+        name = "Network receive";
+        desc = "eth_ip_udp_rx configuration. Every register here is a shadow: a write changes nothing in the receiver until NET_COMMIT, which moves the whole block to the net clock domain in one transfer; the receiver then switches to it in a single cycle. Reads return the shadow (what was written); NET_STATUS.commit_busy tells whether the last commit has been applied.";
+
+        reg {
+            name = "Receive control";
+            field {
+                desc = "Receiver enabled. 0 after reset: frames are dropped (reason DISABLED) until software has written a complete configuration and committed it with rx_en = 1.";
+                sw = rw; hw = r;
+            } rx_en[0:0] = 1'b0;
+            field {
+                desc = "Accept frames to the broadcast MAC ff:ff:ff:ff:ff:ff.";
+                sw = rw; hw = r;
+            } accept_bcast[1:1] = 1'b0;
+        } NET_CTRL @ 0x00;
+
+        reg {
+            name = "Local MAC, low";
+            field {
+                desc = "MAC address bits [31:0]: the last four bytes (02:00:00:00:00:01 -> 0x00000001).";
+                sw = rw; hw = r;
+            } mac[31:0] = 32'h0;
+        } LOCAL_MAC_LO @ 0x04;
+
+        reg {
+            name = "Local MAC, high";
+            field {
+                desc = "MAC address bits [47:32]: the first two bytes (02:00:00:00:00:01 -> 0x0200).";
+                sw = rw; hw = r;
+            } mac[15:0] = 16'h0;
+        } LOCAL_MAC_HI @ 0x08;
+
+        reg {
+            name = "Commit";
+            field {
+                desc = "Write 1: send the whole NET block to the receiver (atomic). A commit while the previous one is in flight is not lost: the newest shadow is sent when the transfer is free.";
+                sw = w; hw = r; singlepulse;
+            } commit[0:0] = 1'b0;
+        } NET_COMMIT @ 0x0C;
+
+        reg {
+            name = "Status";
+            field {
+                desc = "1 while a commit is pending or in flight. 0: every write before the last NET_COMMIT is in effect in the receiver.";
+                sw = r; hw = w;
+            } commit_busy[0:0];
+        } NET_STATUS @ 0x10;
+
+        regfile {
+            name = "Destination filter";
+            desc = "A frame passes when its destination IP and UDP port equal an enabled entry. The lowest matching index is reported with the payload.";
+            reg {
+                name = "Filter IP";
+                field {
+                    desc = "Destination IPv4 address (10.0.0.2 -> 0x0A000002), unicast or multicast group.";
+                    sw = rw; hw = r;
+                } ip[31:0] = 32'h0;
+            } IP @ 0x0;
+            reg {
+                name = "Filter port and enable";
+                field {
+                    desc = "Destination UDP port.";
+                    sw = rw; hw = r;
+                } port[15:0] = 16'h0;
+                field {
+                    desc = "Entry enabled.";
+                    sw = rw; hw = r;
+                } en[16:16] = 1'b0;
+            } PORT_EN @ 0x4;
+        } FILTER[8] @ 0x20 += 0x8;
+    } NET @ 0x0100;
+
+    // 64-bit counter read as two words. Values change only when a snapshot lands, so LO and
+    // HI of one snapshot always belong together.
+    regfile counter64 {
+        name = "64-bit counter";
+        reg {
+            name = "Low word";
+            field {
+                desc = "Counter bits [31:0] at the last snapshot.";
+                sw = r; hw = w;
+            } value[31:0];
+        } LO @ 0x0;
+        reg {
+            name = "High word";
+            field {
+                desc = "Counter bits [63:32] at the last snapshot.";
+                sw = r; hw = w;
+            } value[31:0];
+        } HI @ 0x4;
+    };
+
+    regfile {
+        name = "Statistics";
+        desc = "Receive counters (net clock domain, 64 bit, wrap; cleared only by reset). Software reads them through a snapshot: read STATS_SEQ, write STATS_CTRL.snapshot, wait until STATS_SEQ changes, then read. All counters of one snapshot are taken in the same net clock cycle. DROP_<reason> is at 0x0420 + 8 * (reason - 1), reason = rx_reason_e in hft_pkg.sv.";
+
+        reg {
+            name = "Statistics control";
+            field {
+                desc = "Write 1: take a snapshot of all counters. A request while one is in flight is not lost: it is served when the transfer is free.";
+                sw = w; hw = r; singlepulse;
+            } snapshot[0:0] = 1'b0;
+        } STATS_CTRL @ 0x00;
+
+        reg {
+            name = "Snapshot sequence";
+            field {
+                desc = "Incremented (and wraps) each time a snapshot lands in the registers below.";
+                sw = r; hw = na; counter;
+            } seq[31:0] = 32'h0;
+        } STATS_SEQ @ 0x04;
+
+        counter64 RX_PKTS        @ 0x10;  // frames seen (every outcome)
+        counter64 RX_BYTES       @ 0x18;  // frame bytes seen (stat_bytes, every outcome)
+        counter64 DROP_DISABLED  @ 0x20;
+        counter64 DROP_FCS       @ 0x28;
+        counter64 DROP_MAC       @ 0x30;
+        counter64 DROP_ETHERTYPE @ 0x38;
+        counter64 DROP_IP_HDR    @ 0x40;
+        counter64 DROP_FRAG      @ 0x48;
+        counter64 DROP_PROTO     @ 0x50;
+        counter64 DROP_FILTER    @ 0x58;
+        counter64 DROP_LEN       @ 0x60;
+    } STATS @ 0x0400;
 };

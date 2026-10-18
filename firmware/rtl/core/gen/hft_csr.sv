@@ -23,7 +23,10 @@ module hft_csr (
         input wire s_axil_rready,
         output logic s_axil_rvalid,
         output logic [31:0] s_axil_rdata,
-        output logic [1:0] s_axil_rresp
+        output logic [1:0] s_axil_rresp,
+
+        input hft_csr_pkg::hft_csr__in_t hwif_in,
+        output hft_csr_pkg::hft_csr__out_t hwif_out
     );
 
     //--------------------------------------------------------------------------
@@ -227,6 +230,65 @@ module hft_csr (
             logic VERSION;
             logic SCRATCH;
         } GLOBAL;
+        struct {
+            logic NET_CTRL;
+            logic LOCAL_MAC_LO;
+            logic LOCAL_MAC_HI;
+            logic NET_COMMIT;
+            logic NET_STATUS;
+            struct {
+                logic IP;
+                logic PORT_EN;
+            } FILTER[8];
+        } NET;
+        struct {
+            logic STATS_CTRL;
+            logic STATS_SEQ;
+            struct {
+                logic LO;
+                logic HI;
+            } RX_PKTS;
+            struct {
+                logic LO;
+                logic HI;
+            } RX_BYTES;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_DISABLED;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_FCS;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_MAC;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_ETHERTYPE;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_IP_HDR;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_FRAG;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_PROTO;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_FILTER;
+            struct {
+                logic LO;
+                logic HI;
+            } DROP_LEN;
+        } STATS;
     } decoded_reg_strb_t;
     decoded_reg_strb_t decoded_reg_strb;
     logic decoded_err;
@@ -250,6 +312,101 @@ module hft_csr (
         decoded_reg_strb.GLOBAL.SCRATCH = cpuif_req_masked & (cpuif_addr == 16'h8);
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h8);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h8);
+        decoded_reg_strb.NET.NET_CTRL = cpuif_req_masked & (cpuif_addr == 16'h100);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h100);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h100);
+        decoded_reg_strb.NET.LOCAL_MAC_LO = cpuif_req_masked & (cpuif_addr == 16'h104);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h104);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h104);
+        decoded_reg_strb.NET.LOCAL_MAC_HI = cpuif_req_masked & (cpuif_addr == 16'h108);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h108);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h108);
+        decoded_reg_strb.NET.NET_COMMIT = cpuif_req_masked & (cpuif_addr == 16'h10c) & cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h10c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h10c) & cpuif_req_is_wr;
+        decoded_reg_strb.NET.NET_STATUS = cpuif_req_masked & (cpuif_addr == 16'h110) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h110);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h110) & !cpuif_req_is_wr;
+        for(int i0=0; i0<8; i0++) begin
+            decoded_reg_strb.NET.FILTER[i0].IP = cpuif_req_masked & (cpuif_addr == 16'h120 + (16)'(i0) * 16'h8);
+            is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h120 + (16)'(i0) * 16'h8);
+            is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h120 + (16)'(i0) * 16'h8);
+            decoded_reg_strb.NET.FILTER[i0].PORT_EN = cpuif_req_masked & (cpuif_addr == 16'h124 + (16)'(i0) * 16'h8);
+            is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h124 + (16)'(i0) * 16'h8);
+            is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h124 + (16)'(i0) * 16'h8);
+        end
+        decoded_reg_strb.STATS.STATS_CTRL = cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h400);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
+        decoded_reg_strb.STATS.STATS_SEQ = cpuif_req_masked & (cpuif_addr == 16'h404) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h404);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h404) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.RX_PKTS.LO = cpuif_req_masked & (cpuif_addr == 16'h410) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h410);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h410) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.RX_PKTS.HI = cpuif_req_masked & (cpuif_addr == 16'h414) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h414);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h414) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.RX_BYTES.LO = cpuif_req_masked & (cpuif_addr == 16'h418) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h418);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h418) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.RX_BYTES.HI = cpuif_req_masked & (cpuif_addr == 16'h41c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h41c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h41c) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_DISABLED.LO = cpuif_req_masked & (cpuif_addr == 16'h420) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h420);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h420) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_DISABLED.HI = cpuif_req_masked & (cpuif_addr == 16'h424) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h424);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h424) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FCS.LO = cpuif_req_masked & (cpuif_addr == 16'h428) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h428);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h428) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FCS.HI = cpuif_req_masked & (cpuif_addr == 16'h42c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h42c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h42c) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_MAC.LO = cpuif_req_masked & (cpuif_addr == 16'h430) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h430);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h430) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_MAC.HI = cpuif_req_masked & (cpuif_addr == 16'h434) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h434);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h434) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_ETHERTYPE.LO = cpuif_req_masked & (cpuif_addr == 16'h438) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h438);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h438) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_ETHERTYPE.HI = cpuif_req_masked & (cpuif_addr == 16'h43c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h43c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h43c) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_IP_HDR.LO = cpuif_req_masked & (cpuif_addr == 16'h440) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h440);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h440) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_IP_HDR.HI = cpuif_req_masked & (cpuif_addr == 16'h444) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h444);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h444) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FRAG.LO = cpuif_req_masked & (cpuif_addr == 16'h448) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h448);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h448) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FRAG.HI = cpuif_req_masked & (cpuif_addr == 16'h44c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h44c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h44c) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_PROTO.LO = cpuif_req_masked & (cpuif_addr == 16'h450) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h450);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h450) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_PROTO.HI = cpuif_req_masked & (cpuif_addr == 16'h454) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h454);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h454) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FILTER.LO = cpuif_req_masked & (cpuif_addr == 16'h458) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h458);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h458) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_FILTER.HI = cpuif_req_masked & (cpuif_addr == 16'h45c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h45c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h45c) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_LEN.LO = cpuif_req_masked & (cpuif_addr == 16'h460) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h460);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h460) & !cpuif_req_is_wr;
+        decoded_reg_strb.STATS.DROP_LEN.HI = cpuif_req_masked & (cpuif_addr == 16'h464) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h464);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h464) & !cpuif_req_is_wr;
         decoded_err = (~is_valid_addr | (is_valid_addr & ~is_valid_rw)) & decoded_req;
     end
 
@@ -272,6 +429,70 @@ module hft_csr (
                 } value;
             } SCRATCH;
         } GLOBAL;
+        struct {
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
+                } rx_en;
+                struct {
+                    logic next;
+                    logic load_next;
+                } accept_bcast;
+            } NET_CTRL;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } mac;
+            } LOCAL_MAC_LO;
+            struct {
+                struct {
+                    logic [15:0] next;
+                    logic load_next;
+                } mac;
+            } LOCAL_MAC_HI;
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
+                } commit;
+            } NET_COMMIT;
+            struct {
+                struct {
+                    struct {
+                        logic [31:0] next;
+                        logic load_next;
+                    } ip;
+                } IP;
+                struct {
+                    struct {
+                        logic [15:0] next;
+                        logic load_next;
+                    } port;
+                    struct {
+                        logic next;
+                        logic load_next;
+                    } en;
+                } PORT_EN;
+            } FILTER[8];
+        } NET;
+        struct {
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
+                } snapshot;
+            } STATS_CTRL;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                    logic incrthreshold;
+                    logic overflow;
+                } seq;
+            } STATS_SEQ;
+        } STATS;
     } field_combo_t;
     field_combo_t field_combo;
 
@@ -283,6 +504,58 @@ module hft_csr (
                 } value;
             } SCRATCH;
         } GLOBAL;
+        struct {
+            struct {
+                struct {
+                    logic value;
+                } rx_en;
+                struct {
+                    logic value;
+                } accept_bcast;
+            } NET_CTRL;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } mac;
+            } LOCAL_MAC_LO;
+            struct {
+                struct {
+                    logic [15:0] value;
+                } mac;
+            } LOCAL_MAC_HI;
+            struct {
+                struct {
+                    logic value;
+                } commit;
+            } NET_COMMIT;
+            struct {
+                struct {
+                    struct {
+                        logic [31:0] value;
+                    } ip;
+                } IP;
+                struct {
+                    struct {
+                        logic [15:0] value;
+                    } port;
+                    struct {
+                        logic value;
+                    } en;
+                } PORT_EN;
+            } FILTER[8];
+        } NET;
+        struct {
+            struct {
+                struct {
+                    logic value;
+                } snapshot;
+            } STATS_CTRL;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } seq;
+            } STATS_SEQ;
+        } STATS;
     } field_storage_t;
     field_storage_t field_storage;
 
@@ -305,6 +578,248 @@ module hft_csr (
         end else begin
             if(field_combo.GLOBAL.SCRATCH.value.load_next) begin
                 field_storage.GLOBAL.SCRATCH.value.value <= field_combo.GLOBAL.SCRATCH.value.next;
+            end
+        end
+    end
+    // Field: hft_csr.NET.NET_CTRL.rx_en
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.NET.NET_CTRL.rx_en.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.NET.NET_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.NET.NET_CTRL.rx_en.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end
+        field_combo.NET.NET_CTRL.rx_en.next = next_c;
+        field_combo.NET.NET_CTRL.rx_en.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.NET.NET_CTRL.rx_en.value <= 1'h0;
+        end else begin
+            if(field_combo.NET.NET_CTRL.rx_en.load_next) begin
+                field_storage.NET.NET_CTRL.rx_en.value <= field_combo.NET.NET_CTRL.rx_en.next;
+            end
+        end
+    end
+    assign hwif_out.NET.NET_CTRL.rx_en.value = field_storage.NET.NET_CTRL.rx_en.value;
+    // Field: hft_csr.NET.NET_CTRL.accept_bcast
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.NET.NET_CTRL.accept_bcast.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.NET.NET_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.NET.NET_CTRL.accept_bcast.value & ~decoded_wr_biten[1:1]) | (decoded_wr_data[1:1] & decoded_wr_biten[1:1]);
+            load_next_c = '1;
+        end
+        field_combo.NET.NET_CTRL.accept_bcast.next = next_c;
+        field_combo.NET.NET_CTRL.accept_bcast.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.NET.NET_CTRL.accept_bcast.value <= 1'h0;
+        end else begin
+            if(field_combo.NET.NET_CTRL.accept_bcast.load_next) begin
+                field_storage.NET.NET_CTRL.accept_bcast.value <= field_combo.NET.NET_CTRL.accept_bcast.next;
+            end
+        end
+    end
+    assign hwif_out.NET.NET_CTRL.accept_bcast.value = field_storage.NET.NET_CTRL.accept_bcast.value;
+    // Field: hft_csr.NET.LOCAL_MAC_LO.mac
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.NET.LOCAL_MAC_LO.mac.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.NET.LOCAL_MAC_LO && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.NET.LOCAL_MAC_LO.mac.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.NET.LOCAL_MAC_LO.mac.next = next_c;
+        field_combo.NET.LOCAL_MAC_LO.mac.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.NET.LOCAL_MAC_LO.mac.value <= 32'h0;
+        end else begin
+            if(field_combo.NET.LOCAL_MAC_LO.mac.load_next) begin
+                field_storage.NET.LOCAL_MAC_LO.mac.value <= field_combo.NET.LOCAL_MAC_LO.mac.next;
+            end
+        end
+    end
+    assign hwif_out.NET.LOCAL_MAC_LO.mac.value = field_storage.NET.LOCAL_MAC_LO.mac.value;
+    // Field: hft_csr.NET.LOCAL_MAC_HI.mac
+    always_comb begin
+        automatic logic [15:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.NET.LOCAL_MAC_HI.mac.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.NET.LOCAL_MAC_HI && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.NET.LOCAL_MAC_HI.mac.value & ~decoded_wr_biten[15:0]) | (decoded_wr_data[15:0] & decoded_wr_biten[15:0]);
+            load_next_c = '1;
+        end
+        field_combo.NET.LOCAL_MAC_HI.mac.next = next_c;
+        field_combo.NET.LOCAL_MAC_HI.mac.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.NET.LOCAL_MAC_HI.mac.value <= 16'h0;
+        end else begin
+            if(field_combo.NET.LOCAL_MAC_HI.mac.load_next) begin
+                field_storage.NET.LOCAL_MAC_HI.mac.value <= field_combo.NET.LOCAL_MAC_HI.mac.next;
+            end
+        end
+    end
+    assign hwif_out.NET.LOCAL_MAC_HI.mac.value = field_storage.NET.LOCAL_MAC_HI.mac.value;
+    // Field: hft_csr.NET.NET_COMMIT.commit
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.NET.NET_COMMIT.commit.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.NET.NET_COMMIT && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.NET.NET_COMMIT.commit.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end else begin // singlepulse clears back to 0
+            next_c = '0;
+            load_next_c = '1;
+        end
+        field_combo.NET.NET_COMMIT.commit.next = next_c;
+        field_combo.NET.NET_COMMIT.commit.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.NET.NET_COMMIT.commit.value <= 1'h0;
+        end else begin
+            if(field_combo.NET.NET_COMMIT.commit.load_next) begin
+                field_storage.NET.NET_COMMIT.commit.value <= field_combo.NET.NET_COMMIT.commit.next;
+            end
+        end
+    end
+    assign hwif_out.NET.NET_COMMIT.commit.value = field_storage.NET.NET_COMMIT.commit.value;
+    for(genvar i0=0; i0<8; i0++) begin
+        // Field: hft_csr.NET.FILTER[].IP.ip
+        always_comb begin
+            automatic logic [31:0] next_c;
+            automatic logic load_next_c;
+            next_c = field_storage.NET.FILTER[i0].IP.ip.value;
+            load_next_c = '0;
+            if(decoded_reg_strb.NET.FILTER[i0].IP && decoded_req_is_wr) begin // SW write
+                next_c = (field_storage.NET.FILTER[i0].IP.ip.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+                load_next_c = '1;
+            end
+            field_combo.NET.FILTER[i0].IP.ip.next = next_c;
+            field_combo.NET.FILTER[i0].IP.ip.load_next = load_next_c;
+        end
+        always_ff @(posedge clk) begin
+            if(rst) begin
+                field_storage.NET.FILTER[i0].IP.ip.value <= 32'h0;
+            end else begin
+                if(field_combo.NET.FILTER[i0].IP.ip.load_next) begin
+                    field_storage.NET.FILTER[i0].IP.ip.value <= field_combo.NET.FILTER[i0].IP.ip.next;
+                end
+            end
+        end
+        assign hwif_out.NET.FILTER[i0].IP.ip.value = field_storage.NET.FILTER[i0].IP.ip.value;
+        // Field: hft_csr.NET.FILTER[].PORT_EN.port
+        always_comb begin
+            automatic logic [15:0] next_c;
+            automatic logic load_next_c;
+            next_c = field_storage.NET.FILTER[i0].PORT_EN.port.value;
+            load_next_c = '0;
+            if(decoded_reg_strb.NET.FILTER[i0].PORT_EN && decoded_req_is_wr) begin // SW write
+                next_c = (field_storage.NET.FILTER[i0].PORT_EN.port.value & ~decoded_wr_biten[15:0]) | (decoded_wr_data[15:0] & decoded_wr_biten[15:0]);
+                load_next_c = '1;
+            end
+            field_combo.NET.FILTER[i0].PORT_EN.port.next = next_c;
+            field_combo.NET.FILTER[i0].PORT_EN.port.load_next = load_next_c;
+        end
+        always_ff @(posedge clk) begin
+            if(rst) begin
+                field_storage.NET.FILTER[i0].PORT_EN.port.value <= 16'h0;
+            end else begin
+                if(field_combo.NET.FILTER[i0].PORT_EN.port.load_next) begin
+                    field_storage.NET.FILTER[i0].PORT_EN.port.value <= field_combo.NET.FILTER[i0].PORT_EN.port.next;
+                end
+            end
+        end
+        assign hwif_out.NET.FILTER[i0].PORT_EN.port.value = field_storage.NET.FILTER[i0].PORT_EN.port.value;
+        // Field: hft_csr.NET.FILTER[].PORT_EN.en
+        always_comb begin
+            automatic logic [0:0] next_c;
+            automatic logic load_next_c;
+            next_c = field_storage.NET.FILTER[i0].PORT_EN.en.value;
+            load_next_c = '0;
+            if(decoded_reg_strb.NET.FILTER[i0].PORT_EN && decoded_req_is_wr) begin // SW write
+                next_c = (field_storage.NET.FILTER[i0].PORT_EN.en.value & ~decoded_wr_biten[16:16]) | (decoded_wr_data[16:16] & decoded_wr_biten[16:16]);
+                load_next_c = '1;
+            end
+            field_combo.NET.FILTER[i0].PORT_EN.en.next = next_c;
+            field_combo.NET.FILTER[i0].PORT_EN.en.load_next = load_next_c;
+        end
+        always_ff @(posedge clk) begin
+            if(rst) begin
+                field_storage.NET.FILTER[i0].PORT_EN.en.value <= 1'h0;
+            end else begin
+                if(field_combo.NET.FILTER[i0].PORT_EN.en.load_next) begin
+                    field_storage.NET.FILTER[i0].PORT_EN.en.value <= field_combo.NET.FILTER[i0].PORT_EN.en.next;
+                end
+            end
+        end
+        assign hwif_out.NET.FILTER[i0].PORT_EN.en.value = field_storage.NET.FILTER[i0].PORT_EN.en.value;
+    end
+    // Field: hft_csr.STATS.STATS_CTRL.snapshot
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.STATS.STATS_CTRL.snapshot.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.STATS.STATS_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.STATS.STATS_CTRL.snapshot.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end else begin // singlepulse clears back to 0
+            next_c = '0;
+            load_next_c = '1;
+        end
+        field_combo.STATS.STATS_CTRL.snapshot.next = next_c;
+        field_combo.STATS.STATS_CTRL.snapshot.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.STATS.STATS_CTRL.snapshot.value <= 1'h0;
+        end else begin
+            if(field_combo.STATS.STATS_CTRL.snapshot.load_next) begin
+                field_storage.STATS.STATS_CTRL.snapshot.value <= field_combo.STATS.STATS_CTRL.snapshot.next;
+            end
+        end
+    end
+    assign hwif_out.STATS.STATS_CTRL.snapshot.value = field_storage.STATS.STATS_CTRL.snapshot.value;
+    // Field: hft_csr.STATS.STATS_SEQ.seq
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.STATS.STATS_SEQ.seq.value;
+        load_next_c = '0;
+        
+        if(hwif_in.STATS.STATS_SEQ.seq.incr) begin // increment
+            field_combo.STATS.STATS_SEQ.seq.overflow = (((33)'(next_c) + 32'h1) > 33'hffffffff);
+            next_c = next_c + 32'h1;
+            load_next_c = '1;
+        end else begin
+            field_combo.STATS.STATS_SEQ.seq.overflow = '0;
+        end
+        field_combo.STATS.STATS_SEQ.seq.incrthreshold = (field_storage.STATS.STATS_SEQ.seq.value >= 32'hffffffff);
+        field_combo.STATS.STATS_SEQ.seq.next = next_c;
+        field_combo.STATS.STATS_SEQ.seq.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.STATS.STATS_SEQ.seq.value <= 32'h0;
+        end else begin
+            if(field_combo.STATS.STATS_SEQ.seq.load_next) begin
+                field_storage.STATS.STATS_SEQ.seq.value <= field_combo.STATS.STATS_SEQ.seq.next;
             end
         end
     end
@@ -337,6 +852,97 @@ module hft_csr (
         end
         if(rd_mux_addr == 16'h8) begin
             readback_data_var[31:0] = field_storage.GLOBAL.SCRATCH.value.value;
+        end
+        if(rd_mux_addr == 16'h100) begin
+            readback_data_var[0] = field_storage.NET.NET_CTRL.rx_en.value;
+            readback_data_var[1] = field_storage.NET.NET_CTRL.accept_bcast.value;
+        end
+        if(rd_mux_addr == 16'h104) begin
+            readback_data_var[31:0] = field_storage.NET.LOCAL_MAC_LO.mac.value;
+        end
+        if(rd_mux_addr == 16'h108) begin
+            readback_data_var[15:0] = field_storage.NET.LOCAL_MAC_HI.mac.value;
+        end
+        if(rd_mux_addr == 16'h110) begin
+            readback_data_var[0] = hwif_in.NET.NET_STATUS.commit_busy.next;
+        end
+        for(int i0=0; i0<8; i0++) begin
+            if(rd_mux_addr == 16'h120 + (16)'(i0) * 16'h8) begin
+                readback_data_var[31:0] = field_storage.NET.FILTER[i0].IP.ip.value;
+            end
+            if(rd_mux_addr == 16'h124 + (16)'(i0) * 16'h8) begin
+                readback_data_var[15:0] = field_storage.NET.FILTER[i0].PORT_EN.port.value;
+                readback_data_var[16] = field_storage.NET.FILTER[i0].PORT_EN.en.value;
+            end
+        end
+        if(rd_mux_addr == 16'h404) begin
+            readback_data_var[31:0] = field_storage.STATS.STATS_SEQ.seq.value;
+        end
+        if(rd_mux_addr == 16'h410) begin
+            readback_data_var[31:0] = hwif_in.STATS.RX_PKTS.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h414) begin
+            readback_data_var[31:0] = hwif_in.STATS.RX_PKTS.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h418) begin
+            readback_data_var[31:0] = hwif_in.STATS.RX_BYTES.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h41c) begin
+            readback_data_var[31:0] = hwif_in.STATS.RX_BYTES.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h420) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_DISABLED.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h424) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_DISABLED.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h428) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FCS.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h42c) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FCS.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h430) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_MAC.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h434) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_MAC.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h438) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_ETHERTYPE.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h43c) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_ETHERTYPE.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h440) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_IP_HDR.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h444) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_IP_HDR.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h448) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FRAG.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h44c) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FRAG.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h450) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_PROTO.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h454) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_PROTO.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h458) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FILTER.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h45c) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_FILTER.HI.value.next;
+        end
+        if(rd_mux_addr == 16'h460) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_LEN.LO.value.next;
+        end
+        if(rd_mux_addr == 16'h464) begin
+            readback_data_var[31:0] = hwif_in.STATS.DROP_LEN.HI.value.next;
         end
         readback_data = readback_data_var;
         readback_done = decoded_req & ~decoded_req_is_wr;

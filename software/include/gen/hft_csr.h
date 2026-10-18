@@ -35,13 +35,129 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t SCRATCH;
 } hft_csr__GLOBAL_t;
 
+// reg - hft_csr::NET::NET_CTRL
+#define HFT_CSR__NET__NET_CTRL__RX_EN_bm 0x1
+#define HFT_CSR__NET__NET_CTRL__RX_EN_bp 0
+#define HFT_CSR__NET__NET_CTRL__RX_EN_bw 1
+#define HFT_CSR__NET__NET_CTRL__RX_EN_reset 0x0
+#define HFT_CSR__NET__NET_CTRL__ACCEPT_BCAST_bm 0x2
+#define HFT_CSR__NET__NET_CTRL__ACCEPT_BCAST_bp 1
+#define HFT_CSR__NET__NET_CTRL__ACCEPT_BCAST_bw 1
+#define HFT_CSR__NET__NET_CTRL__ACCEPT_BCAST_reset 0x0
+
+// reg - hft_csr::NET::LOCAL_MAC_LO
+#define HFT_CSR__NET__LOCAL_MAC_LO__MAC_bm 0xffffffff
+#define HFT_CSR__NET__LOCAL_MAC_LO__MAC_bp 0
+#define HFT_CSR__NET__LOCAL_MAC_LO__MAC_bw 32
+#define HFT_CSR__NET__LOCAL_MAC_LO__MAC_reset 0x0
+
+// reg - hft_csr::NET::LOCAL_MAC_HI
+#define HFT_CSR__NET__LOCAL_MAC_HI__MAC_bm 0xffff
+#define HFT_CSR__NET__LOCAL_MAC_HI__MAC_bp 0
+#define HFT_CSR__NET__LOCAL_MAC_HI__MAC_bw 16
+#define HFT_CSR__NET__LOCAL_MAC_HI__MAC_reset 0x0
+
+// reg - hft_csr::NET::NET_COMMIT
+#define HFT_CSR__NET__NET_COMMIT__COMMIT_bm 0x1
+#define HFT_CSR__NET__NET_COMMIT__COMMIT_bp 0
+#define HFT_CSR__NET__NET_COMMIT__COMMIT_bw 1
+#define HFT_CSR__NET__NET_COMMIT__COMMIT_reset 0x0
+
+// reg - hft_csr::NET::NET_STATUS
+#define HFT_CSR__NET__NET_STATUS__COMMIT_BUSY_bm 0x1
+#define HFT_CSR__NET__NET_STATUS__COMMIT_BUSY_bp 0
+#define HFT_CSR__NET__NET_STATUS__COMMIT_BUSY_bw 1
+
+// reg - hft_csr::NET::FILTER::IP
+#define HFT_CSR__NET__FILTER__IP__IP_bm 0xffffffff
+#define HFT_CSR__NET__FILTER__IP__IP_bp 0
+#define HFT_CSR__NET__FILTER__IP__IP_bw 32
+#define HFT_CSR__NET__FILTER__IP__IP_reset 0x0
+
+// reg - hft_csr::NET::FILTER::PORT_EN
+#define HFT_CSR__NET__FILTER__PORT_EN__PORT_bm 0xffff
+#define HFT_CSR__NET__FILTER__PORT_EN__PORT_bp 0
+#define HFT_CSR__NET__FILTER__PORT_EN__PORT_bw 16
+#define HFT_CSR__NET__FILTER__PORT_EN__PORT_reset 0x0
+#define HFT_CSR__NET__FILTER__PORT_EN__EN_bm 0x10000
+#define HFT_CSR__NET__FILTER__PORT_EN__EN_bp 16
+#define HFT_CSR__NET__FILTER__PORT_EN__EN_bw 1
+#define HFT_CSR__NET__FILTER__PORT_EN__EN_reset 0x0
+
+// regfile - hft_csr::NET::FILTER
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t IP;
+    uint32_t PORT_EN;
+} hft_csr__NET__FILTER_t;
+
+// regfile - hft_csr::NET
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t NET_CTRL;
+    uint32_t LOCAL_MAC_LO;
+    uint32_t LOCAL_MAC_HI;
+    uint32_t NET_COMMIT;
+    uint32_t NET_STATUS;
+    uint8_t RESERVED_14_1f[0xc];
+    hft_csr__NET__FILTER_t FILTER[8];
+} hft_csr__NET_t;
+
+// reg - hft_csr::STATS::STATS_CTRL
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bw 1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_reset 0x0
+
+// reg - hft_csr::STATS::STATS_SEQ
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bm 0xffffffff
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bp 0
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bw 32
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_reset 0x0
+
+// reg - hft_csr::counter64::LO
+#define HFT_CSR__COUNTER64__LO__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64__LO__VALUE_bp 0
+#define HFT_CSR__COUNTER64__LO__VALUE_bw 32
+
+// reg - hft_csr::counter64::HI
+#define HFT_CSR__COUNTER64__HI__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64__HI__VALUE_bp 0
+#define HFT_CSR__COUNTER64__HI__VALUE_bw 32
+
+// regfile - hft_csr::counter64
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t LO;
+    uint32_t HI;
+} hft_csr__counter64_t;
+
+// regfile - hft_csr::STATS
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t STATS_CTRL;
+    uint32_t STATS_SEQ;
+    uint8_t RESERVED_8_f[0x8];
+    hft_csr__counter64_t RX_PKTS;
+    hft_csr__counter64_t RX_BYTES;
+    hft_csr__counter64_t DROP_DISABLED;
+    hft_csr__counter64_t DROP_FCS;
+    hft_csr__counter64_t DROP_MAC;
+    hft_csr__counter64_t DROP_ETHERTYPE;
+    hft_csr__counter64_t DROP_IP_HDR;
+    hft_csr__counter64_t DROP_FRAG;
+    hft_csr__counter64_t DROP_PROTO;
+    hft_csr__counter64_t DROP_FILTER;
+    hft_csr__counter64_t DROP_LEN;
+} hft_csr__STATS_t;
+
 // addrmap - hft_csr
 typedef struct __attribute__ ((__packed__)) {
     hft_csr__GLOBAL_t GLOBAL;
+    uint8_t RESERVED_c_ff[0xf4];
+    hft_csr__NET_t NET;
+    uint8_t RESERVED_160_3ff[0x2a0];
+    hft_csr__STATS_t STATS;
 } hft_csr_t;
 
 
-static_assert(sizeof(hft_csr_t) == 0xc, "Packing error");
+static_assert(sizeof(hft_csr_t) == 0x468, "Packing error");
 
 #ifdef __cplusplus
 }

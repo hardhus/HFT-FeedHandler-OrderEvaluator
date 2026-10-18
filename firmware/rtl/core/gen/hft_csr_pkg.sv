@@ -5,5 +5,154 @@ package hft_csr_pkg;
 
     localparam HFT_CSR_DATA_WIDTH = 32;
     localparam HFT_CSR_MIN_ADDR_WIDTH = 16;
-    localparam HFT_CSR_SIZE = 'hc;
+    localparam HFT_CSR_SIZE = 'h468;
+
+    typedef struct {
+        logic next;
+    } hft_csr__NET__NET_STATUS__commit_busy__in_t;
+
+    typedef struct {
+        hft_csr__NET__NET_STATUS__commit_busy__in_t commit_busy;
+    } hft_csr__NET__NET_STATUS__in_t;
+
+    typedef struct {
+        hft_csr__NET__NET_STATUS__in_t NET_STATUS;
+    } hft_csr__NET__in_t;
+
+    typedef struct {
+        logic incr;
+    } hft_csr__STATS__STATS_SEQ__seq__in_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_SEQ__seq__in_t seq;
+    } hft_csr__STATS__STATS_SEQ__in_t;
+
+    typedef struct {
+        logic [31:0] next;
+    } hft_csr__counter64__LO__value__in_t;
+
+    typedef struct {
+        hft_csr__counter64__LO__value__in_t value;
+    } hft_csr__counter64__LO__in_t;
+
+    typedef struct {
+        logic [31:0] next;
+    } hft_csr__counter64__HI__value__in_t;
+
+    typedef struct {
+        hft_csr__counter64__HI__value__in_t value;
+    } hft_csr__counter64__HI__in_t;
+
+    typedef struct {
+        hft_csr__counter64__LO__in_t LO;
+        hft_csr__counter64__HI__in_t HI;
+    } hft_csr__counter64__in_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_SEQ__in_t STATS_SEQ;
+        hft_csr__counter64__in_t RX_PKTS;
+        hft_csr__counter64__in_t RX_BYTES;
+        hft_csr__counter64__in_t DROP_DISABLED;
+        hft_csr__counter64__in_t DROP_FCS;
+        hft_csr__counter64__in_t DROP_MAC;
+        hft_csr__counter64__in_t DROP_ETHERTYPE;
+        hft_csr__counter64__in_t DROP_IP_HDR;
+        hft_csr__counter64__in_t DROP_FRAG;
+        hft_csr__counter64__in_t DROP_PROTO;
+        hft_csr__counter64__in_t DROP_FILTER;
+        hft_csr__counter64__in_t DROP_LEN;
+    } hft_csr__STATS__in_t;
+
+    typedef struct {
+        hft_csr__NET__in_t NET;
+        hft_csr__STATS__in_t STATS;
+    } hft_csr__in_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__NET__NET_CTRL__rx_en__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__NET__NET_CTRL__accept_bcast__out_t;
+
+    typedef struct {
+        hft_csr__NET__NET_CTRL__rx_en__out_t rx_en;
+        hft_csr__NET__NET_CTRL__accept_bcast__out_t accept_bcast;
+    } hft_csr__NET__NET_CTRL__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__NET__LOCAL_MAC_LO__mac__out_t;
+
+    typedef struct {
+        hft_csr__NET__LOCAL_MAC_LO__mac__out_t mac;
+    } hft_csr__NET__LOCAL_MAC_LO__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__NET__LOCAL_MAC_HI__mac__out_t;
+
+    typedef struct {
+        hft_csr__NET__LOCAL_MAC_HI__mac__out_t mac;
+    } hft_csr__NET__LOCAL_MAC_HI__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__NET__NET_COMMIT__commit__out_t;
+
+    typedef struct {
+        hft_csr__NET__NET_COMMIT__commit__out_t commit;
+    } hft_csr__NET__NET_COMMIT__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__NET__FILTER__IP__ip__out_t;
+
+    typedef struct {
+        hft_csr__NET__FILTER__IP__ip__out_t ip;
+    } hft_csr__NET__FILTER__IP__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__NET__FILTER__PORT_EN__port__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__NET__FILTER__PORT_EN__en__out_t;
+
+    typedef struct {
+        hft_csr__NET__FILTER__PORT_EN__port__out_t port;
+        hft_csr__NET__FILTER__PORT_EN__en__out_t en;
+    } hft_csr__NET__FILTER__PORT_EN__out_t;
+
+    typedef struct {
+        hft_csr__NET__FILTER__IP__out_t IP;
+        hft_csr__NET__FILTER__PORT_EN__out_t PORT_EN;
+    } hft_csr__NET__FILTER__out_t;
+
+    typedef struct {
+        hft_csr__NET__NET_CTRL__out_t NET_CTRL;
+        hft_csr__NET__LOCAL_MAC_LO__out_t LOCAL_MAC_LO;
+        hft_csr__NET__LOCAL_MAC_HI__out_t LOCAL_MAC_HI;
+        hft_csr__NET__NET_COMMIT__out_t NET_COMMIT;
+        hft_csr__NET__FILTER__out_t FILTER[8];
+    } hft_csr__NET__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__STATS__STATS_CTRL__snapshot__out_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_CTRL__snapshot__out_t snapshot;
+    } hft_csr__STATS__STATS_CTRL__out_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_CTRL__out_t STATS_CTRL;
+    } hft_csr__STATS__out_t;
+
+    typedef struct {
+        hft_csr__NET__out_t NET;
+        hft_csr__STATS__out_t STATS;
+    } hft_csr__out_t;
 endpackage
