@@ -68,8 +68,24 @@ AXIS_VIOLATIONS = {
     "a_last_keep": (2, "tlast beat with empty tkeep"),
 }
 
+AXIL_TB = ["firmware/tb/sva/axil_props.sv", "firmware/tb/sv/tb_axil_props.sv"]
+AXIL_VIOLATIONS = {
+    "a_aw_stable": (1, "AW changed or AWVALID dropped before AWREADY"),
+    "a_w_stable": (2, "W changed or WVALID dropped before WREADY"),
+    "a_ar_stable": (3, "AR changed or ARVALID dropped before ARREADY"),
+    "a_b_stable": (4, "BRESP changed or BVALID dropped before BREADY"),
+    "a_r_stable": (5, "R changed or RVALID dropped before RREADY"),
+    "a_b_count": (6, "BVALID without an accepted write that has no response yet"),
+    "a_r_count": (7, "RVALID without an accepted read that has no response yet"),
+}
+CHECKERS = {
+    "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
+    "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
+    "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
+}
 
-@pytest.mark.parametrize("top, tb", [("tb_fifo_props", FIFO_TB), ("tb_axis_props", AXIS_TB)], ids=["fifo", "axis"])
+
+@pytest.mark.parametrize("top, tb", [(t, tb) for t, tb, _ in CHECKERS.values()], ids=list(CHECKERS))
 def test_checker_quiet_on_legal_traffic(top, tb):
     """Legal traffic that hits every property's antecedent fires nothing."""
     run_svtb(top=top, filelists=[], tb_files=tb)
@@ -77,8 +93,7 @@ def test_checker_quiet_on_legal_traffic(top, tb):
 
 @pytest.mark.parametrize(
     "top, tb, table, prop",
-    [("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS, p) for p in FIFO_VIOLATIONS]
-    + [("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS, p) for p in AXIS_VIOLATIONS],
+    [(top, tb, table, p) for top, tb, table in CHECKERS.values() for p in table],
     ids=lambda x: x if isinstance(x, str) and x.startswith("a_") else "",
 )
 def test_checker_fires(top, tb, table, prop, capsys):

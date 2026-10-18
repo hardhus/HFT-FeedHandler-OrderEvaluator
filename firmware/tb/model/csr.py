@@ -30,6 +30,7 @@ class Field:
     sw_read: bool
     sw_write: bool
     hw_write: bool  # hardware changes the value: hw=w/rw, counter, hwset/hwclr
+    hw_read: bool  # the value is a hwif output
     singlepulse: bool
     reset: int | None  # None: no reset (a hardware-driven wire)
     desc: str | None
@@ -74,6 +75,7 @@ def _field(node: FieldNode) -> Field:
         sw_read=node.is_sw_readable,
         sw_write=node.is_sw_writable,
         hw_write=hw_write,
+        hw_read=node.is_hw_readable,
         singlepulse=bool(node.get_property("singlepulse")),
         reset=reset if isinstance(reset, int) else None,
         desc=node.get_property("desc"),
