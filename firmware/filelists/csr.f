@@ -4,3 +4,4 @@
 ../rtl/core/gen/hft_csr_pkg.sv
 ../rtl/core/gen/hft_csr.sv
 ../rtl/core/rx_stats.sv
+../rtl/core/hft_csr_wrap.sv
