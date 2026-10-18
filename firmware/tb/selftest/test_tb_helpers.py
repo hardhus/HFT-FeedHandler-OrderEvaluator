@@ -171,7 +171,9 @@ def test_run_problems_catches_silent_passes(tmp_path):
 
 
 def _unit_modules():
-    return sorted((REPO / "firmware" / "tb" / "unit").glob("test_*.py"))
+    """cocotb test modules: unit tests and system tests."""
+    tb = REPO / "firmware" / "tb"
+    return sorted([*(tb / "unit").glob("test_*.py"), *(tb / "system").glob("test_*.py")])
 
 
 def test_every_tc_is_a_cocotb_test():
