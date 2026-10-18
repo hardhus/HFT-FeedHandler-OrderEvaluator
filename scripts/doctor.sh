@@ -35,6 +35,11 @@ if [[ -f pyproject.toml ]]; then
   else
     bad "cocotb not importable (run: just setup)"
   fi
+  if rv=$(uv run --frozen python -c 'from importlib.metadata import version as v; print(v("peakrdl-regblock"))' 2>/dev/null); then
+    ok "peakrdl-regblock $rv (just gen)"
+  else
+    bad "PeakRDL not importable (run: just setup)"
+  fi
 else
   info "pyproject.toml not present yet; skipping Python checks"
 fi

@@ -10,7 +10,17 @@ from common.clocks import PROFILES, profile
 from common.coverage import REPORT, Coverage
 from common.filelist import read_filelist
 from common.junit import tidy_junit
-from common.runner import FILELISTS, REPO, build_key, env_dir_name, failure_lines, run_problems, sim_filelists
+from common.runner import (
+    FILELISTS,
+    REPO,
+    WAIVERS,
+    build_key,
+    env_dir_name,
+    failure_lines,
+    run_problems,
+    sim_filelists,
+    sources_for,
+)
 from common.scoreboard import Scoreboard
 
 
@@ -80,6 +90,17 @@ def test_sim_filelists_adds_sva_partners():
     assert sim_filelists(["common.f", "core.f"], sva=True) == ["common.f", "core.f", "sva.f", "sva_core.f"]
     assert sim_filelists(["common.f"], sva=True) == ["common.f", "sva.f"], "F1 builds must not see sva_core.f"
     assert sim_filelists(["common.f", "core.f"], sva=False) == ["common.f", "core.f"]
+    assert sim_filelists(["common.f", "core.f", "csr.f"], sva=True) == [
+        "common.f", "core.f", "csr.f", "sva.f", "sva_core.f", "sva_csr.f"
+    ]  # fmt: skip
+
+
+def test_waivers_only_in_builds_with_generated_rtl():
+    """Generated RTL (csr.f) builds get the Verilator waiver file; F1/F2 builds do not, so a new
+    waiver does not rebuild them."""
+    csr = sources_for(["common.f", "core.f", "csr.f"])
+    assert csr[0] == WAIVERS and csr.count(WAIVERS) == 1
+    assert WAIVERS not in sources_for(["common.f", "core.f"])
 
 
 def test_coverage_empty_required_bin_fails(tmp_path):
@@ -179,11 +200,13 @@ def test_every_rtl_and_sva_file_is_listed_once():
     """An RTL or SVA file outside every filelist is neither linted nor simulated."""
     fw = REPO / "firmware"
     listed: dict[Path, list[str]] = {}
-    for name in ("common.f", "core.f", "xilinx.f", "synth_ooc.f", "synth_ooc_core.f", "sva.f", "sva_core.f"):
+    lists = ("common.f", "core.f", "csr.f", "system.f", "xilinx.f", "synth_ooc.f", "synth_ooc_core.f",
+             "synth_ooc_csr.f", "sva.f", "sva_core.f", "sva_csr.f")  # fmt: skip
+    for name in lists:
         for path in read_filelist(FILELISTS / name):
             listed.setdefault(path, []).append(name)
     files = [p.resolve() for area in ("common", "core", "platform") for p in (fw / "rtl" / area).rglob("*.sv")]
-    files += [p.resolve() for p in (fw / "tb" / "sva").glob("*.sv")]
+    files += [p.resolve() for d in ("sva", "system") for p in (fw / "tb" / d).glob("*.sv")]
     unlisted = [str(p.relative_to(REPO)) for p in files if p not in listed]
     twice = {str(p.relative_to(REPO)): lists for p, lists in listed.items() if len(lists) > 1}
     assert not unlisted, f"not in any filelist: {unlisted}"

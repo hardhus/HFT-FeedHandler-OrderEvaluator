@@ -32,10 +32,12 @@ setup:
 doctor:
     bash scripts/doctor.sh
 
-# SystemVerilog files under the style gate, one per line: KIND PATH. KIND is
-# rtl (Verilator top = file name, -F common.f), core (+ core.f), ooc (+ synth_ooc.f),
-# ooc_core (+ core.f and synth_ooc_core.f) or style (Verible only: XPM wrappers that Verilator
-# cannot compile, SVA checkers and self-checking SV testbenches).
+# SystemVerilog files under the lint gate, one per line: KIND PATH. KIND is
+# rtl (Verilator top = file name, -F common.f), core (+ core.f), csr (+ core.f and csr.f),
+# gen (as csr, but generated: Verilator only, no Verible style/format), system (+ system.f),
+# ooc (+ synth_ooc.f), ooc_core (+ core.f and synth_ooc_core.f), ooc_csr (+ core.f, csr.f and
+# synth_ooc_csr.f) or style (Verible only: XPM wrappers that Verilator cannot compile, SVA
+# checkers and self-checking SV testbenches).
 [private]
 [script("bash")]
 [unix]
@@ -49,9 +51,12 @@ sv-files:
     }
     files_of common.f | sed 's/^/rtl /'
     files_of core.f | sed 's/^/core /'
+    files_of csr.f | sed -E 's|^(.*/gen/.*)$|gen \1|; t; s/^/csr /'
+    files_of system.f | sed 's/^/system /'
     files_of synth_ooc.f | sed 's/^/ooc /'
     files_of synth_ooc_core.f | sed 's/^/ooc_core /'
-    { files_of xilinx.f; files_of sva.f; files_of sva_core.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
+    files_of synth_ooc_csr.f | sed 's/^/ooc_csr /'
+    { files_of xilinx.f; files_of sva.f; files_of sva_core.f; files_of sva_csr.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
 
 # Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check
 [script("bash")]
@@ -62,15 +67,18 @@ lint:
     srcs=()
     list=$(just sv-files) || { echo "lint: just sv-files failed"; exit 1; }
     while read -r kind f; do
-      srcs+=("$f")
+      [ "$kind" = gen ] || srcs+=("$f")   # generated files: Verilator only (never restyled by hand)
       [ "$kind" = style ] && continue
       case "$f" in *_pkg.sv) continue ;; esac   # packages are linted through their users (no module top)
       top=$(basename "$f" .sv)
       lists=(-F firmware/filelists/common.f)
       case "$kind" in
         core)     lists+=(-F firmware/filelists/core.f) ;;
+        csr|gen)  lists+=(-F firmware/filelists/core.f -F firmware/filelists/csr.f) ;;
+        system)   lists+=(-F firmware/filelists/core.f -F firmware/filelists/csr.f -F firmware/filelists/system.f) ;;
         ooc)      lists+=(-F firmware/filelists/synth_ooc.f) ;;
         ooc_core) lists+=(-F firmware/filelists/core.f -F firmware/filelists/synth_ooc_core.f) ;;
+        ooc_csr)  lists+=(-F firmware/filelists/core.f -F firmware/filelists/csr.f -F firmware/filelists/synth_ooc_csr.f) ;;
       esac
       echo "== verilator $top"
       verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
@@ -126,9 +134,29 @@ fmt:
       verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "$f"
     done
 
-# doctor + lint + test
+# Regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl (PeakRDL)
 [unix]
-ci: doctor lint test
+gen:
+    bash scripts/gen_csr.sh
+
+# Fail if the committed generated files differ from a fresh `just gen` (edited RDL without
+# gen, or a hand-edited generated file)
+[script("bash")]
+[unix]
+gen-check:
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    bash scripts/gen_csr.sh "$tmp"
+    fail=0
+    for d in firmware/rtl/core/gen software/include/gen firmware/rdl/hft_csr.md; do
+      diff -r "$tmp/$d" "$d" || fail=1
+    done
+    [ $fail = 0 ] && echo "gen-check: generated files are up to date" || { echo "gen-check: FAILED (run: just gen)"; exit 1; }
+
+# doctor + gen-check + lint + test
+[unix]
+ci: doctor gen-check lint test
 
 # ---------- Windows: forward Linux recipes to WSL ----------
 
@@ -172,16 +200,20 @@ waves NAME:
 fmt:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just fmt"
 
-# doctor + lint + test in WSL
+# Regenerate the CSR outputs in WSL (PeakRDL)
+[windows]
+gen:
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just gen"
+
+# Check the committed generated files in WSL
+[windows]
+gen-check:
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just gen-check"
+
+# doctor + gen-check + lint + test in WSL
 [windows]
 ci:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just ci"
-
-# ---------- Everywhere ----------
-
-# CSR generation arrives in F5 (PeakRDL).
-gen:
-    @echo "gen: nothing to generate yet (F5)"
 
 # ---------- Vivado (Windows, or Linux with vivado on PATH) ----------
 

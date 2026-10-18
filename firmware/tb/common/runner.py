@@ -42,7 +42,13 @@ STAMP = ".hft-build-ok"
 
 # SVA filelists that belong to an RTL filelist; added with sva=True (09 §2.10). Keeping them
 # out of sva.f means a change to core assertions does not rebuild the common-block tests.
-SVA_FOR = {"core.f": "sva_core.f"}
+SVA_FOR = {"core.f": "sva_core.f", "csr.f": "sva_csr.f"}
+
+# Verilator waiver files a filelist needs: generated RTL (csr.f, PeakRDL) has waived lint
+# warnings that -Wall would otherwise turn into build errors. Only the builds that compile
+# generated code get the file, so a new waiver does not rebuild the F1/F2 tests.
+WAIVERS = REPO / "firmware" / "lint" / "waivers.vlt"
+WAIVERS_FOR = {"csr.f": WAIVERS}
 
 
 # Rough peak memory of one simulator build job (C++ compiler) plus its share of the
@@ -112,7 +118,10 @@ def run_seed() -> int:
 
 
 def sources_for(filelists: Iterable[str]) -> list[Path]:
-    return [p for f in filelists for p in read_filelist(FILELISTS / f)]
+    """Sources of a build: the waiver files the lists need (first), then every listed file."""
+    filelists = list(filelists)
+    waivers = list(dict.fromkeys(WAIVERS_FOR[f] for f in filelists if f in WAIVERS_FOR))
+    return waivers + [p for f in filelists for p in read_filelist(FILELISTS / f)]
 
 
 def sim_filelists(filelists: list[str], sva: bool) -> list[str]:

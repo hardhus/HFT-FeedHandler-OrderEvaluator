@@ -1,2 +1,16 @@
 `verilator_config
 // Project-wide Verilator lint waivers. Every waiver needs a one-line reason.
+
+// Generated CSR block (firmware/rtl/core/gen, PeakRDL-regblock): waived per rule and message,
+// never edited by hand. Each waiver names what the generator emits and why it is harmless.
+// AXI4-Lite AxPROT is part of the port list; the register block grants every access.
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_?rprot'"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
+// Registers are 32-bit aligned: the two byte-address bits are not decoded.
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
+// Map constants for users of the package; a build need not use all of them.
+lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_csr_pkg.sv" -match "*Parameter is not used: 'HFT_CSR_*'"
+
+// hft_pkg holds the constants of several core blocks; a top that uses some of them (the CSR
+// block, rx_stats) need not use all. Parameters only: an unused signal is still an error.
+lint_off -rule UNUSEDPARAM -file "*/rtl/core/hft_pkg.sv"

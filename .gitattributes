@@ -3,3 +3,7 @@
 *.bat text eol=crlf
 *.png binary
 *.pdf binary
+# Generated from firmware/rdl/hft_csr.rdl by `just gen` (checked by `just gen-check`)
+firmware/rtl/core/gen/** linguist-generated=true
+software/include/gen/** linguist-generated=true
+firmware/rdl/hft_csr.md linguist-generated=true

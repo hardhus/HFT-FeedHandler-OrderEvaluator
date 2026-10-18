@@ -1,0 +1,8 @@
+# PeakRDL options shared by every generator (scripts/gen_csr.sh passes this file).
+[regblock]
+# Active-high synchronous reset, as in all project RTL.
+default_reset = "rst"
+# SLVERR for unmapped addresses, writes to read-only and reads from write-only registers
+# (no side effect).
+err_if_bad_addr = true
+err_if_bad_rw = true

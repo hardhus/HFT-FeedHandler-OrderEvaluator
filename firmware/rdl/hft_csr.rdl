@@ -1,0 +1,44 @@
+// HFT CSR map: the single source of the host register interface (SystemRDL 2.0).
+// Generated from this file (just gen, checked by just gen-check), never edited by hand:
+//   firmware/rtl/core/gen/hft_csr.sv, hft_csr_pkg.sv  (PeakRDL-regblock, AXI4-Lite)
+//   software/include/gen/hft_csr.h                    (PeakRDL-cheader)
+//   firmware/rdl/hft_csr.md                           (PeakRDL-markdown)
+// Blocks are regfiles (a nested addrmap would be an external block in regblock).
+// Only blocks with a user in RTL are defined; the other ranges of the 64 KiB window are
+// reserved for their phases and answer SLVERR.
+
+addrmap hft_csr {
+    name = "HFT FeedHandler CSR";
+    desc = "Host register map. 32-bit registers, 64 KiB window, SLVERR on unmapped addresses and illegal accesses.";
+    default regwidth = 32;
+    default accesswidth = 32;
+
+    regfile {
+        name = "Global";
+        desc = "Identification and a scratch register.";
+
+        reg {
+            name = "Identification";
+            field {
+                desc = "Constant \"HFT1\" (0x48465431): the right device is mapped.";
+                sw = r; hw = na;
+            } id[31:0] = 32'h4846_5431;
+        } ID @ 0x0;
+
+        reg {
+            name = "Register map version";
+            field {
+                desc = "Major.minor of this map: 0x0005_0000 is the F5 map. Software checks it before use.";
+                sw = r; hw = na;
+            } version[31:0] = 32'h0005_0000;
+        } VERSION @ 0x4;
+
+        reg {
+            name = "Scratch";
+            field {
+                desc = "Read/write, no hardware effect: bus read-back test.";
+                sw = rw; hw = na;
+            } value[31:0] = 32'h0;
+        } SCRATCH @ 0x8;
+    } GLOBAL @ 0x0000;
+};
