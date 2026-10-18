@@ -1,5 +1,5 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
-// Clock domain : host_clk (s_axil_*, hft_csr), net_clk (cfg_*)
+// Clock domain : host_clk (s_axil_*, hft_csr), net_clk (cfg_*, stat_*, rx_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
 //                commit buffer and requests one cdc_handshake transfer; the receiver's cfg_* then
 //                change together in one net_clk cycle (eth_ip_udp_rx samples them per frame).
@@ -11,6 +11,16 @@
 // Latency      : NET_COMMIT pulse -> handshake acceptance 2 host_clk edges (handshake free);
 //                acceptance -> cfg_* changed STAGES+1 net_clk edges (+1 with CDC jitter): cfg_* are
 //                the handshake's destination register, no extra stage
+// Snapshot     : a STATS_CTRL.snapshot pulse sends a request to the net domain (cdc_handshake); there
+//                the live rx_stats counters are handed to a second cdc_handshake, whose acceptance
+//                edge takes all of them in one net_clk cycle (an event sampled on that edge is in
+//                the next snapshot). When they land in host_clk, STATS_SEQ increments and the STATS
+//                counter registers read them (no copy: the destination register holds them until
+//                the next snapshot). Requests while one is in flight coalesce; none is lost: a
+//                snapshot taken after the last request always lands. Counters read 0 until the
+//                first snapshot.
+// Latency      : snapshot pulse -> request accepted 1 host_clk edge; request at net (dst_valid) ->
+//                counters taken 1 net_clk edge (handshakes free)
 // Reset        : host_rst and net_rst asserted together (one source, one reset_sync per domain,
 //                cdc_handshake contract). After reset cfg_rx_en = 0; the other cfg_* are undefined
 //                until the first commit (the receiver drops every frame while rx_en = 0).
@@ -51,7 +61,11 @@ module hft_csr_wrap
     output logic                       cfg_accept_bcast,
     output logic [N_FILTERS-1:0][31:0] cfg_filter_ip,
     output logic [N_FILTERS-1:0][15:0] cfg_filter_port,
-    output logic [N_FILTERS-1:0]       cfg_filter_en
+    output logic [N_FILTERS-1:0]       cfg_filter_en,
+
+    input logic              stat_valid,
+    input rx_reason_e        stat_reason,
+    input logic       [15:0] stat_bytes
 );
   // One NET configuration as it crosses the clock domains.
   typedef struct packed {
@@ -134,19 +148,111 @@ module hft_csr_wrap
   // must not see 0 before the request is pending.
   assign hwif_in.NET.NET_STATUS.commit_busy.next = commit || commit_pending_q || !cfg_src_ready;
 
-  // ---- statistics: snapshot path arrives in the next step (S5) ----
-  assign hwif_in.STATS.STATS_SEQ.seq.incr        = 1'b0;
-  assign hwif_in.STATS.RX_PKTS                   = '{default: '0};
-  assign hwif_in.STATS.RX_BYTES                  = '{default: '0};
-  assign hwif_in.STATS.DROP_DISABLED             = '{default: '0};
-  assign hwif_in.STATS.DROP_FCS                  = '{default: '0};
-  assign hwif_in.STATS.DROP_MAC                  = '{default: '0};
-  assign hwif_in.STATS.DROP_ETHERTYPE            = '{default: '0};
-  assign hwif_in.STATS.DROP_IP_HDR               = '{default: '0};
-  assign hwif_in.STATS.DROP_FRAG                 = '{default: '0};
-  assign hwif_in.STATS.DROP_PROTO                = '{default: '0};
-  assign hwif_in.STATS.DROP_FILTER               = '{default: '0};
-  assign hwif_in.STATS.DROP_LEN                  = '{default: '0};
+  // ---- statistics snapshot ----
+  localparam int unsigned CNT_W = 64;
+
+  logic snap, snap_pending_q, snap_req_ready, snap_req_net, snap_net_pending_q, snap_data_ready;
+  logic snap_req_valid, snap_req_word, snap_landed, snap_loaded_q;
+  logic [RX_N_CNT-1:0][CNT_W-1:0] cnt, snap_dst, snap_cnt;
+
+  // Level-sensitive like NET_COMMIT (regblock may hold the pulse one more cycle).
+  assign snap = hwif_out.STATS.STATS_CTRL.snapshot.value;
+
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      snap_pending_q <= 1'b0;
+    end else begin
+      snap_pending_q <= (snap || snap_pending_q) && !snap_req_ready;
+    end
+  end
+
+  // The request word is a constant 1; ANDing it with dst_valid gives the port a user (synthesis
+  // removes it).
+  cdc_handshake #(
+      .WIDTH (1),
+      .STAGES(STAGES)
+  ) u_snap_req_cdc (
+      .src_clk  (host_clk),
+      .src_rst  (host_rst),
+      .src_data (1'b1),
+      .src_valid(snap || snap_pending_q),
+      .src_ready(snap_req_ready),
+      .dst_clk  (net_clk),
+      .dst_rst  (net_rst),
+      .dst_data (snap_req_word),
+      .dst_valid(snap_req_valid)
+  );
+  assign snap_req_net = snap_req_valid && snap_req_word;
+
+  rx_stats #(
+      .CNT_W(CNT_W)
+  ) u_rx_stats (
+      .clk        (net_clk),
+      .rst        (net_rst),
+      .stat_valid (stat_valid),
+      .stat_reason(stat_reason),
+      .stat_bytes (stat_bytes),
+      .cnt        (cnt)
+  );
+
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      snap_net_pending_q <= 1'b0;
+    end else begin
+      snap_net_pending_q <= (snap_req_net || snap_net_pending_q) && !snap_data_ready;
+    end
+  end
+
+  // The acceptance edge of this handshake is the snapshot: its source register samples cnt.
+  cdc_handshake #(
+      .WIDTH ($bits(cnt)),
+      .STAGES(STAGES)
+  ) u_snap_cdc (
+      .src_clk  (net_clk),
+      .src_rst  (net_rst),
+      .src_data (cnt),
+      .src_valid(snap_req_net || snap_net_pending_q),
+      .src_ready(snap_data_ready),
+      .dst_clk  (host_clk),
+      .dst_rst  (host_rst),
+      .dst_data (snap_dst),
+      .dst_valid(snap_landed)
+  );
+
+  // snap_dst has no reset: 0 until the first snapshot lands (and in its landing cycle already the
+  // new values, like STATS_SEQ).
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      snap_loaded_q <= 1'b0;
+    end else if (snap_landed) begin
+      snap_loaded_q <= 1'b1;
+    end
+  end
+
+  assign snap_cnt = (snap_loaded_q || snap_landed) ? snap_dst : '0;
+  assign hwif_in.STATS.STATS_SEQ.seq.incr = snap_landed;
+  assign hwif_in.STATS.RX_PKTS.LO.value.next = snap_cnt[RX_CNT_PKTS][31:0];
+  assign hwif_in.STATS.RX_PKTS.HI.value.next = snap_cnt[RX_CNT_PKTS][63:32];
+  assign hwif_in.STATS.RX_BYTES.LO.value.next = snap_cnt[RX_CNT_BYTES][31:0];
+  assign hwif_in.STATS.RX_BYTES.HI.value.next = snap_cnt[RX_CNT_BYTES][63:32];
+  assign hwif_in.STATS.DROP_DISABLED.LO.value.next = snap_cnt[1+RX_DROP_DISABLED][31:0];
+  assign hwif_in.STATS.DROP_DISABLED.HI.value.next = snap_cnt[1+RX_DROP_DISABLED][63:32];
+  assign hwif_in.STATS.DROP_FCS.LO.value.next = snap_cnt[1+RX_DROP_FCS][31:0];
+  assign hwif_in.STATS.DROP_FCS.HI.value.next = snap_cnt[1+RX_DROP_FCS][63:32];
+  assign hwif_in.STATS.DROP_MAC.LO.value.next = snap_cnt[1+RX_DROP_MAC][31:0];
+  assign hwif_in.STATS.DROP_MAC.HI.value.next = snap_cnt[1+RX_DROP_MAC][63:32];
+  assign hwif_in.STATS.DROP_ETHERTYPE.LO.value.next = snap_cnt[1+RX_DROP_ETHERTYPE][31:0];
+  assign hwif_in.STATS.DROP_ETHERTYPE.HI.value.next = snap_cnt[1+RX_DROP_ETHERTYPE][63:32];
+  assign hwif_in.STATS.DROP_IP_HDR.LO.value.next = snap_cnt[1+RX_DROP_IP_HDR][31:0];
+  assign hwif_in.STATS.DROP_IP_HDR.HI.value.next = snap_cnt[1+RX_DROP_IP_HDR][63:32];
+  assign hwif_in.STATS.DROP_FRAG.LO.value.next = snap_cnt[1+RX_DROP_FRAG][31:0];
+  assign hwif_in.STATS.DROP_FRAG.HI.value.next = snap_cnt[1+RX_DROP_FRAG][63:32];
+  assign hwif_in.STATS.DROP_PROTO.LO.value.next = snap_cnt[1+RX_DROP_PROTO][31:0];
+  assign hwif_in.STATS.DROP_PROTO.HI.value.next = snap_cnt[1+RX_DROP_PROTO][63:32];
+  assign hwif_in.STATS.DROP_FILTER.LO.value.next = snap_cnt[1+RX_DROP_FILTER][31:0];
+  assign hwif_in.STATS.DROP_FILTER.HI.value.next = snap_cnt[1+RX_DROP_FILTER][63:32];
+  assign hwif_in.STATS.DROP_LEN.LO.value.next = snap_cnt[1+RX_DROP_LEN][31:0];
+  assign hwif_in.STATS.DROP_LEN.HI.value.next = snap_cnt[1+RX_DROP_LEN][63:32];
 
   // ---- host -> net ----
   net_cfg_t cfg_dst;
