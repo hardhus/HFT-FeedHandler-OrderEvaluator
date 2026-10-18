@@ -11,6 +11,9 @@ distro := env("HFT_WSL_DISTRO", "Debian")
 vivado := env("VIVADO", "vivado")
 build := if env("HFT_BUILD_DIR", "") == "" { root / "build" } else { env("HFT_BUILD_DIR") }
 fpga_part := "xc7a100tcsg324-1"
+# Reference part of the F5 timing gate (audit 10 §2.13): Kintex UltraScale+, the class of a real
+# 10G + PCIe Gen3 x8 card. Needs the Kintex UltraScale+ device files in the Vivado install.
+ref_part := "xcku5p-ffvb676-2-e"
 
 # Linux: prepend the pinned toolchain. Windows: PATH untouched.
 
@@ -227,7 +230,34 @@ vivado-project PART=fpga_part:
 # OOC synthesis + CDC constraints + timing/report_cdc gate. ARGS: extra filelists or NAME:VALUE generics
 [windows]
 synth-ooc TOP PROFILE="net2host" *ARGS:
-    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ fpga_part }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+    just synth-ooc-on {{ fpga_part }} {{ TOP }} {{ PROFILE }} {{ ARGS }}
+
+# synth-ooc on a given part (e.g. the reference part: just synth-ooc-on xcku5p-ffvb676-2-e ...)
+[windows]
+synth-ooc-on PART TOP PROFILE="net2host" *ARGS:
+    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+
+# F5 gate: hft_csr_wrap placed and routed on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz)
+[windows]
+[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[extension(".ps1")]
+synth-csr:
+    $csr = @("core.f", "csr.f", "synth_ooc_csr.f")
+    $runs = @(
+      @("gate", "{{ ref_part }}", "hft_csr_wrap_ooc", "net2host", ($csr + "impl")),
+      @("gate", "{{ fpga_part }}", "hft_csr_wrap_ooc", "net2host125", ($csr + "impl")),
+      @("info", "{{ fpga_part }}", "hft_csr_wrap_ooc", "net2host", $csr),
+      @("info", "{{ ref_part }}", "eth_ip_udp_rx_ooc", "net2host", @("core.f", "synth_ooc_core.f"))
+    )
+    $bad = 0
+    foreach ($r in $runs) {
+      $out = just synth-ooc-on $r[1] $r[2] $r[3] @($r[4]) 2>&1
+      $rc = $LASTEXITCODE
+      ($out | Select-String "^HFT_SYNTH").Line | ForEach-Object { "$($r[0]): $_" }
+      if ($rc -ne 0 -and $r[0] -eq "gate") { $bad++ }
+    }
+    if ($bad) { Write-Host "synth-csr: $bad gate run(s) FAILED"; exit 1 }
+    Write-Host "synth-csr: gates PASS"
 
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [windows]
@@ -252,7 +282,29 @@ vivado-project PART=fpga_part:
 # OOC synthesis + CDC constraints + timing/report_cdc gate. ARGS: extra filelists or NAME:VALUE generics
 [unix]
 synth-ooc TOP PROFILE="net2host" *ARGS:
-    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ fpga_part }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+    just synth-ooc-on {{ fpga_part }} {{ TOP }} {{ PROFILE }} {{ ARGS }}
+
+# synth-ooc on a given part (e.g. the reference part: just synth-ooc-on xcku5p-ffvb676-2-e ...)
+[unix]
+synth-ooc-on PART TOP PROFILE="net2host" *ARGS:
+    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+
+# F5 gate: hft_csr_wrap placed and routed on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz)
+[script("bash")]
+[unix]
+synth-csr:
+    bad=0
+    run() {  # gate|info PART TOP PROFILE LISTS...
+      local kind=$1; shift
+      out=$(just synth-ooc-on "$@" 2>&1); rc=$?
+      grep '^HFT_SYNTH' <<<"$out" | sed "s/^/$kind: /"
+      [ $rc = 0 ] || [ "$kind" = info ] || bad=$((bad + 1))
+    }
+    run gate {{ ref_part }} hft_csr_wrap_ooc net2host core.f csr.f synth_ooc_csr.f impl
+    run gate {{ fpga_part }} hft_csr_wrap_ooc net2host125 core.f csr.f synth_ooc_csr.f impl
+    run info {{ fpga_part }} hft_csr_wrap_ooc net2host core.f csr.f synth_ooc_csr.f
+    run info {{ ref_part }} eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f
+    [ $bad = 0 ] && echo "synth-csr: gates PASS" || { echo "synth-csr: $bad gate run(s) FAILED"; exit 1; }
 
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [script("bash")]

@@ -12,7 +12,9 @@ peakrdl=(uv run --frozen peakrdl)
 mkdir -p "$out/firmware/rtl/core/gen" "$out/software/include/gen" "$out/firmware/rdl"
 # 16-bit address: the full 64 KiB window of the map, so the port width does not change
 # when blocks are added and every unmapped address in it answers SLVERR.
+# --rt-read-fanin: one register stage inside the read mux (read latency +1 cycle). Without it the
+# read path missed timing after place & route on the A7 at 125 MHz (-0.462 ns, 80 % routing).
 "${peakrdl[@]}" regblock "$rdl" "${cfg[@]}" -o "$out/firmware/rtl/core/gen" \
-  --cpuif axi4-lite-flat --addr-width 16
+  --cpuif axi4-lite-flat --addr-width 16 --rt-read-fanin
 "${peakrdl[@]}" c-header "$rdl" "${cfg[@]}" -o "$out/software/include/gen/hft_csr.h"
 "${peakrdl[@]}" markdown "$rdl" "${cfg[@]}" -o "$out/firmware/rdl/hft_csr.md"

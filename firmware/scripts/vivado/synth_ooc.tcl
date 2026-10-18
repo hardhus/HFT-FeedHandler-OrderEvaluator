@@ -1,21 +1,29 @@
 # Out-of-context synthesis with CDC constraints, timing and CDC gates (non-project mode).
 # Usage: vivado -mode batch -source synth_ooc.tcl -tclargs <top> <part> <profile> <arg...>
+#   part    : FPGA part (e.g. xc7a100tcsg324-1, xcku5p-ffvb676-2-e); the reports and the result line
+#             carry its name, so one top can be gated on several parts
 #   profile : net2host (net/wr/src side 156.25 MHz, host/rd/dst side 250 MHz) | host2net (swapped)
-#   arg     : filelist names in firmware/filelists (e.g. common.f xilinx.f) or
-#             HDL generics NAME:VALUE (e.g. DEPTH_LOG2:5 IMPL:xpm); ':' because Windows .bat
-#             launchers split arguments at '='
-# Reports: build/vivado/ooc/<top>_<profile>[_<generics>]/{utilization,timing_summary,cdc}.rpt
+#             | net2host125 (as net2host with a 125 MHz host: PCIe Gen2 x4 user clock, 128 bit)
+#   arg     : filelist names in firmware/filelists (e.g. common.f xilinx.f), HDL generics
+#             NAME:VALUE (e.g. DEPTH_LOG2:5 IMPL:xpm; ':' because Windows .bat launchers split
+#             arguments at '='), or the flag "impl": also place and route the block out of context
+#             (no board or pins needed) and gate on the routed timing instead of the synthesis
+#             estimate (unplaced wires), which is then printed as SYNTH_WNS
+# Reports: build/vivado/ooc/<top>_<profile>_<part>[_<generics>][_impl]/{utilization,timing_summary,cdc}.rpt
 # Exits 1 if setup/hold slack is negative or report_cdc has Critical/Unsafe findings.
 if {[llength $argv] < 4} {
-  error "usage: -tclargs <top> <part> <net2host|host2net> <filelist|NAME:VALUE...>"
+  error "usage: -tclargs <top> <part> <net2host|host2net|net2host125> <filelist|NAME:VALUE...>"
 }
 set top     [lindex $argv 0]
 set part    [lindex $argv 1]
 set profile [lindex $argv 2]
 set lists   {}
 set generics {}
+set impl 0
 foreach a [lrange $argv 3 end] {
-  if {[string first : $a] >= 0} {
+  if {$a eq "impl"} {
+    set impl 1
+  } elseif {[string first : $a] >= 0} {
     lappend generics $a
   } else {
     lappend lists $a
@@ -23,7 +31,7 @@ foreach a [lrange $argv 3 end] {
 }
 set script_dir [file dirname [file normalize [info script]]]
 set fw [file normalize [file join $script_dir .. ..]]
-set tag [join [concat $top $profile [string map {: ""} $generics]] _]
+set tag [join [concat $top $profile $part [string map {: ""} $generics] [expr {$impl ? "impl" : ""}]] _]
 set out [file normalize [file join $fw .. build vivado ooc $tag]]
 file mkdir $out
 source [file join $script_dir read_f.tcl]
@@ -34,7 +42,8 @@ set host 4.000
 switch $profile {
   net2host { set a $net; set b $host }
   host2net { set a $host; set b $net }
-  default { error "profile must be net2host or host2net" }
+  net2host125 { set host 8.000; set a $net; set b $host }
+  default { error "profile must be net2host, host2net or net2host125" }
 }
 set clock_periods [dict create clk $a wr_clk $a src_clk $a rd_clk $b dst_clk $b \
   clk_net $net net_clk $net clk_host $host host_clk $host clk_pcie 8.000]
@@ -49,7 +58,9 @@ set port_clock {
   {^src_}                              src_clk
   {^dst_}                              dst_clk
   {^(s_axis_|m_axis_|q$|rst_out$)}     clk
-  {^(cfg_|ts_|stat_|m_udp_)}           clk
+  {^(cfg_|ts_|stat_|m_udp_)}           {clk net_clk}
+  {^(s_axil_|host_rst$)}               host_clk
+  {^net_rst$}                          net_clk
   {^rst$}                              {wr_clk clk}
 }
 
@@ -110,6 +121,17 @@ foreach port [get_ports -quiet -filter {DIRECTION != INOUT}] {
 
 source [file join $fw constraints cdc.tcl]
 
+set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
+set synth_wns [get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]]
+if {$impl} {
+  # Out-of-context implementation: the constraints above (clocks, I/O delays, CDC) carry over.
+  opt_design
+  place_design
+  route_design
+  report_route_status -file [file join $out route_status.rpt]
+  set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
+}
+
 report_utilization    -file [file join $out utilization.rpt]
 report_timing_summary -file [file join $out timing_summary.rpt] -max_paths 20
 report_cdc -details   -file [file join $out cdc.rpt]
@@ -124,7 +146,10 @@ if {[llength $unclocked]} {
 if {$hft_cdc_n_unconstrained > 0} {
   lappend fail "cdc.tcl: $hft_cdc_n_unconstrained CDC path(s) could not be constrained"
 }
-set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
+if {$impl} {
+  set unrouted [llength [get_nets -quiet -hier -filter {ROUTE_STATUS == UNROUTED || ROUTE_STATUS == PARTIAL || ROUTE_STATUS == CONFLICTS}]]
+  if {$unrouted > 0} { lappend fail "route_design left $unrouted net(s) unrouted" }
+}
 set wns [get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]]
 set whs [get_property SLACK [get_timing_paths -quiet -max_paths 1 -hold {*}$r2r]]
 if {$wns ne "" && $wns < 0} { lappend fail "setup WNS $wns" }
@@ -162,7 +187,8 @@ set luts [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == LUT || PRI
 set ffs  [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH || PRIMITIVE_GROUP == REGISTER}]]
 set rams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIVE_SUBGROUP == LUTRAM}]]
 set brams [llength [get_cells -quiet -hier -filter {IS_PRIMITIVE && REF_NAME =~ RAMB*}]]
-puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams WNS=$wns WHS=$whs CDC=[join $cdc_summary ,]"
+set timing [expr {$impl ? "WNS=$wns WHS=$whs (routed) SYNTH_WNS=$synth_wns" : "WNS=$wns WHS=$whs"}]
+puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams $timing CDC=[join $cdc_summary ,]"
 if {[llength $fail]} {
   puts "HFT_SYNTH_RESULT: FAIL ($tag) [join $fail {; }] -> $out"
   exit 1

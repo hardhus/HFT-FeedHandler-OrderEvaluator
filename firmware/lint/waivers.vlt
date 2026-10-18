@@ -8,6 +8,10 @@ lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
 // Registers are 32-bit aligned: the two byte-address bits are not decoded.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
+// Read fan-in retiming (--rt-read-fanin): stage 1 groups the read mux by the address high bits,
+// stage 2 selects by the low bits, so each stage uses only its part of the address.
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of function variable are not used: 'addr'*"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'readback_addr_rt'*"
 // The next-state logic and the storage of each field is its own always block that writes one
 // member of the shared field_combo and field_storage structs. Different members, so no real
 // multiple driver. Verilator documents that this warning only costs speed, not correctness.

@@ -47,7 +47,7 @@ module hft_csr (
     logic cpuif_wr_ack;
     logic cpuif_wr_err;
 
-    // Max Outstanding Transactions: 2
+    // Max Outstanding Transactions: 3
     logic [1:0] axil_n_in_flight;
     logic axil_prev_was_rd;
     logic axil_arvalid;
@@ -127,7 +127,7 @@ module hft_csr (
         axil_ar_accept = '0;
         axil_aw_accept = '0;
 
-        if(axil_n_in_flight < 2'd2) begin
+        if(axil_n_in_flight < 2'd3) begin
             // Can safely issue more transactions without overwhelming response buffer
             if(axil_arvalid && !axil_prev_was_rd) begin
                 cpuif_req = '1;
@@ -150,16 +150,21 @@ module hft_csr (
 
 
     // AXI4-Lite Response Logic
-    logic axil_resp_buffer_is_wr[2];
-    logic axil_resp_buffer_err[2];
-    logic [31:0] axil_resp_buffer_rdata[2];
+    logic axil_resp_buffer_is_wr[4];
+    logic axil_resp_buffer_err[4];
+    logic [31:0] axil_resp_buffer_rdata[4];
+    // axil_resp_buffer is intentionally padded to the next power of two despite
+    // only requiring 3 entries.
+    // This is to avoid quirks in some tools that cannot handle indexing into a non-power-of-2 array.
+    // Unused entries are expected to be optimized away
 
-    logic [1:0] axil_resp_wptr;
-    logic [1:0] axil_resp_rptr;
+
+    logic [2:0] axil_resp_wptr;
+    logic [2:0] axil_resp_rptr;
 
     always_ff @(posedge clk) begin
         if(rst) begin
-            for(int i=0; i<2; i++) begin
+            for(int i=0; i<3; i++) begin
                 axil_resp_buffer_is_wr[i] <= '0;
                 axil_resp_buffer_err[i] <= '0;
                 axil_resp_buffer_rdata[i] <= '0;
@@ -170,20 +175,30 @@ module hft_csr (
             // Store responses in buffer until AXI response channel accepts them
             if(cpuif_rd_ack || cpuif_wr_ack) begin
                 if(cpuif_rd_ack) begin
-                    axil_resp_buffer_is_wr[axil_resp_wptr[0:0]] <= '0;
-                    axil_resp_buffer_err[axil_resp_wptr[0:0]] <= cpuif_rd_err;
-                    axil_resp_buffer_rdata[axil_resp_wptr[0:0]] <= cpuif_rd_data;
+                    axil_resp_buffer_is_wr[axil_resp_wptr[1:0]] <= '0;
+                    axil_resp_buffer_err[axil_resp_wptr[1:0]] <= cpuif_rd_err;
+                    axil_resp_buffer_rdata[axil_resp_wptr[1:0]] <= cpuif_rd_data;
 
                 end else if(cpuif_wr_ack) begin
-                    axil_resp_buffer_is_wr[axil_resp_wptr[0:0]] <= '1;
-                    axil_resp_buffer_err[axil_resp_wptr[0:0]] <= cpuif_wr_err;
+                    axil_resp_buffer_is_wr[axil_resp_wptr[1:0]] <= '1;
+                    axil_resp_buffer_err[axil_resp_wptr[1:0]] <= cpuif_wr_err;
                 end
-                axil_resp_wptr <= axil_resp_wptr + 1'b1;
+                if(axil_resp_wptr[1:0] == 2) begin
+                    axil_resp_wptr[1:0] <= '0;
+                    axil_resp_wptr[2] <= ~axil_resp_wptr[2];
+                end else begin
+                    axil_resp_wptr[1:0] <= axil_resp_wptr[1:0] + 1'b1;
+                end
             end
 
             // Advance read pointer when acknowledged
             if(axil_resp_acked) begin
-                axil_resp_rptr <= axil_resp_rptr + 1'b1;
+                if(axil_resp_rptr[1:0] == 2) begin
+                    axil_resp_rptr[1:0] <= '0;
+                    axil_resp_rptr[2] <= ~axil_resp_rptr[2];
+                end else begin
+                    axil_resp_rptr[1:0] <= axil_resp_rptr[1:0] + 1'b1;
+                end
             end
         end
     end
@@ -193,7 +208,7 @@ module hft_csr (
         s_axil_bvalid = '0;
         s_axil_rvalid = '0;
         if(axil_resp_rptr != axil_resp_wptr) begin
-            if(axil_resp_buffer_is_wr[axil_resp_rptr[0:0]]) begin
+            if(axil_resp_buffer_is_wr[axil_resp_rptr[1:0]]) begin
                 s_axil_bvalid = '1;
                 if(s_axil_bready) axil_resp_acked = '1;
             end else begin
@@ -202,8 +217,8 @@ module hft_csr (
             end
         end
 
-        s_axil_rdata = axil_resp_buffer_rdata[axil_resp_rptr[0:0]];
-        if(axil_resp_buffer_err[axil_resp_rptr[0:0]]) begin
+        s_axil_rdata = axil_resp_buffer_rdata[axil_resp_rptr[1:0]];
+        if(axil_resp_buffer_err[axil_resp_rptr[1:0]]) begin
             s_axil_bresp = 2'b10;
             s_axil_rresp = 2'b10;
         end else begin
@@ -214,9 +229,19 @@ module hft_csr (
 
     logic cpuif_req_masked;
 
-    // Read & write latencies are balanced. Stalls not required
+    // Read latency > write latency. May need to delay next write that follows a read
+    logic [0:0] cpuif_req_stall_sr;
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            cpuif_req_stall_sr <= '0;
+        end else if(cpuif_req && !cpuif_req_is_wr) begin
+            cpuif_req_stall_sr <= '1;
+        end else begin
+            cpuif_req_stall_sr <= (cpuif_req_stall_sr >> 'd1);
+        end
+    end
     assign cpuif_req_stall_rd = '0;
-    assign cpuif_req_stall_wr = '0;
+    assign cpuif_req_stall_wr = cpuif_req_stall_sr[0];
     assign cpuif_req_masked = cpuif_req
                             & !(!cpuif_req_is_wr & cpuif_req_stall_rd)
                             & !(cpuif_req_is_wr & cpuif_req_stall_wr);
@@ -841,112 +866,146 @@ module hft_csr (
     logic readback_err;
     logic readback_done;
     logic [31:0] readback_data;
+    function automatic bit [8:0] ad_low(bit [15:0] addr);
+        return addr[8:0];
+    endfunction
+    function automatic bit [6:0] ad_hi(bit [15:0] addr);
+        return addr[15:9];
+    endfunction
+
+    // readback stage 1
+    logic [31:0] readback_data_rt_c[128];
     always_comb begin
-        automatic logic [31:0] readback_data_var;
-        readback_data_var = '0;
-        if(rd_mux_addr == 16'h0) begin
-            readback_data_var[31:0] = 32'h48465431;
+        automatic logic [31:0] readback_data_var[128];
+        for(int i=0; i<128; i++) readback_data_var[i] = '0;
+        if(ad_low(rd_mux_addr) == ad_low(16'h0)) begin
+            readback_data_var[ad_hi(16'h0)][31:0] = 32'h48465431;
         end
-        if(rd_mux_addr == 16'h4) begin
-            readback_data_var[31:0] = 32'h50000;
+        if(ad_low(rd_mux_addr) == ad_low(16'h4)) begin
+            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50000;
         end
-        if(rd_mux_addr == 16'h8) begin
-            readback_data_var[31:0] = field_storage.GLOBAL.SCRATCH.value.value;
+        if(ad_low(rd_mux_addr) == ad_low(16'h8)) begin
+            readback_data_var[ad_hi(16'h8)][31:0] = field_storage.GLOBAL.SCRATCH.value.value;
         end
-        if(rd_mux_addr == 16'h100) begin
-            readback_data_var[0] = field_storage.NET.NET_CTRL.rx_en.value;
-            readback_data_var[1] = field_storage.NET.NET_CTRL.accept_bcast.value;
+        if(ad_low(rd_mux_addr) == ad_low(16'h100)) begin
+            readback_data_var[ad_hi(16'h100)][0] = field_storage.NET.NET_CTRL.rx_en.value;
+            readback_data_var[ad_hi(16'h100)][1] = field_storage.NET.NET_CTRL.accept_bcast.value;
         end
-        if(rd_mux_addr == 16'h104) begin
-            readback_data_var[31:0] = field_storage.NET.LOCAL_MAC_LO.mac.value;
+        if(ad_low(rd_mux_addr) == ad_low(16'h104)) begin
+            readback_data_var[ad_hi(16'h104)][31:0] = field_storage.NET.LOCAL_MAC_LO.mac.value;
         end
-        if(rd_mux_addr == 16'h108) begin
-            readback_data_var[15:0] = field_storage.NET.LOCAL_MAC_HI.mac.value;
+        if(ad_low(rd_mux_addr) == ad_low(16'h108)) begin
+            readback_data_var[ad_hi(16'h108)][15:0] = field_storage.NET.LOCAL_MAC_HI.mac.value;
         end
-        if(rd_mux_addr == 16'h110) begin
-            readback_data_var[0] = hwif_in.NET.NET_STATUS.commit_busy.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h110)) begin
+            readback_data_var[ad_hi(16'h110)][0] = hwif_in.NET.NET_STATUS.commit_busy.next;
         end
         for(int i0=0; i0<8; i0++) begin
-            if(rd_mux_addr == 16'h120 + (16)'(i0) * 16'h8) begin
-                readback_data_var[31:0] = field_storage.NET.FILTER[i0].IP.ip.value;
+            if(ad_low(rd_mux_addr) == ad_low(16'h120 + (16)'(i0) * 16'h8)) begin
+                readback_data_var[ad_hi(16'h120 + (16)'(i0) * 16'h8)][31:0] = field_storage.NET.FILTER[i0].IP.ip.value;
             end
-            if(rd_mux_addr == 16'h124 + (16)'(i0) * 16'h8) begin
-                readback_data_var[15:0] = field_storage.NET.FILTER[i0].PORT_EN.port.value;
-                readback_data_var[16] = field_storage.NET.FILTER[i0].PORT_EN.en.value;
+            if(ad_low(rd_mux_addr) == ad_low(16'h124 + (16)'(i0) * 16'h8)) begin
+                readback_data_var[ad_hi(16'h124 + (16)'(i0) * 16'h8)][15:0] = field_storage.NET.FILTER[i0].PORT_EN.port.value;
+                readback_data_var[ad_hi(16'h124 + (16)'(i0) * 16'h8)][16] = field_storage.NET.FILTER[i0].PORT_EN.en.value;
             end
         end
-        if(rd_mux_addr == 16'h404) begin
-            readback_data_var[31:0] = field_storage.STATS.STATS_SEQ.seq.value;
+        if(ad_low(rd_mux_addr) == ad_low(16'h404)) begin
+            readback_data_var[ad_hi(16'h404)][31:0] = field_storage.STATS.STATS_SEQ.seq.value;
         end
-        if(rd_mux_addr == 16'h410) begin
-            readback_data_var[31:0] = hwif_in.STATS.RX_PKTS.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h410)) begin
+            readback_data_var[ad_hi(16'h410)][31:0] = hwif_in.STATS.RX_PKTS.LO.value.next;
         end
-        if(rd_mux_addr == 16'h414) begin
-            readback_data_var[31:0] = hwif_in.STATS.RX_PKTS.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h414)) begin
+            readback_data_var[ad_hi(16'h414)][31:0] = hwif_in.STATS.RX_PKTS.HI.value.next;
         end
-        if(rd_mux_addr == 16'h418) begin
-            readback_data_var[31:0] = hwif_in.STATS.RX_BYTES.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h418)) begin
+            readback_data_var[ad_hi(16'h418)][31:0] = hwif_in.STATS.RX_BYTES.LO.value.next;
         end
-        if(rd_mux_addr == 16'h41c) begin
-            readback_data_var[31:0] = hwif_in.STATS.RX_BYTES.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h41c)) begin
+            readback_data_var[ad_hi(16'h41c)][31:0] = hwif_in.STATS.RX_BYTES.HI.value.next;
         end
-        if(rd_mux_addr == 16'h420) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_DISABLED.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h420)) begin
+            readback_data_var[ad_hi(16'h420)][31:0] = hwif_in.STATS.DROP_DISABLED.LO.value.next;
         end
-        if(rd_mux_addr == 16'h424) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_DISABLED.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h424)) begin
+            readback_data_var[ad_hi(16'h424)][31:0] = hwif_in.STATS.DROP_DISABLED.HI.value.next;
         end
-        if(rd_mux_addr == 16'h428) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FCS.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h428)) begin
+            readback_data_var[ad_hi(16'h428)][31:0] = hwif_in.STATS.DROP_FCS.LO.value.next;
         end
-        if(rd_mux_addr == 16'h42c) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FCS.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h42c)) begin
+            readback_data_var[ad_hi(16'h42c)][31:0] = hwif_in.STATS.DROP_FCS.HI.value.next;
         end
-        if(rd_mux_addr == 16'h430) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_MAC.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h430)) begin
+            readback_data_var[ad_hi(16'h430)][31:0] = hwif_in.STATS.DROP_MAC.LO.value.next;
         end
-        if(rd_mux_addr == 16'h434) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_MAC.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h434)) begin
+            readback_data_var[ad_hi(16'h434)][31:0] = hwif_in.STATS.DROP_MAC.HI.value.next;
         end
-        if(rd_mux_addr == 16'h438) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_ETHERTYPE.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h438)) begin
+            readback_data_var[ad_hi(16'h438)][31:0] = hwif_in.STATS.DROP_ETHERTYPE.LO.value.next;
         end
-        if(rd_mux_addr == 16'h43c) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_ETHERTYPE.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h43c)) begin
+            readback_data_var[ad_hi(16'h43c)][31:0] = hwif_in.STATS.DROP_ETHERTYPE.HI.value.next;
         end
-        if(rd_mux_addr == 16'h440) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_IP_HDR.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h440)) begin
+            readback_data_var[ad_hi(16'h440)][31:0] = hwif_in.STATS.DROP_IP_HDR.LO.value.next;
         end
-        if(rd_mux_addr == 16'h444) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_IP_HDR.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h444)) begin
+            readback_data_var[ad_hi(16'h444)][31:0] = hwif_in.STATS.DROP_IP_HDR.HI.value.next;
         end
-        if(rd_mux_addr == 16'h448) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FRAG.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h448)) begin
+            readback_data_var[ad_hi(16'h448)][31:0] = hwif_in.STATS.DROP_FRAG.LO.value.next;
         end
-        if(rd_mux_addr == 16'h44c) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FRAG.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h44c)) begin
+            readback_data_var[ad_hi(16'h44c)][31:0] = hwif_in.STATS.DROP_FRAG.HI.value.next;
         end
-        if(rd_mux_addr == 16'h450) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_PROTO.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h450)) begin
+            readback_data_var[ad_hi(16'h450)][31:0] = hwif_in.STATS.DROP_PROTO.LO.value.next;
         end
-        if(rd_mux_addr == 16'h454) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_PROTO.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h454)) begin
+            readback_data_var[ad_hi(16'h454)][31:0] = hwif_in.STATS.DROP_PROTO.HI.value.next;
         end
-        if(rd_mux_addr == 16'h458) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FILTER.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h458)) begin
+            readback_data_var[ad_hi(16'h458)][31:0] = hwif_in.STATS.DROP_FILTER.LO.value.next;
         end
-        if(rd_mux_addr == 16'h45c) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_FILTER.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h45c)) begin
+            readback_data_var[ad_hi(16'h45c)][31:0] = hwif_in.STATS.DROP_FILTER.HI.value.next;
         end
-        if(rd_mux_addr == 16'h460) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_LEN.LO.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h460)) begin
+            readback_data_var[ad_hi(16'h460)][31:0] = hwif_in.STATS.DROP_LEN.LO.value.next;
         end
-        if(rd_mux_addr == 16'h464) begin
-            readback_data_var[31:0] = hwif_in.STATS.DROP_LEN.HI.value.next;
+        if(ad_low(rd_mux_addr) == ad_low(16'h464)) begin
+            readback_data_var[ad_hi(16'h464)][31:0] = hwif_in.STATS.DROP_LEN.HI.value.next;
         end
-        readback_data = readback_data_var;
-        readback_done = decoded_req & ~decoded_req_is_wr;
-        readback_err = decoded_err;
+        readback_data_rt_c = readback_data_var;
+    end
+
+    logic [31:0] readback_data_rt[128];
+    logic readback_done_rt;
+    logic readback_err_rt;
+    logic [15:0] readback_addr_rt;
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            for(int i=0; i<128; i++) readback_data_rt[i] <= '0;
+            readback_done_rt <= '0;
+            readback_err_rt <= '0;
+            readback_addr_rt <= '0;
+        end else begin
+            readback_data_rt <= readback_data_rt_c;
+            readback_err_rt <= decoded_err;
+            readback_done_rt <= decoded_req & ~decoded_req_is_wr;
+            readback_addr_rt <= rd_mux_addr;
+        end
+    end
+
+
+
+    // readback stage 2
+    always_comb begin
+        readback_data = readback_data_rt[readback_addr_rt[15:9]];
+        readback_done = readback_done_rt;
+        readback_err = readback_err_rt;
     end
 
     assign cpuif_rd_ack = readback_done;
