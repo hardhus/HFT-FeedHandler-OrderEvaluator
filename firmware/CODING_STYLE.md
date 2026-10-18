@@ -15,8 +15,10 @@ read-only reference and is replaced phase by phase; do not copy its patterns.
   `.f` file itself. Packages come before their users.
 - Packages are imported inside the module (`module m import foo_pkg::*; (...)`), never at file (`$unit`) scope.
 - A package (`*_pkg.sv`) comes first in its filelist and is not linted as a Verilator top of its own; Verilator
-  checks it through the modules that import it. Every constant in it must have a user (an unused one fails lint),
-  so a constant is added together with its first user.
+  checks it through the modules that import it. Every constant in it must have a user, so a constant is added
+  together with its first user. One top need not use every constant of a shared package, so Verilator's per-top
+  `UNUSEDPARAM` is waived for `hft_pkg`; the selftest `test_every_package_constant_has_a_user` checks the rule
+  across all RTL instead (an unused constant fails `just test`).
 
 ## Header
 

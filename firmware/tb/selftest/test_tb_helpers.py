@@ -2,6 +2,7 @@
 
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -214,3 +215,36 @@ def test_every_rtl_and_sva_file_is_listed_once():
     assert not twice, f"in more than one filelist: {twice}"
     missing = [str(p) for p in listed if not p.exists()]
     assert not missing, f"filelist entries that do not exist: {missing}"
+
+
+def strip_sv_comments(text: str) -> str:
+    return re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
+
+
+def unused_package_constants(pkg: Path, users: list[Path]) -> list[str]:
+    """localparams of `pkg` that no file in `users` names (whole word, comments ignored)."""
+    names = re.findall(r"\blocalparam\b[^=;]*?\b(\w+)\s*=", strip_sv_comments(pkg.read_text()))
+    text = "\n".join(strip_sv_comments(u.read_text()) for u in users)
+    return [n for n in names if not re.search(rf"\b{n}\b", text)]
+
+
+def test_every_package_constant_has_a_user():
+    """CODING_STYLE: every hft_pkg constant has a user. Verilator cannot check this per top (one
+    top uses only some of them, so UNUSEDPARAM is waived for hft_pkg in waivers.vlt); this checks
+    it across all hand-written RTL instead."""
+    fw = REPO / "firmware" / "rtl"
+    pkg = fw / "core" / "hft_pkg.sv"
+    users = [p for area in ("common", "core", "platform") for p in (fw / area).rglob("*.sv") if p != pkg]
+    assert unused_package_constants(pkg, users) == []
+
+
+def test_unused_package_constant_is_reported(tmp_path):
+    """The check bites: a constant named only in a comment or in its own package is unused."""
+    pkg = tmp_path / "p_pkg.sv"
+    pkg.write_text(
+        "package p_pkg;\n  localparam int unsigned A = 1;  // used\n  localparam logic [7:0] B_X = 8'h2;\n"
+        "  localparam int unsigned C = B_X + 1;\n  /* localparam int unsigned D = 4; */\nendpackage\n"
+    )
+    user = tmp_path / "m.sv"
+    user.write_text("module m; // C\n  logic [A-1:0] x;  /* C */\nendmodule\n")
+    assert unused_package_constants(pkg, [user]) == ["B_X", "C"]
