@@ -37,6 +37,13 @@ package hft_pkg;
   localparam int unsigned RX_N_CNT = 2 + int'(RX_DROP_LEN);
 
   // ---- MoldUDP64 (moldudp64_rx) ----
+  localparam int unsigned MOLD_HDR_LEN = 20;  // session (10), sequence number (8), count (2)
+  localparam logic [15:0] MOLD_COUNT_EOS = 16'hFFFF;  // count 0 = heartbeat, 0xFFFF = end of session
+  // Shortest supported message: a block of MOLD_MIN_LEN + 2 >= 8 bytes keeps one block
+  // boundary per 8-byte beat. ITCH 5.0 messages are 12..50 bytes.
+  localparam int unsigned MOLD_MIN_LEN = 6;
+  localparam int unsigned MOLD_MAX_MSG = 64;  // message vector width; longer ones are skipped
+  localparam int unsigned MOLD_MSG_LEN_W = $clog2(MOLD_MAX_MSG + 1);
   // Packet outcome = counter index (mold_stats). When several apply, the first in this order is
   // reported: DISABLED, OTHER_FEED, ABORT, RUNT, SESSION, UNSUPPORTED, MALFORMED, DUP, then
   // OK/HEARTBEAT/EOS. Only OK, HEARTBEAT and EOS commit the packet's messages.
