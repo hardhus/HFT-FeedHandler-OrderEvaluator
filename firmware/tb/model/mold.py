@@ -73,9 +73,13 @@ class FeedState:
 
 @dataclass(frozen=True)
 class MoldResult:
-    """The packet event, and msgs = the messages on m_msg_* before it, as (seq, bytes).
-    dup_msgs/oversize count the blocks that completed and were not output for that reason.
-    gap is reported only when the packet is accepted in sync."""
+    """The packet event, and msgs = the messages on m_msg_* before it, as (seq, bytes);
+    m_pkt_msgs = len(msgs) for every status. dup_msgs/oversize count the blocks that completed
+    and were not output for that reason, only in packets whose framing was checked (OK,
+    HEARTBEAT, EOS, DUP); elsewhere the lengths may be corrupt and the messages come again, so
+    they are 0. gap is reported only when the packet is accepted in sync. Over a run the
+    accepted packets then account for every sequence number once:
+    E_end - E_sync = sum(msgs of accepted) + sum(oversize) + sum(gap)."""
 
     status: MoldStatus
     msgs: tuple[tuple[int, bytes], ...] = ()
@@ -140,7 +144,7 @@ def _framed(payload: bytes, cfg: FeedConfig, state: FeedState) -> tuple[MoldResu
     if bad is None and pos != len(payload):
         bad = MoldStatus.MALFORMED  # bytes after the last block
     if bad is not None:
-        return MoldResult(bad, tuple(msgs), 0, dup, oversize), state
+        return MoldResult(bad, tuple(msgs)), state  # untrusted lengths: no dup/oversize counts
     if synced and d < 0 and seq_diff(seq + count, E) <= 0:
         return MoldResult(MoldStatus.DUP, (), 0, dup, oversize), state
     gap = d if synced and d > 0 else 0
@@ -155,7 +159,8 @@ def expect(
 
     payload: the bytes moldudp64_rx received (fewer than the UDP length when F2 aborts a
     truncated frame). abort: tuser on the last beat. An aborted packet outputs the messages
-    the same bytes would output without the abort; the state does not change.
+    the same bytes would output without the abort (the RTL learns of the abort on the last
+    beat, after most of them are out); the state does not change.
     """
     if not cfg.enable:
         return MoldResult(MoldStatus.DISABLED), state
@@ -163,7 +168,7 @@ def expect(
         return MoldResult(MoldStatus.OTHER_FEED), state
     result, after = _framed(payload, cfg, state)
     if abort:
-        return MoldResult(MoldStatus.ABORT, result.msgs, 0, result.dup_msgs, result.oversize), state
+        return MoldResult(MoldStatus.ABORT, result.msgs), state
     return result, after
 
 

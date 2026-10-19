@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from model.mold import (
+    ACCEPTED,
     ITCH50_LEN,
     SEQ_MOD,
     FeedConfig,
@@ -60,6 +61,13 @@ PKT_OVER = hexbytes(f"""
     000c 53 0000 0000 000000000001 4f
     0041 {"00" * 65}                  # 65-B message (seq 101): skipped
     0013 44 0001 0000 000000000002 0000000000000007
+""")
+PKT_OVER_UNSUP = hexbytes(f"""
+    {HDR_HEX} 0000000000000064 0004
+    000c 53 0000 0000 000000000001 4f
+    0041 {"00" * 65}
+    0013 44 0001 0000 000000000002 0000000000000007
+    0003 414243                      # 3-B message
 """)
 CFG = FeedConfig(enable=True, session_check=True, session=SESSION, filter_mask=0x01)
 BOTH = ((100, MSG_S), (101, MSG_D))
@@ -118,6 +126,15 @@ KNOWN = {
     "malformed_no_block": (PKT[:20], False, 0, CFG, synced(100), R(S.MALFORMED), synced(100)),
     "malformed_hb": (HB + b"\x00", False, 0, CFG, synced(102), R(S.MALFORMED), synced(102)),
     "oversize": (PKT_OVER, False, 0, CFG, synced(100), R(S.OK, ((100, MSG_S), (102, MSG_D)), oversize=1), synced(103)),
+    "dup_counts_oversize_not": (PKT_OVER, False, 0, CFG, synced(102), R(S.OK, ((102, MSG_D),), dup_msgs=2), synced(103)),
+    # dup/oversize only for packets whose framing was checked: 0 after ABORT/MALFORMED/UNSUPPORTED.
+    "abort_partial_dup": (PKT, True, 0, CFG, synced(101), R(S.ABORT, ((101, MSG_D),)), synced(101)),
+    "abort_oversize": (PKT_OVER, True, 0, CFG, synced(100), R(S.ABORT, ((100, MSG_S), (102, MSG_D))), synced(100)),
+    "malformed_partial_dup": (PKT + b"\x00", False, 0, CFG, synced(101), R(S.MALFORMED, ((101, MSG_D),)), synced(101)),
+    "malformed_oversize": (PKT_OVER + b"\x00", False, 0, CFG, synced(100), R(S.MALFORMED, ((100, MSG_S), (102, MSG_D))), synced(100)),
+    "unsupported_oversize": (
+        PKT_OVER_UNSUP, False, 0, CFG, synced(101), R(S.UNSUPPORTED, ((102, MSG_D),)), synced(101)
+    ),
 }  # fmt: skip
 
 
@@ -221,12 +238,15 @@ def test_random_feed_covers_categories(seed):
     feed = random_feed(rng, 2000, cfg)
     assert feed[0].category == "sync"
     state = FeedState()
+    e_sync = int.from_bytes(feed[0].payload[10:18], "big")
+    advanced = 0  # sequence numbers the counters account for (11 §2.6)
     statuses, gaps, lanes, lengths, oversize, partial, synced_now = set(), set(), set(), set(), 0, 0, 0
     for p in feed:
         result, state = expect(p.payload, p.abort, p.filter_idx, replace(cfg, enable=p.enable), state)
         assert result.status == p.intent, f"{p.category}: generator meant {p.intent.name}, model says {result.status.name}"
         statuses.add(result.status)
         gaps.add(result.gap)
+        advanced += (len(result.msgs) if result.status in ACCEPTED else 0) + result.oversize + result.gap
         synced_now += result.synced_now
         if result.status == S.OK:
             oversize += result.oversize
@@ -240,4 +260,5 @@ def test_random_feed_covers_categories(seed):
     assert set(ITCH50_LEN.values()) <= lengths and {65, 1000, 1400} <= lengths
     assert oversize > 0 and partial > 0
     assert synced_now == 1, "only the first packet synchronizes"
+    assert advanced == (state.expected - e_sync) % SEQ_MOD, "E advanced by MSGS + OVERSIZE_MSGS + GAP_MSGS"
     assert {p.filter_idx for p in feed} == set(range(8)), "both lines of the feed and every other entry"
