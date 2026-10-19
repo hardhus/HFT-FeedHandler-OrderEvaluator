@@ -2,3 +2,5 @@
 # Order matters: packages first. Never combined with legacy.f (both define hft_pkg).
 ../rtl/core/hft_pkg.sv
 ../rtl/core/eth_ip_udp_rx.sv
+../rtl/core/moldudp64_rx.sv
+../rtl/core/mold_stats.sv

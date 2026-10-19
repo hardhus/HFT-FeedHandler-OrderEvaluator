@@ -35,4 +35,22 @@ package hft_pkg;
   localparam int unsigned RX_CNT_PKTS = 0;
   localparam int unsigned RX_CNT_BYTES = 1;
   localparam int unsigned RX_N_CNT = 2 + int'(RX_DROP_LEN);
+
+  // ---- MoldUDP64 (moldudp64_rx) ----
+  // Packet outcome = counter index (mold_stats). When several apply, the first in this order is
+  // reported: DISABLED, OTHER_FEED, ABORT, RUNT, SESSION, UNSUPPORTED, MALFORMED, DUP, then
+  // OK/HEARTBEAT/EOS. Only OK, HEARTBEAT and EOS commit the packet's messages.
+  typedef enum logic [3:0] {
+    MOLD_OK          = 4'd0,
+    MOLD_HEARTBEAT   = 4'd1,
+    MOLD_EOS         = 4'd2,
+    MOLD_DUP         = 4'd3,
+    MOLD_DISABLED    = 4'd4,
+    MOLD_OTHER_FEED  = 4'd5,
+    MOLD_ABORT       = 4'd6,
+    MOLD_RUNT        = 4'd7,
+    MOLD_SESSION     = 4'd8,
+    MOLD_UNSUPPORTED = 4'd9,
+    MOLD_MALFORMED   = 4'd10
+  } mold_status_e;
 endpackage
