@@ -139,15 +139,16 @@ verdict is `LEN` either way.
 | Line rate, IPG 0, zero loss | `tc_line_rate_b2b` |
 | Assertions (bound in every test) and their own tests | `tb/sva/udp_rx_props.sv`, `tb/sv/tb_udp_rx_props.sv`, `tb/unit/test_sva_checkers.py` |
 
-### Synthesis (OOC, `just synth-core`, Artix-7 `xc7a100tcsg324-1`, `N_FILTERS` = 8)
+### Synthesis (OOC, `just synth-core`, placed and routed, `N_FILTERS` = 8)
 
 Inputs and configuration go through one register in the harness (`rtl/platform/synth_ooc/eth_ip_udp_rx_ooc.sv`), so
-every path is register to register.
+every path is register to register. The gate is the routed timing; the synthesis estimate is given for reference.
 
-| Profile | LUT | FF | WNS (ns) | WHS (ns) | `report_cdc` | Gate |
-|---------|-----|----|----------|----------|--------------|------|
-| net2host (156.25 MHz) | 662 | 1269 | +0.247 | +0.266 | no crossing | PASS |
-| host2net (250 MHz) | 662 | 1269 | −2.153 | +0.266 | no crossing | information only |
+| Part | Clock | LUT | FF | WNS (ns) | WHS (ns) | `report_cdc` | Gate |
+|------|-------|-----|----|----------|----------|--------------|------|
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 662 | 1269 | +0.382 (synthesis +0.247) | +0.131 | no crossing | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 673 | 1269 | +3.689 (synthesis +4.641) | +0.046 | no crossing | PASS |
+| `xc7a100tcsg324-1` | 250 MHz | 662 | 1269 | −2.153 (synthesis) | +0.266 | no crossing | information only |
 
 ### Out of scope
 

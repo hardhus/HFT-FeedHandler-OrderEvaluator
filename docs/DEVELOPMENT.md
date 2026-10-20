@@ -203,7 +203,7 @@ Lint rules and formatting flags are stored in the repo, so editors and `just lin
 
 Vivado is not needed for lint or tests. It is used for the synthesis gates and timing/utilization reports, and to
 run the cross-simulator FIFO testbench. Simulation runs anywhere (also in GitHub Actions); the synthesis gates run
-only on a machine with Vivado. The reference part of the CSR gate needs the Kintex UltraScale+ device files: add
+only on a machine with Vivado. The reference part of the core and CSR gates needs the Kintex UltraScale+ device files: add
 them with the installer's "Add Design Tools or Devices" and check with `get_parts xcku5p-ffvb676-2-e` in the Tcl
 console.
 
@@ -213,7 +213,7 @@ just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>_<pa
 just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
 just synth-ooc-on xcku5p-ffvb676-2-e eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f   # another part
 just synth-common                         # every common block, both clock directions, gated
-just synth-core                           # eth_ip_udp_rx at 156.25 MHz, gated (250 MHz: synth-ooc ... host2net)
+just synth-core                           # eth_ip_udp_rx and moldudp64_rx placed and routed at 156.25 MHz: A7 and xcku5p
 just synth-csr                            # hft_csr_wrap placed and routed: xcku5p 156.25/250 MHz, A7 156.25/125 MHz (about 15 min)
 just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```

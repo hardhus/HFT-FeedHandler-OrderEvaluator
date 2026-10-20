@@ -259,6 +259,23 @@ synth-csr:
     if ($bad) { Write-Host "synth-csr: $bad gate run(s) FAILED"; exit 1 }
     Write-Host "synth-csr: gates PASS"
 
+# 250 MHz, information only: just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
+# Core blocks at net_clk (156.25 MHz), placed and routed on the A7 and ref_part, gated
+[windows]
+[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[extension(".ps1")]
+synth-core:
+    $bad = 0
+    foreach ($top in "eth_ip_udp_rx_ooc", "moldudp64_rx_ooc") {
+      foreach ($part in "{{ fpga_part }}", "{{ ref_part }}") {
+        $out = just synth-ooc-on $part $top net2host core.f synth_ooc_core.f impl 2>&1
+        if ($LASTEXITCODE) { $bad++ }
+        ($out | Select-String "^HFT_SYNTH").Line
+      }
+    }
+    if ($bad) { Write-Host "synth-core: $bad gate run(s) FAILED"; exit 1 }
+    Write-Host "synth-core: gates PASS"
+
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [windows]
 synth-common:
@@ -306,6 +323,22 @@ synth-csr:
     run info {{ ref_part }} eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f
     [ $bad = 0 ] && echo "synth-csr: gates PASS" || { echo "synth-csr: $bad gate run(s) FAILED"; exit 1; }
 
+# 250 MHz, information only: just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
+# Core blocks at net_clk (156.25 MHz), placed and routed on the A7 and ref_part, gated
+[script("bash")]
+[unix]
+synth-core:
+    bad=0
+    for top in eth_ip_udp_rx_ooc moldudp64_rx_ooc; do
+      for part in {{ fpga_part }} {{ ref_part }}; do
+        out=$(just synth-ooc-on "$part" "$top" net2host core.f synth_ooc_core.f impl 2>&1)
+        rc=$?
+        grep '^HFT_SYNTH' <<<"$out"
+        [ $rc = 0 ] || bad=$((bad + 1))
+      done
+    done
+    [ $bad = 0 ] && echo "synth-core: gates PASS" || { echo "synth-core: $bad gate run(s) FAILED"; exit 1; }
+
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [script("bash")]
 [unix]
@@ -321,11 +354,6 @@ synth-common:
       done
     done
     [ $bad = 0 ] && echo "synth-common: all PASS" || { echo "synth-common: $bad run(s) FAILED"; exit 1; }
-
-# 250 MHz, for information only (not a gate): just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
-# OOC synth + timing/CDC gate for the core blocks at net_clk (156.25 MHz)
-synth-core:
-    just synth-ooc eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f
 
 # Remove build outputs (keeps .tools/ and .venv/)
 clean:
