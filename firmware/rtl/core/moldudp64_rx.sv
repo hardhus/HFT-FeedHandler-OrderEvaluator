@@ -1,25 +1,42 @@
-// moldudp64_rx: MoldUDP64 de-framer: splits each UDP payload into messages, one vector each.
+// moldudp64_rx: MoldUDP64 de-framer: splits each UDP payload into messages, one vector each,
+// and tracks the feed's sequence numbers (gap, duplicate, heartbeat, end of session, resync).
 // Clock domain : clk (net_clk)
 // Latency      : input beat holding a message's last byte -> m_msg_valid 2 cycles;
 //                input tlast -> m_pkt_valid 3 cycles, after every message of the packet
 // Throughput   : line rate, IPG 0, no backpressure. Blocks of >= MOLD_MIN_LEN + 2 bytes keep one
 //                block boundary per beat; a shorter one makes the packet UNSUPPORTED
 // Input        : the eth_ip_udp_rx payload stream: byte 0 = tdata[7:0], tkeep full before tlast
-//                and contiguous on it, s_udp_* held from the first beat through tlast
-// Reset        : rst between packets or with the source; a packet cut by it gets no event
+//                and contiguous on it, tuser on the tlast beat only, s_udp_* held from the first
+//                beat through tlast. cfg_* except cfg_resync* are sampled on the first beat
+// Reset        : rst between packets or with the source; a packet cut by it gets no event, and
+//                the feed state (expected seq, synced, eos) goes back to 0
 module moldudp64_rx
   import hft_pkg::*;
-(
+#(
+    parameter  int unsigned N_FILTERS = 8,
+    localparam int unsigned FIDX_W    = (N_FILTERS > 1) ? $clog2(N_FILTERS) : 1
+) (
     input logic clk,
     input logic rst,
 
     // UDP payload (from eth_ip_udp_rx)
-    input logic [63:0] s_axis_udp_tdata,
-    input logic [ 7:0] s_axis_udp_tkeep,
-    input logic        s_axis_udp_tvalid,
-    input logic        s_axis_udp_tlast,
-    input logic [15:0] s_udp_len,          // payload bytes
-    input logic [63:0] s_udp_sof_ts,
+    input logic [      63:0] s_axis_udp_tdata,
+    input logic [       7:0] s_axis_udp_tkeep,
+    input logic              s_axis_udp_tvalid,
+    input logic              s_axis_udp_tlast,
+    input logic              s_axis_udp_tuser,   // on tlast: abort (FCS error, truncated)
+    input logic [      15:0] s_udp_len,          // payload bytes
+    input logic [FIDX_W-1:0] s_udp_filter_idx,
+    input logic [      63:0] s_udp_sof_ts,
+
+    // Feed configuration (hft_csr_wrap)
+    input logic                 cfg_feed_en,
+    input logic                 cfg_session_check,
+    input logic [         79:0] cfg_session,        // byte 0 = [79:72], as on the wire
+    input logic [N_FILTERS-1:0] cfg_filter_mask,    // bit i: filter entry i belongs to this feed
+    input logic                 cfg_resync,         // pulse
+    input logic                 cfg_resync_learn,   // 1: learn the next packet's seq
+    input logic [         63:0] cfg_resync_seq,     // otherwise: expected seq = this
 
     // One message per cycle: byte i = m_msg_data[8i+7:8i], bytes from m_msg_len on are 0
     output logic                      m_msg_valid,
@@ -28,13 +45,22 @@ module moldudp64_rx
     output logic [              63:0] m_msg_seq,
     output logic [              63:0] m_msg_sof_ts,
 
-    // One event per input packet, after its messages
+    // One event per input packet, after its messages. Downstream keeps the packet's messages
+    // only for MOLD_OK, MOLD_HEARTBEAT and MOLD_EOS.
     output logic                m_pkt_valid,
     output mold_status_e        m_pkt_status,
-    output logic         [63:0] m_pkt_seq,      // header fields (undefined for RUNT)
+    output logic         [63:0] m_pkt_seq,        // header fields (undefined for RUNT)
     output logic         [15:0] m_pkt_count,
-    output logic         [15:0] m_pkt_msgs,     // messages output for this packet
-    output logic         [15:0] m_pkt_oversize  // skipped (> MOLD_MAX_MSG); 0 unless accepted
+    output logic         [63:0] m_pkt_gap,        // messages skipped; accepted in sync only
+    output logic         [15:0] m_pkt_msgs,       // messages output for this packet
+    output logic         [15:0] m_pkt_dup_msgs,   // seq below expected; 0 unless accepted or DUP
+    output logic         [15:0] m_pkt_oversize,   // > MOLD_MAX_MSG; 0 unless accepted or DUP
+    output logic                m_pkt_synced_now, // this packet synchronized the feed
+
+    // Feed state (for the CSR snapshot)
+    output logic [63:0] feed_expected_seq,
+    output logic        feed_synced,
+    output logic        feed_eos
 );
   // Header layout (MoldUDP64): beat 0 = session[0..7]; beat 1 = session[8..9], seq[0..5];
   // beat 2 = seq[6..7], count, then the first block's length field.
@@ -89,6 +115,65 @@ module moldudp64_rx
     end
   end
 
+  // ---- packet gates: config sampled on the first beat; the session is known after beat 1 ----
+  logic first;
+  logic dis_q, oth_q, chk_q, sess0_ok_q, sess_bad_q;  // disabled, other feed, session check
+  logic [15:0] sess_tail_q;  // cfg_session bytes 8..9
+  logic sess0_ok, sess_bad, cur_dis, cur_oth, cur_sess, skip;
+
+  assign first = beat && bcnt_q == '0;
+  always_comb begin
+    sess0_ok = 1'b1;
+    for (int b = 0; b < 8; b++) begin
+      if (lane[b] != cfg_session[79-8*b-:8]) begin
+        sess0_ok = 1'b0;
+      end
+    end
+  end
+  assign sess_bad = chk_q && !(sess0_ok_q && {lane[0], lane[1]} == sess_tail_q);
+  // the packet's flags on its tlast beat (a 1-beat packet has only the sampled values)
+  assign cur_dis  = first ? !cfg_feed_en : dis_q;
+  assign cur_oth  = first ? !cfg_filter_mask[s_udp_filter_idx] : oth_q;
+  assign cur_sess = hdr1 ? sess_bad : sess_bad_q;
+  assign skip     = dis_q || oth_q || sess_bad_q;  // no framing: no message comes out
+
+  always_ff @(posedge clk) begin
+    if (first) begin
+      dis_q       <= !cfg_feed_en;
+      oth_q       <= !cfg_filter_mask[s_udp_filter_idx];
+      chk_q       <= cfg_session_check;
+      sess0_ok_q  <= sess0_ok;
+      sess_tail_q <= cfg_session[15:0];
+    end
+    if (hdr1) begin
+      sess_bad_q <= sess_bad;
+    end
+  end
+
+  // ---- sequence numbers against the expected one (E), from the header beat ----
+  // D = S - E as a signed 64-bit number (serial arithmetic). Blocks with index < -D are
+  // duplicates; dup_n = min(-D, 2^16) (count <= 0xFFFE), one cycle after the header beat, in
+  // time for the first block's end (beat 3 at the earliest). In the same cycle: is the whole
+  // normal packet below E (S + C <= E, i.e. -D >= C)?
+  logic [63:0] e_q;  // expected seq
+  logic synced_q, eos_q;
+  logic [63:0] d_q, nd_q;  // S - E, E - S
+  logic        hdr2_d;
+  logic [16:0] dup_n_q;
+  logic        old_nb_q;
+
+  always_ff @(posedge clk) begin
+    hdr2_d <= hdr2;
+    if (hdr2) begin
+      d_q  <= seq_now - e_q;
+      nd_q <= e_q - seq_now;
+    end
+    if (hdr2_d) begin
+      dup_n_q  <= !d_q[63] ? '0 : (nd_q[63:16] != '0) ? 17'h10000 : nd_q[16:0];
+      old_nb_q <= d_q[63] && (nd_q[63:16] != '0 || nd_q[16:0] >= {1'b0, cnt_q});
+    end
+  end
+
   // ---- block framing ----
   // The next length field's low byte is at offset 8 * w + o from lane 0 of this beat. The block
   // before it (the current block) ends at that offset - 2; a length field at offset 0 has its
@@ -111,7 +196,9 @@ module moldudp64_rx
   logic [MOLD_MSG_LEN_W-1:0] cb_len_q;
   logic cb_over_q;
   logic [63:0] cb_seq_q;
-  logic [63:0] nseq_q, dec_seq;  // seq of the next block
+  logic [15:0] cb_idx_q;  // index in the packet of the current block
+  logic [15:0] bi_q, dec_idx;  // index in the packet of the next block
+  logic [63:0] dec_seq;  // its seq: S + index, from registers (not through the decode)
 
   logic        live;  // framing beat
   logic [15:0] blen;  // length field decoded in this beat
@@ -147,7 +234,7 @@ module moldudp64_rx
     end
   end
 
-  assign live = body && !unsup_q;
+  assign live = body && !unsup_q && !skip;
   assign o = hdr2 ? LP_FIRST[2:0] : o_q;
   assign wz = hdr2 || wz_q;
   assign w1 = !hdr2 && w1_q;
@@ -162,7 +249,8 @@ module moldudp64_rx
   assign newblk = dec && !unsup_now;
   assign nb_over = l_over[o];
   assign nb_len = nb_over ? '0 : blen[MOLD_MSG_LEN_W-1:0];
-  assign dec_seq = hdr2 ? seq_now : nseq_q;
+  assign dec_seq = hdr2 ? seq_now : seq_q + 64'(bi_q);
+  assign dec_idx = hdr2 ? '0 : bi_q;
 
   assign nb_end = newblk && l_end[o];
   // The current block ends in this beat (offset 2..9) at lane o - 2.
@@ -253,18 +341,20 @@ module moldudp64_rx
       cb_len_q  <= nb_len;
       cb_over_q <= nb_over;
       cb_seq_q  <= dec_seq;
+      cb_idx_q  <= dec_idx;
     end
     if (hdr2 || dec) begin
-      nseq_q <= dec ? dec_seq + 64'd1 : dec_seq;
+      bi_q <= dec ? dec_idx + 16'd1 : dec_idx;
     end
   end
 
   // ===================== Stage 1 (registered framer decisions) =====================
   logic s1_old, s1_start, s1_end, s1_end_new, s1_emit, s1_over, s1_pkt;
-  logic s1_runt, s1_unsup, s1_exact;
+  logic s1_dis, s1_oth, s1_abort, s1_runt, s1_sess, s1_unsup, s1_exact;
   logic [               2:0] s1_s;
   logic [MOLD_MSG_LEN_W-1:0] s1_len;
   logic [63:0] s1_seq, s1_ts, s1_rot_old, s1_rot_new;
+  logic [15:0] s1_idx;
   logic [63:0] s1_pkt_seq;
   logic [15:0] s1_pkt_cnt;
 
@@ -289,29 +379,58 @@ module moldudp64_rx
     s1_s       <= s_new;
     s1_len     <= pend_q ? cb_len_q : nb_len;
     s1_seq     <= pend_q ? cb_seq_q : dec_seq;
+    s1_idx     <= pend_q ? cb_idx_q : dec_idx;
     s1_ts      <= s_udp_sof_ts;
     s1_rot_old <= rotate(s_axis_udp_tdata, cb_s_q);
     s1_rot_new <= rotate(s_axis_udp_tdata, s_new);
+    s1_dis     <= cur_dis;
+    s1_oth     <= cur_oth;
+    s1_abort   <= s_axis_udp_tuser;
     s1_runt    <= runt;
+    s1_sess    <= cur_sess;
     s1_unsup   <= unsup_any;
     s1_exact   <= exact;
     s1_pkt_seq <= pkt_seq;
     s1_pkt_cnt <= pkt_cnt;
   end
 
-  // ---- packet status and counts (on the registered decisions) ----
-  logic [15:0] msgs_q, over_q;  // per packet: messages output, oversize skipped
-  logic [15:0] msgs, over;
-  mold_status_e status;
-  logic         accepted;
+  // ---- ending message: duplicate? (seq below E, in sync: index < dup_n) ----
+  logic [15:0] cur_idx_q, end_idx;  // stage 2 register of the message in the accumulator
+  logic dup;
 
+  assign end_idx = s1_end_new ? s1_idx : cur_idx_q;
+  assign dup     = synced_q && {1'b0, end_idx} < dup_n_q;
+
+  // ---- packet status and counts ----
+  // On s1_pkt the packet's d_q, dup_n_q and old_nb_q are ready: the header beat is at least
+  // one cycle before tlast for a packet with blocks (two before its stage 1), and a heartbeat
+  // or end of session only needs d_q.
+  logic [15:0] msgs_q, over_q, dups_q;  // per packet: output, oversize, duplicate messages
+  logic [15:0] msgs, over, dups;
+  logic hbeos, old;
+  mold_status_e status;
+  logic accepted, checked;
+
+  assign hbeos = s1_pkt_cnt == '0 || s1_pkt_cnt == MOLD_COUNT_EOS;
+  // the whole packet is below E: a heartbeat or end of session with S < E, or S + C <= E
+  assign old   = synced_q && (hbeos ? d_q[63] : old_nb_q);
   always_comb begin
-    if (s1_runt) begin
+    if (s1_dis) begin
+      status = MOLD_DISABLED;
+    end else if (s1_oth) begin
+      status = MOLD_OTHER_FEED;
+    end else if (s1_abort) begin
+      status = MOLD_ABORT;
+    end else if (s1_runt) begin
       status = MOLD_RUNT;
+    end else if (s1_sess) begin
+      status = MOLD_SESSION;
     end else if (s1_unsup) begin
       status = MOLD_UNSUPPORTED;
     end else if (!s1_exact) begin
       status = MOLD_MALFORMED;
+    end else if (old) begin
+      status = MOLD_DUP;
     end else if (s1_pkt_cnt == '0) begin
       status = MOLD_HEARTBEAT;
     end else if (s1_pkt_cnt == MOLD_COUNT_EOS) begin
@@ -321,18 +440,90 @@ module moldudp64_rx
     end
   end
   assign accepted = status == MOLD_OK || status == MOLD_HEARTBEAT || status == MOLD_EOS;
-  assign msgs     = msgs_q + 16'(s1_end && s1_emit);
-  assign over     = over_q + 16'(s1_end && s1_over);
+  assign checked  = accepted || status == MOLD_DUP;  // framing checked: dup/oversize counts valid
+  // a duplicate is not counted as oversize (it was counted when first seen)
+  assign msgs     = msgs_q + 16'(s1_end && s1_emit && !dup);
+  assign over     = over_q + 16'(s1_end && s1_over && !dup);
+  assign dups     = dups_q + 16'(s1_end && dup);
 
   always_ff @(posedge clk) begin
     if (rst || s1_pkt) begin
       msgs_q <= '0;
       over_q <= '0;
+      dups_q <= '0;
     end else begin
       msgs_q <= msgs;
       over_q <= over;
+      dups_q <= dups;
     end
   end
+
+  // ---- feed state: updated on the accounting cycle of an accepted packet (s1_pkt) ----
+  // E = S + C after a normal packet, S after a heartbeat or end of session: both are S + the
+  // number of blocks decoded (bi_q; 0 without blocks).
+  // Resync, like a double-buffered control register: a pulse after a packet's first beat and up
+  // to its s1_pkt waits and is applied after that packet's update; a pulse between packets or
+  // on a first beat is applied at once (before that packet, whose config is sampled there).
+  // A later pulse replaces a waiting one (both belong to the same packet); a pulse in the cycle
+  // where a waiting request is applied (s1_pkt) acts after it.
+  logic flight_q;  // a packet is past its first beat and not yet accounted (through s1_pkt)
+  logic rs_pend_q, rs_learn_q;  // waiting request
+  logic [63:0] rs_seq_q;
+  logic rs_now, rs_apply;
+
+  assign rs_now   = s1_pkt || !flight_q;  // no packet holds a request back
+  assign rs_apply = (rs_pend_q || cfg_resync) && rs_now;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      flight_q  <= 1'b0;
+      rs_pend_q <= 1'b0;
+      e_q       <= '0;
+      synced_q  <= 1'b0;
+      eos_q     <= 1'b0;
+    end else begin
+      if (first) begin
+        flight_q <= 1'b1;
+      end else if (s1_pkt) begin
+        flight_q <= 1'b0;
+      end
+      if (s1_pkt && accepted) begin
+        e_q      <= seq_q + 64'(bi_q);
+        synced_q <= 1'b1;
+        if (status == MOLD_EOS) begin
+          eos_q <= 1'b1;
+        end else if (status == MOLD_OK) begin
+          eos_q <= 1'b0;
+        end
+      end
+      if (rs_apply) begin  // after the packet's update: learn keeps E, set replaces it
+        if (rs_pend_q && !rs_learn_q) begin
+          e_q <= rs_seq_q;
+        end
+        if (cfg_resync && !cfg_resync_learn) begin
+          e_q <= cfg_resync_seq;
+        end
+        synced_q <= cfg_resync ? !cfg_resync_learn : !rs_learn_q;
+        eos_q    <= 1'b0;
+      end
+      if (cfg_resync && !rs_now) begin
+        rs_pend_q <= 1'b1;
+      end else if (rs_apply) begin
+        rs_pend_q <= 1'b0;
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
+    if (cfg_resync) begin
+      rs_learn_q <= cfg_resync_learn;
+      rs_seq_q   <= cfg_resync_seq;
+    end
+  end
+
+  assign feed_expected_seq = e_q;
+  assign feed_synced       = synced_q;
+  assign feed_eos          = eos_q;
 
   // ===================== Stage 2: realigner and outputs =====================
   // A message that starts in lane s is rotated by s; rotated byte r goes to byte r of the
@@ -367,7 +558,7 @@ module moldudp64_rx
     if (rst) begin
       m_msg_valid <= 1'b0;
     end else begin
-      m_msg_valid <= s1_end && s1_emit;
+      m_msg_valid <= s1_end && s1_emit && !dup;
     end
   end
 
@@ -377,6 +568,7 @@ module moldudp64_rx
       cur_s_q   <= s1_s;
       cur_len_q <= s1_len;
       cur_seq_q <= s1_seq;
+      cur_idx_q <= s1_idx;
       cur_w_q   <= 4'd1;
     end else if (s1_old && cur_w_q != 4'hF) begin
       cur_w_q <= cur_w_q + 4'd1;
@@ -390,10 +582,12 @@ module moldudp64_rx
   end
 
   // ---- packet event: one more register, so it follows the packet's last message ----
-  logic                p2_valid;
-  mold_status_e        p2_status;
-  logic         [63:0] p2_seq;
-  logic [15:0] p2_cnt, p2_msgs, p2_over;
+  // The gap and the dup/oversize counts are zeroed there, from flags made on s1_pkt.
+  logic         p2_valid;
+  mold_status_e p2_status;
+  logic [63:0] p2_seq, p2_gap;
+  logic [15:0] p2_cnt, p2_msgs, p2_dups, p2_over;
+  logic p2_gap_ok, p2_checked, p2_synced_now;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -406,15 +600,23 @@ module moldudp64_rx
   end
 
   always_ff @(posedge clk) begin
-    p2_status      <= status;
-    p2_seq         <= s1_pkt_seq;
-    p2_cnt         <= s1_pkt_cnt;
-    p2_msgs        <= msgs;
-    p2_over        <= accepted ? over : '0;
-    m_pkt_status   <= p2_status;
-    m_pkt_seq      <= p2_seq;
-    m_pkt_count    <= p2_cnt;
-    m_pkt_msgs     <= p2_msgs;
-    m_pkt_oversize <= p2_over;
+    p2_status        <= status;
+    p2_seq           <= s1_pkt_seq;
+    p2_cnt           <= s1_pkt_cnt;
+    p2_gap           <= d_q;
+    p2_gap_ok        <= accepted && synced_q && !d_q[63];
+    p2_msgs          <= msgs;
+    p2_dups          <= dups;
+    p2_over          <= over;
+    p2_checked       <= checked;
+    p2_synced_now    <= accepted && !synced_q;
+    m_pkt_status     <= p2_status;
+    m_pkt_seq        <= p2_seq;
+    m_pkt_count      <= p2_cnt;
+    m_pkt_gap        <= p2_gap_ok ? p2_gap : '0;
+    m_pkt_msgs       <= p2_msgs;
+    m_pkt_dup_msgs   <= p2_checked ? p2_dups : '0;
+    m_pkt_oversize   <= p2_checked ? p2_over : '0;
+    m_pkt_synced_now <= p2_synced_now;
   end
 endmodule
