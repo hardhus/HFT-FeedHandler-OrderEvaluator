@@ -134,7 +134,10 @@ def _framed(payload: bytes, cfg: FeedConfig, state: FeedState) -> tuple[MoldResu
             bad = MoldStatus.MALFORMED  # payload ends inside the message
             break
         msg_seq = (seq + i) % SEQ_MOD
-        if synced and seq_diff(msg_seq, E) < 0:
+        # Duplicates are the first E - S messages of a packet that starts before E (11 §2.4).
+        # Not seq_diff(msg_seq, E) < 0: in a packet 2^63 - 1 ahead, the messages after the first
+        # would pass half the sequence space and count as old.
+        if synced and d < 0 and i < -d:
             dup += 1
         elif n > MAX_MSG:
             oversize += 1

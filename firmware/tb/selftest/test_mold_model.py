@@ -194,6 +194,13 @@ def test_seq_wrap():
     result, _ = expect(pack(SESSION, SEQ_MOD - 2, msgs), False, 0, CFG, synced(1))
     assert (result.status, [s for s, _ in result.msgs], result.dup_msgs) == (S.OK, [1, 2], 3)
     assert expect(heartbeat(SESSION, 0), False, 0, CFG, synced(SEQ_MOD - 1)) == (R(S.HEARTBEAT, gap=1), synced(0))
+    # The largest gap (2^63 - 1): every message is ahead, also those past half the space from E.
+    big = (1 << 63) - 1
+    result, after = expect(pack(SESSION, 10 + big, msgs), False, 0, CFG, synced(10))
+    assert (result.status, len(result.msgs), result.dup_msgs, result.gap) == (S.OK, 5, 0, big)
+    assert after == synced((10 + big + 5) % SEQ_MOD)
+    result, _ = expect(pack(SESSION, 10 + (1 << 63), msgs), False, 0, CFG, synced(10))
+    assert (result.status, result.dup_msgs) == (S.DUP, 5), "2^63 ahead is 2^63 behind"
 
 
 def test_resync():
