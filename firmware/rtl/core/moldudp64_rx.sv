@@ -40,10 +40,12 @@ module moldudp64_rx
   // beat 2 = seq[6..7], count, then the first block's length field.
   localparam int unsigned HDR_BEAT = MOLD_HDR_LEN / 8;  // beat of the first length field
   localparam int unsigned LP_W = 17;  // offsets up to 7 + 2 + 65535
+  localparam int unsigned W_W = LP_W - 3;  // offset / 8
   // Offset of the first length field's low byte from lane 0 of beat HDR_BEAT.
   localparam logic [LP_W-1:0] LP_FIRST = LP_W'(MOLD_HDR_LEN + 1 - 8 * HDR_BEAT);
 
-  if (HDR_BEAT != 2 || MOLD_MIN_LEN + 2 < 8 || MOLD_MAX_MSG % 8 != 0) begin : g_check
+  if (HDR_BEAT != 2 || LP_FIRST >= 8 || MOLD_MIN_LEN + 2 < 8 || MOLD_MAX_MSG % 8 != 0)
+  begin : g_check
     $error("moldudp64_rx: header beats, one boundary per beat or vector width do not hold");
   end
 
@@ -88,11 +90,18 @@ module moldudp64_rx
   end
 
   // ---- block framing ----
-  // lp = offset of the next length field's low byte from lane 0 of this beat. The block before
-  // it (the current block) ends at lp - 2; a length field with lp = 0 has its high byte in
-  // lane 7 of the previous beat (hi_q). Since every block has >= 8 bytes, a beat holds at most
-  // one length field, one message start and one message end.
-  logic [LP_W-1:0] lp_q, lp, lp_after, lp_next;
+  // The next length field's low byte is at offset 8 * w + o from lane 0 of this beat. The block
+  // before it (the current block) ends at that offset - 2; a length field at offset 0 has its
+  // high byte in lane 7 of the previous beat (hi_q). Since every block has >= 8 bytes, a beat
+  // holds at most one length field, one message start and one message end.
+  // Timing: only o and the flags w == 0 / w == 1 are in the one-cycle loop through the length
+  // decode. After a block the beat count w is loaded one framing beat later, from th_q.
+  logic [2:0] o_q, o, o_next;
+  logic wz_q, wz, wz_next;  // w == 0: the length field is in this beat
+  logic w1_q, w1, w1_next;  // w == 1
+  logic ld_q, ld;  // w = th_q - 1 (a block was decoded in the previous framing beat)
+  logic [W_W-1:0] th_q, wc_q, wc_next;  // offset after that block / 8; w when !ld
+  logic [W_W-1:0] th;  // (offset after the block decoded in this beat) / 8
   logic [15:0] blk_left_q, blk, blk_after;  // blocks whose length field is still to come
   logic [7:0] hi_q;  // lane 7 of the previous beat
   logic unsup_q;  // a block shorter than MOLD_MIN_LEN: framing stopped
@@ -103,76 +112,102 @@ module moldudp64_rx
   logic cb_over_q;
   logic [63:0] cb_seq_q;
   logic [63:0] nseq_q, dec_seq;  // seq of the next block
-  logic [15:0] msgs_q, over_q;  // per packet: messages output, oversize skipped
 
   logic        live;  // framing beat
-  logic [ 2:0] lpl;
   logic [15:0] blen;  // length field decoded in this beat
+  logic blk_nz, blk_one;  // blk != 0, blk == 1
   logic dec, unsup_now, newblk, nb_over, nb_end;
   logic [MOLD_MSG_LEN_W-1:0] nb_len;
-  logic [               3:0] nb_e;  // lane of the new block's last byte, if <= 7
   logic [               2:0] cur_e;
-  logic cur_end, end_ev, end_new, end_over, emit, start;
+  logic in_win, cur_end, end_ev, end_new, end_over, emit, start;
   logic [2:0] s_new;
-  logic done, exact, runt, unsup_any, accepted;
-  logic         [2:0] ea;
-  mold_status_e       status;
+  logic exact, runt, unsup_any;
+
+  // Every length-dependent decision is made for each lane i as if the length field's low byte
+  // were there (o == i), and then selected by o: the compares run in parallel with o, and the
+  // loop through o_q is a select of single bits.
+  logic [7:0][15:0] l_len;
+  logic [7:0][ 5:0] l_t;  // i + length[4:0] + 2: offset after the block if length[15:5] == 0
+  logic [7:0][ 3:0] l_e;  // i + length[2:0]: lane of the block's last byte if length < 8
+  logic [7:0] l_short, l_over, l_end, l_wz, l_w1, l_exact;
+
+  always_comb begin
+    for (int i = 0; i < 8; i++) begin
+      l_len[i]   = {(i == 0) ? hi_q : lane[(i+7)%8], lane[i]};
+      l_t[i]     = 6'(i) + 6'(l_len[i][4:0]) + 6'd2;
+      l_e[i]     = 4'(i) + 4'(l_len[i][2:0]);
+      l_short[i] = l_len[i] < 16'(MOLD_MIN_LEN);
+      l_over[i]  = l_len[i] > 16'(MOLD_MAX_MSG);
+      // the block ends in this beat (only from i <= 1 with a 6..7-byte block)
+      l_end[i]   = l_len[i] < 16'd8 && l_e[i] < 4'd8 && vld[l_e[i][2:0]];
+      l_wz[i]    = l_len[i][15:5] == '0 && l_t[i] < 6'd16;
+      l_w1[i]    = l_len[i][15:5] == '0 && l_t[i] >= 6'd16 && l_t[i] < 6'd24;
+      // ... on the last byte
+      l_exact[i] = l_end[i] && (l_e[i] == 4'd7 || !vld[l_e[i][2:0]+3'd1]);
+    end
+  end
 
   assign live = body && !unsup_q;
-  assign lp = hdr2 ? LP_FIRST : lp_q;
+  assign o = hdr2 ? LP_FIRST[2:0] : o_q;
+  assign wz = hdr2 || wz_q;
+  assign w1 = !hdr2 && w1_q;
+  assign ld = !hdr2 && ld_q;
   assign blk = hdr2 ? ((cnt_now == '0 || cnt_now == MOLD_COUNT_EOS) ? '0 : cnt_now) : blk_left_q;
-  assign lpl = lp[2:0];
-  assign blen = {(lpl == 3'd0) ? hi_q : lane[lpl-3'd1], lane[lpl]};
+  assign blk_nz = hdr2 ? cnt_now != '0 && cnt_now != MOLD_COUNT_EOS : blk_left_q != '0;
+  assign blk_one = blk_left_q == 16'd1;  // used once a block ends in its beat: never in hdr2
+  assign blen = l_len[o];
 
-  assign dec = live && blk != '0 && lp < LP_W'(8) && vld[lpl];
-  assign unsup_now = dec && blen < 16'(MOLD_MIN_LEN);
+  assign dec = live && blk_nz && wz && vld[o];
+  assign unsup_now = dec && l_short[o];
   assign newblk = dec && !unsup_now;
-  assign nb_over = blen > 16'(MOLD_MAX_MSG);
+  assign nb_over = l_over[o];
   assign nb_len = nb_over ? '0 : blen[MOLD_MSG_LEN_W-1:0];
   assign dec_seq = hdr2 ? seq_now : nseq_q;
 
-  // The new block ends in this beat (lp + length <= 7: only lp <= 1 with a 6..7-byte message).
-  assign nb_e = {1'b0, lpl} + {1'b0, blen[2:0]};
-  assign nb_end = newblk && blen < 16'd8 && nb_e < 4'd8 && vld[nb_e[2:0]];
-  // The current block ends in this beat at lane lp - 2.
-  assign cur_e = 3'(lp - LP_W'(2));
-  assign cur_end = live && (blk_act_q || pend_q) && lp >= LP_W'(2) && lp <= LP_W'(9) && vld[cur_e];
+  assign nb_end = newblk && l_end[o];
+  // The current block ends in this beat (offset 2..9) at lane o - 2.
+  assign in_win = (wz && o >= 3'd2) || (w1 && o <= 3'd1);
+  assign cur_e = o - 3'd2;
+  assign cur_end = live && (blk_act_q || pend_q) && in_win && vld[cur_e];
 
-  assign start = live && (pend_q || (newblk && lpl != 3'd7));
-  assign s_new = pend_q ? 3'd0 : lpl + 3'd1;
+  assign start = live && (pend_q || (newblk && o != 3'd7));
+  assign s_new = pend_q ? 3'd0 : o + 3'd1;
   assign end_ev = cur_end || nb_end;
   assign end_new = nb_end || (cur_end && pend_q);  // the ending message starts in this beat
   assign end_over = nb_end ? nb_over : cb_over_q;
   assign emit = end_ev && !end_over;
 
-  assign lp_after = newblk ? lp + LP_W'(blen) + LP_W'(2) : lp;
-  assign lp_next = (lp_after >= LP_W'(8)) ? lp_after - LP_W'(8) : '0;
-  assign blk_after = blk - 16'(newblk);
-  assign done = blk_after == '0;
-  // At tlast: the last block ends exactly on the last byte (ea = lp_after - 2). Bytes after the
-  // last block in an earlier beat need no flag: lp_next is then 0 or 1 and stays below 2.
-  assign ea = 3'(lp_after - LP_W'(2));
-  assign exact = body && done && lp_after >= LP_W'(2) && lp_after <= LP_W'(9) && vld[ea] &&
-      (ea == 3'd7 || !vld[ea+3'd1]);
+  // Next offset. A decoded length moves it by length + 2 - 8; without one, by -8 while w > 0,
+  // and to 0 when no length field is left. After an UNSUPPORTED length framing stops, so dec
+  // (not newblk) is enough here.
+  assign th = W_W'((LP_W'(o) + LP_W'(blen) + LP_W'(2)) >> 3);
+  always_comb begin
+    o_next  = o;
+    wz_next = 1'b0;
+    w1_next = 1'b0;
+    wc_next = ld ? th_q - W_W'(2) : wc_q - W_W'(1);
+    if (wz && dec) begin
+      o_next  = l_t[o][2:0];
+      wz_next = l_wz[o];
+      w1_next = l_w1[o];
+    end else if (wz) begin
+      o_next  = '0;
+      wz_next = 1'b1;
+    end else begin
+      wz_next = ld ? th_q == W_W'(2) : wc_q == W_W'(1);
+      w1_next = ld ? th_q == W_W'(3) : wc_q == W_W'(2);
+    end
+  end
+
+  assign blk_after = dec ? blk - 16'd1 : blk;
+  // At tlast: the last block ends exactly on the last byte (offset after it - 2, which must be
+  // 2..9). A new block can do so only when it ends in this beat. Bytes after the last block in an
+  // earlier beat need no flag: the offset is then 0 or 1, outside 2..9.
+  assign exact = body && (newblk ? blk_one && l_exact[o] :
+      !blk_nz && in_win && vld[cur_e] && (cur_e == 3'd7 || !vld[cur_e+3'd1]));
 
   assign runt = s_udp_len < 16'(MOLD_HDR_LEN);
   assign unsup_any = unsup_q || unsup_now;
-  always_comb begin
-    if (runt) begin
-      status = MOLD_RUNT;
-    end else if (unsup_any) begin
-      status = MOLD_UNSUPPORTED;
-    end else if (!exact) begin
-      status = MOLD_MALFORMED;
-    end else if (pkt_cnt == '0) begin
-      status = MOLD_HEARTBEAT;
-    end else if (pkt_cnt == MOLD_COUNT_EOS) begin
-      status = MOLD_EOS;
-    end else begin
-      status = MOLD_OK;
-    end
-  end
-  assign accepted = status == MOLD_OK || status == MOLD_HEARTBEAT || status == MOLD_EOS;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -180,25 +215,19 @@ module moldudp64_rx
       unsup_q   <= 1'b0;
       blk_act_q <= 1'b0;
       pend_q    <= 1'b0;
-      msgs_q    <= '0;
-      over_q    <= '0;
     end else if (beat) begin
       if (last) begin
         bcnt_q    <= '0;
         unsup_q   <= 1'b0;
         blk_act_q <= 1'b0;
         pend_q    <= 1'b0;
-        msgs_q    <= '0;
-        over_q    <= '0;
       end else begin
         if (bcnt_q != 2'd3) begin
           bcnt_q <= bcnt_q + 2'd1;
         end
         unsup_q   <= unsup_any;
-        blk_act_q <= newblk ? (lpl != 3'd7 && !nb_end) : ((blk_act_q || pend_q) && !cur_end);
-        pend_q    <= newblk && lpl == 3'd7;
-        msgs_q    <= msgs_q + 16'(emit);
-        over_q    <= over_q + 16'(end_ev && end_over);
+        blk_act_q <= newblk ? (o != 3'd7 && !nb_end) : ((blk_act_q || pend_q) && !cur_end);
+        pend_q    <= newblk && o == 3'd7;
       end
     end
   end
@@ -208,28 +237,36 @@ module moldudp64_rx
       hi_q <= lane[7];
     end
     if (live) begin
-      lp_q       <= lp_next;
+      o_q        <= o_next;
+      wz_q       <= wz_next;
+      w1_q       <= w1_next;
+      ld_q       <= wz && dec;
+      wc_q       <= wc_next;
       blk_left_q <= blk_after;
     end
-    if (newblk) begin
+    if (wz && dec) begin
+      th_q <= th;
+    end
+    // dec, not newblk: after an UNSUPPORTED length nothing in this packet reads these
+    if (dec) begin
       cb_s_q    <= s_new;  // 0 when the data starts in the next beat (pend_q)
       cb_len_q  <= nb_len;
       cb_over_q <= nb_over;
       cb_seq_q  <= dec_seq;
     end
-    if (hdr2 || newblk) begin
-      nseq_q <= dec_seq + 64'(newblk);
+    if (hdr2 || dec) begin
+      nseq_q <= dec ? dec_seq + 64'd1 : dec_seq;
     end
   end
 
   // ===================== Stage 1 (registered framer decisions) =====================
-  logic s1_old, s1_start, s1_end, s1_end_new, s1_emit, s1_pkt;
+  logic s1_old, s1_start, s1_end, s1_end_new, s1_emit, s1_over, s1_pkt;
+  logic s1_runt, s1_unsup, s1_exact;
   logic [               2:0] s1_s;
   logic [MOLD_MSG_LEN_W-1:0] s1_len;
   logic [63:0] s1_seq, s1_ts, s1_rot_old, s1_rot_new;
-  mold_status_e        s1_status;
-  logic         [63:0] s1_pkt_seq;
-  logic [15:0] s1_pkt_cnt, s1_pkt_msgs, s1_pkt_over;
+  logic [63:0] s1_pkt_seq;
+  logic [15:0] s1_pkt_cnt;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -246,19 +283,55 @@ module moldudp64_rx
   end
 
   always_ff @(posedge clk) begin
-    s1_end_new  <= end_new;
-    s1_emit     <= emit;
-    s1_s        <= s_new;
-    s1_len      <= pend_q ? cb_len_q : nb_len;
-    s1_seq      <= pend_q ? cb_seq_q : dec_seq;
-    s1_ts       <= s_udp_sof_ts;
-    s1_rot_old  <= rotate(s_axis_udp_tdata, cb_s_q);
-    s1_rot_new  <= rotate(s_axis_udp_tdata, s_new);
-    s1_status   <= status;
-    s1_pkt_seq  <= pkt_seq;
-    s1_pkt_cnt  <= pkt_cnt;
-    s1_pkt_msgs <= msgs_q + 16'(emit);
-    s1_pkt_over <= accepted ? over_q + 16'(end_ev && end_over) : '0;
+    s1_end_new <= end_new;
+    s1_emit    <= emit;
+    s1_over    <= end_over;
+    s1_s       <= s_new;
+    s1_len     <= pend_q ? cb_len_q : nb_len;
+    s1_seq     <= pend_q ? cb_seq_q : dec_seq;
+    s1_ts      <= s_udp_sof_ts;
+    s1_rot_old <= rotate(s_axis_udp_tdata, cb_s_q);
+    s1_rot_new <= rotate(s_axis_udp_tdata, s_new);
+    s1_runt    <= runt;
+    s1_unsup   <= unsup_any;
+    s1_exact   <= exact;
+    s1_pkt_seq <= pkt_seq;
+    s1_pkt_cnt <= pkt_cnt;
+  end
+
+  // ---- packet status and counts (on the registered decisions) ----
+  logic [15:0] msgs_q, over_q;  // per packet: messages output, oversize skipped
+  logic [15:0] msgs, over;
+  mold_status_e status;
+  logic         accepted;
+
+  always_comb begin
+    if (s1_runt) begin
+      status = MOLD_RUNT;
+    end else if (s1_unsup) begin
+      status = MOLD_UNSUPPORTED;
+    end else if (!s1_exact) begin
+      status = MOLD_MALFORMED;
+    end else if (s1_pkt_cnt == '0) begin
+      status = MOLD_HEARTBEAT;
+    end else if (s1_pkt_cnt == MOLD_COUNT_EOS) begin
+      status = MOLD_EOS;
+    end else begin
+      status = MOLD_OK;
+    end
+  end
+  assign accepted = status == MOLD_OK || status == MOLD_HEARTBEAT || status == MOLD_EOS;
+  assign msgs     = msgs_q + 16'(s1_end && s1_emit);
+  assign over     = over_q + 16'(s1_end && s1_over);
+
+  always_ff @(posedge clk) begin
+    if (rst || s1_pkt) begin
+      msgs_q <= '0;
+      over_q <= '0;
+    end else begin
+      msgs_q <= msgs;
+      over_q <= over;
+    end
   end
 
   // ===================== Stage 2: realigner and outputs =====================
@@ -333,11 +406,11 @@ module moldudp64_rx
   end
 
   always_ff @(posedge clk) begin
-    p2_status      <= s1_status;
+    p2_status      <= status;
     p2_seq         <= s1_pkt_seq;
     p2_cnt         <= s1_pkt_cnt;
-    p2_msgs        <= s1_pkt_msgs;
-    p2_over        <= s1_pkt_over;
+    p2_msgs        <= msgs;
+    p2_over        <= accepted ? over : '0;
     m_pkt_status   <= p2_status;
     m_pkt_seq      <= p2_seq;
     m_pkt_count    <= p2_cnt;

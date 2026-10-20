@@ -374,7 +374,8 @@ async def tc_unsupported(dut):
 @cocotb.test(timeout_time=2, timeout_unit="ms")
 async def tc_malformed(dut):
     """Framing inconsistent with the count: bytes after the last block (1, 7, 8, 9, 20, with the
-    last message ending in every lane); the payload ending before the count is complete (in a
+    last message ending in every lane, and after a last block that starts and ends in the tlast
+    beat); the payload ending before the count is complete (in a
     message, after one byte of a length field, split or not, and right where a length field
     should start; a count larger than the blocks); a heartbeat or end of session that is not
     20 B. The complete messages before the fault come out."""
@@ -386,6 +387,13 @@ async def tc_malformed(dut):
             await m.send(good + random.randbytes(extra), intent=S.MALFORMED, name=f"end lane {e}, {extra} B after")
         await m.send(good, intent=S.OK, name=f"end lane {e}, exact")
         await m.send(good[:-1], intent=S.MALFORMED, name=f"end lane {e}, last byte missing")
+    # The last block starts and ends in the tlast beat (length field in lanes 7 and 0, 6 B up to
+    # lane 6), with one more byte in that beat.
+    for _ in range(3):
+        good = pack(SESSION, seq(), msgs_of(fill_to_lane(7), 6))
+        assert block_ends(good)[1] % 8 == 6 and len(good) % 8 == 7
+        await m.send(good + random.randbytes(1), intent=S.MALFORMED, name="6 B block in the tlast beat, 1 B after")
+        await m.send(good, intent=S.OK, name="6 B block in the tlast beat, exact")
     for s in range(8):  # cut inside the length field at lane s, and right before it
         msgs = msgs_of(fill_to_lane(s), 30, 12)
         good = pack(SESSION, seq(), msgs)
