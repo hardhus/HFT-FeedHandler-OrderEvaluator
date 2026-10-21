@@ -1,7 +1,9 @@
-// rx_csr_top: simulation-only system top: eth_ip_udp_rx configured and counted through the host CSR
-// block (hft_csr_wrap), with one asynchronous reset source and one reset_sync per clock domain.
-// Clock domain : host_clk (s_axil_*), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*, m_udp_*)
-// Latency      : those of hft_csr_wrap and eth_ip_udp_rx
+// rx_csr_top: simulation-only system top: eth_ip_udp_rx and moldudp64_rx configured and counted
+// through the host CSR block (hft_csr_wrap), with one asynchronous reset source and one reset_sync
+// per clock domain.
+// Clock domain : host_clk (s_axil_*), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*, m_udp_*, m_msg_*,
+//                m_pkt_*)
+// Latency      : those of hft_csr_wrap, eth_ip_udp_rx and moldudp64_rx
 // Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
 module rx_csr_top
   import hft_pkg::*;
@@ -50,14 +52,21 @@ module rx_csr_top
     output logic [15:0] m_udp_len,
     output logic [ 2:0] m_udp_filter_idx,
 
-    // FEED configuration out of the CSR block (moldudp64_rx takes it in F3 S8)
-    output logic        cfg_feed_en,
-    output logic        cfg_session_check,
-    output logic [79:0] cfg_session,
-    output logic [ 7:0] cfg_filter_mask,
-    output logic        cfg_resync,
-    output logic        cfg_resync_learn,
-    output logic [63:0] cfg_resync_seq
+    output logic                      m_msg_valid,
+    output logic [8*MOLD_MAX_MSG-1:0] m_msg_data,
+    output logic [MOLD_MSG_LEN_W-1:0] m_msg_len,
+    output logic [              63:0] m_msg_seq,
+    output logic [              63:0] m_msg_sof_ts,
+
+    output logic                m_pkt_valid,
+    output mold_status_e        m_pkt_status,
+    output logic         [63:0] m_pkt_seq,
+    output logic         [15:0] m_pkt_count,
+    output logic         [63:0] m_pkt_gap,
+    output logic         [15:0] m_pkt_msgs,
+    output logic         [15:0] m_pkt_dup_msgs,
+    output logic         [15:0] m_pkt_oversize,
+    output logic                m_pkt_synced_now
 );
   localparam int unsigned N_FILTERS = 8;
 
@@ -70,6 +79,12 @@ module rx_csr_top
   logic                             stat_valid;
   rx_reason_e                       stat_reason;
   logic       [         15:0]       stat_bytes;
+  logic cfg_feed_en, cfg_session_check, cfg_resync, cfg_resync_learn;
+  logic [         79:0] cfg_session;
+  logic [N_FILTERS-1:0] cfg_filter_mask;
+  logic [         63:0] cfg_resync_seq;
+  logic [         63:0] feed_expected_seq;
+  logic feed_synced, feed_eos;
 
   reset_sync u_host_rst (
       .clk    (host_clk),
@@ -116,7 +131,6 @@ module rx_csr_top
       .stat_valid       (stat_valid),
       .stat_reason      (stat_reason),
       .stat_bytes       (stat_bytes),
-      // moldudp64_rx joins this top in F3 S8; until then no packet events
       .cfg_feed_en      (cfg_feed_en),
       .cfg_session_check(cfg_session_check),
       .cfg_session      (cfg_session),
@@ -124,15 +138,15 @@ module rx_csr_top
       .cfg_resync       (cfg_resync),
       .cfg_resync_learn (cfg_resync_learn),
       .cfg_resync_seq   (cfg_resync_seq),
-      .mpkt_valid       (1'b0),
-      .mpkt_status      (MOLD_OK),
-      .mpkt_gap         ('0),
-      .mpkt_msgs        ('0),
-      .mpkt_dup_msgs    ('0),
-      .mpkt_oversize    ('0),
-      .feed_expected_seq('0),
-      .feed_synced      (1'b0),
-      .feed_eos         (1'b0)
+      .mpkt_valid       (m_pkt_valid),
+      .mpkt_status      (m_pkt_status),
+      .mpkt_gap         (m_pkt_gap),
+      .mpkt_msgs        (m_pkt_msgs),
+      .mpkt_dup_msgs    (m_pkt_dup_msgs),
+      .mpkt_oversize    (m_pkt_oversize),
+      .feed_expected_seq(feed_expected_seq),
+      .feed_synced      (feed_synced),
+      .feed_eos         (feed_eos)
   );
 
   eth_ip_udp_rx #(
@@ -167,5 +181,44 @@ module rx_csr_top
       .stat_valid       (stat_valid),
       .stat_reason      (stat_reason),
       .stat_bytes       (stat_bytes)
+  );
+
+  moldudp64_rx #(
+      .N_FILTERS(N_FILTERS)
+  ) u_mold (
+      .clk              (net_clk),
+      .rst              (net_rst),
+      .s_axis_udp_tdata (m_axis_udp_tdata),
+      .s_axis_udp_tkeep (m_axis_udp_tkeep),
+      .s_axis_udp_tvalid(m_axis_udp_tvalid),
+      .s_axis_udp_tlast (m_axis_udp_tlast),
+      .s_axis_udp_tuser (m_axis_udp_tuser),
+      .s_udp_len        (m_udp_len),
+      .s_udp_filter_idx (m_udp_filter_idx),
+      .s_udp_sof_ts     (m_udp_sof_ts),
+      .cfg_feed_en      (cfg_feed_en),
+      .cfg_session_check(cfg_session_check),
+      .cfg_session      (cfg_session),
+      .cfg_filter_mask  (cfg_filter_mask),
+      .cfg_resync       (cfg_resync),
+      .cfg_resync_learn (cfg_resync_learn),
+      .cfg_resync_seq   (cfg_resync_seq),
+      .m_msg_valid      (m_msg_valid),
+      .m_msg_data       (m_msg_data),
+      .m_msg_len        (m_msg_len),
+      .m_msg_seq        (m_msg_seq),
+      .m_msg_sof_ts     (m_msg_sof_ts),
+      .m_pkt_valid      (m_pkt_valid),
+      .m_pkt_status     (m_pkt_status),
+      .m_pkt_seq        (m_pkt_seq),
+      .m_pkt_count      (m_pkt_count),
+      .m_pkt_gap        (m_pkt_gap),
+      .m_pkt_msgs       (m_pkt_msgs),
+      .m_pkt_dup_msgs   (m_pkt_dup_msgs),
+      .m_pkt_oversize   (m_pkt_oversize),
+      .m_pkt_synced_now (m_pkt_synced_now),
+      .feed_expected_seq(feed_expected_seq),
+      .feed_synced      (feed_synced),
+      .feed_eos         (feed_eos)
   );
 endmodule
