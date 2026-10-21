@@ -49,7 +49,7 @@ from model.mold import (
 from model.mold import resync as model_resync
 
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
-MSG_LATENCY = 2  # input beat with a message's last byte -> m_msg_valid (11 ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.5)
+MSG_LATENCY = 2  # input beat with a message's last byte -> m_msg_valid (11 §2.5)
 PKT_LATENCY = 3  # input tlast -> m_pkt_valid
 SESSION = b"SESSION001"
 CFG = FeedConfig(enable=True, session_check=True, session=SESSION, filter_mask=0x01)
@@ -582,7 +582,7 @@ async def tc_runt(dut):
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")
 async def tc_latency(dut):
-    """11 ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.5, exact (the monitor checks every message and event; these are the edge cases): a
+    """11 §2.5, exact (the monitor checks every message and event; these are the edge cases): a
     message that starts and ends in one beat; one ending in the tlast beat, at lane 0 and 7;
     tvalid gaps right before and after the beat that ends a message; back-to-back packets whose
     event shares cycles with the next packet's messages. Packet part: at IPG 0 each packet's
@@ -616,7 +616,7 @@ async def tc_latency(dut):
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")
 async def tc_reset_mid_packet(dut):
-    """11 ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.5: a 1-cycle reset in the header (beats 1, 2), in a message, and in the beat after a
+    """11 §2.5: a 1-cycle reset in the header (beats 1, 2), in a message, and in the beat after a
     message ended. The cut packet gives no event and at most a prefix of its messages; the
     packets after the reset come out exactly."""
     m = await start(dut)
@@ -638,7 +638,7 @@ async def synced_start(dut) -> Mold:
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")
 async def tc_heartbeat_eos(dut):
-    """11 ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§2.4: a heartbeat (count 0) and an end of session (count 0xFFFF) carry the next
+    """11 §2.4: a heartbeat (count 0) and an end of session (count 0xFFFF) carry the next
     expected seq. In order: accepted, E unchanged; ahead: accepted with a gap, E = S; behind:
     DUP. The end of session sets feed_eos, a heartbeat keeps it, a normal packet clears it. Both
     synchronize an unsynchronized feed. Also back to back (IPG 0)."""

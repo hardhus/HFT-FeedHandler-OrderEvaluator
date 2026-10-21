@@ -3,6 +3,7 @@
 import ast
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -250,3 +251,43 @@ def test_unused_package_constant_is_reported(tmp_path):
     user = tmp_path / "m.sv"
     user.write_text("module m; // C\n  logic [A-1:0] x;  /* C */\nendmodule\n")
     assert unused_package_constants(pkg, [user]) == ["B_X", "C"]
+
+
+TEXT_SUFFIXES = {".py", ".sv", ".svh", ".v", ".f", ".vlt", ".tcl", ".xdc", ".rdl", ".md", ".toml", ".cpp", ".h",
+                 ".hpp", ".txt", ".yml", ".yaml", ".sh"}  # fmt: skip
+# Text read with a Windows code page (cp1252/cp1254) and written back as UTF-8: a 2-byte character
+# such as "§" becomes U+00C2/U+00C3 and one more character, a 3-byte one such as "—" starts with
+# U+00E2 U+20AC; one layer more for each round trip.
+MOJIBAKE = re.compile("[\u00c2\u00c3][\u0080-\u00bf\u0152-\u2122]|\u00e2\u20ac")
+
+
+def mojibake_lines(text: str) -> list[int]:
+    return [i + 1 for i, line in enumerate(text.splitlines()) if MOJIBAKE.search(line)]
+
+
+def test_no_double_encoded_text():
+    """Every tracked text file is UTF-8, encoded once. F3 S4: a script on Windows read a test
+    with the default code page and wrote it back as UTF-8, and each "§" became a long run of
+    such characters."""
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True).stdout
+    bad = {}
+    for name in out.decode().split("\0"):
+        path = REPO / name
+        if not name or (path.suffix not in TEXT_SUFFIXES and path.name != "justfile"):
+            continue
+        text = path.read_bytes().decode("utf-8")
+        if lines := mojibake_lines(text):
+            bad[name] = lines
+    assert not bad, f"double-encoded UTF-8 (file: lines): {bad}"
+
+
+def test_double_encoded_text_is_found():
+    """The check bites on one and two round trips, and passes clean text (Turkish included)."""
+    text = "11 §2.4 — é\n"
+    assert mojibake_lines(text) == []
+    assert mojibake_lines(text.encode("utf-8").decode("cp1254")) == [1]
+    once = "11 §2.4\n".encode("utf-8").decode("cp1254")
+    assert mojibake_lines(once) == [1]
+    assert mojibake_lines(once.encode("utf-8").decode("cp1254")) == [1]
+    assert mojibake_lines("é".encode("utf-8").decode("cp1252")) == [1]
+    assert mojibake_lines("İki aşamalı, YENİ, çğüşö\n") == []
