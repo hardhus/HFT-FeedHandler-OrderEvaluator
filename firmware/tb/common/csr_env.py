@@ -46,6 +46,9 @@ SNAP_NAMES = [f"STATS.{n}" for n in COUNTERS] + [f"FEED.{n}" for n in MOLD_COUNT
 SNAP_NAMES += ["FEED.EXPECTED_SEQ", "FEED.FEED_STATE"]
 N_CNT = len(SNAP_NAMES)
 MASK64 = (1 << 64) - 1
+# hft_csr_wrap delays feed_* by this many net cycles before the snapshot, so that the feed state
+# belongs to the same packet events as the mold_stats counters (audit/11 S8 notes).
+FEED_DELAY = 2
 
 
 @dataclass(frozen=True)
@@ -409,7 +412,7 @@ class Snap:
     """Counter side: stat_* and mpkt_* event logs and the feed_* state at every net edge (from the
     wrapper's inputs), an optional generator of them (unit test only), snapshot handshake monitors
     and the software snapshot protocol. A snapshot taken on acceptance edge E holds the counters of
-    every event sampled before E and the feed state sampled on E."""
+    every event sampled before E and the feed state sampled FEED_DELAY net edges before E."""
 
     def __init__(self, w: Wrap, drive: bool = True):
         self.w, self.dut = w, w.root
@@ -417,6 +420,8 @@ class Snap:
         # (sampling net edge time, status, gap, msgs, dup_msgs, oversize)
         self.mold_events: list[tuple[int, int, int, int, int, int]] = []
         self.feed_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (E, synced, eos) it sampled
+        self.edges: list[int] = []  # every net edge, in order
+        self.edge_index: dict[int, int] = {}  # net edge -> its index in edges
         self.accepts: list[int] = []  # net edges that take a snapshot (data handshake accepts)
         self.req_valid: list[int] = []  # net edges after which the request is at net (dst_valid)
         self.req_accepts: list[int] = []  # host edges that accept a request
@@ -477,6 +482,8 @@ class Snap:
             await RisingEdge(dut.net_clk)
             edge = get_sim_time()
             self.feed_at[edge] = feed
+            self.edge_index[edge] = len(self.edges)
+            self.edges.append(edge)
             if accept:
                 self.accepts.append(edge)
             if stat:
@@ -504,7 +511,7 @@ class Snap:
 
     def model_at(self, edge: int) -> list[int]:
         """Snapshot values taken on `edge`, in SNAP_NAMES order: the counters of every event sampled
-        before it, then the feed state sampled on it."""
+        before it, then the feed state sampled FEED_DELAY net edges before it."""
         c = [0] * len(COUNTERS)
         for t, reason, nbytes in self.events:
             if t >= edge:
@@ -525,7 +532,9 @@ class Snap:
             m[n_status + 2] += over
             m[n_status + 3] += int(gap != 0)
             m[n_status + 4] += gap
-        e, synced, eos = self.feed_at[edge]
+        i = self.edge_index[edge] - FEED_DELAY
+        assert i >= 0, "snapshot before the feed delay registers were loaded"
+        e, synced, eos = self.feed_at[self.edges[i]]
         return [v & MASK64 for v in c + m] + [e, synced | eos << 1]
 
     async def read_counters(self) -> list[int]:

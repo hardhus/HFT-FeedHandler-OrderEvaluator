@@ -18,7 +18,8 @@ lost, none appears from nowhere).
 Counters: a generator drives stat_* and mpkt_* on net_clk and moves feed_*; a monitor records the edge that samples each
 event. A snapshot taken on acceptance edge E must equal the sum of the events sampled before E,
 exactly (the event sampled on E belongs to the next snapshot), for the rx_stats and the mold_stats
-counters, and the feed state must be the one sampled on E. The acceptance and landing edges are
+counters, and the feed state must be the one sampled FEED_DELAY = 2 net edges before E (it then
+belongs to the same packet events as the counters). The acceptance and landing edges are
 observed on the snapshot handshake inside the wrapper (grey box). The bus side is the generated block
 (tested in test_hft_csr.py); axil_props is bound to it here too. The harness (Wrap, Snap, NetCfg)
 is in common/csr_env.py, shared with the system test tb/system/test_rx_csr.py.
@@ -30,11 +31,14 @@ from dataclasses import replace
 import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, gather
+from cocotb.utils import get_sim_time
 
 from common.clocks import PROFILES, profile, start_clock
 from common.csr_env import (
     FEED_COMMIT,
+    MASK64,
     N_CNT,
+    SNAP_NAMES,
     SCRATCH,
     STATS_CTRL,
     FeedCfg,
@@ -44,6 +48,7 @@ from common.csr_env import (
 )
 from common.runner import run_cocotb
 from model.csr import OKAY, CsrModel, addr
+from model.mold import MoldStatus
 from model.net import RxReason
 
 RUNTIME_PARAMS = ("ratio", "group")
@@ -280,6 +285,66 @@ async def tc_snapshot_boundary(dut):
         await w.snap.check(seq, got)
         edge = w.snap.accepts[seq - 1]
         assert any(t == edge for t, _, _ in w.snap.events), "no event on the acceptance edge"
+
+
+@cocotb.test(timeout_time=50, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_snapshot_feed_aligned(dut):
+    """Regression (audit/11 S8 notes): the feed state in a snapshot belongs to the same packet
+    events as the mold counters. Packet events as moldudp64_rx gives them: feed_* show a packet's
+    update 1 cycle before its mpkt_valid (OK with messages, a gap or oversize messages; E moves by
+    all of them). From a synced start E0 with all counters 0, every snapshot must satisfy the
+    accounting identity EXPECTED_SEQ - E0 = MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS
+    (mod 2^64). Snapshots are taken until one was accepted on each edge from 1 before to 2 after
+    the edge that samples a feed update (the window in which a snapshot without the delay took a
+    state one packet ahead of the counters)."""
+    w = await start(dut)
+    w.snap.drive = False
+    idx = {n: i for i, n in enumerate(SNAP_NAMES)}
+    e0 = w.rng.getrandbits(64)
+    dut.feed_expected_seq.value = e0
+    dut.feed_synced.value = 1
+    for _ in range(4):
+        await RisingEdge(dut.net_clk)
+    updates: list[int] = []  # net edges that sample a feed update
+
+    async def packets():
+        e = e0
+        while True:
+            for _ in range(w.rng.randint(3, 7)):  # updates at least 4 edges apart
+                await RisingEdge(dut.net_clk)
+            msgs, over = w.rng.randint(0, 40), w.rng.choice([0, 0, 1, 3])
+            gap = w.rng.choice([0, 0, 1, 1000, 1 << 40])
+            e = (e + msgs + over + gap) & MASK64
+            dut.feed_expected_seq.value = e
+            await RisingEdge(dut.net_clk)
+            updates.append(get_sim_time())
+            dut.mpkt_valid.value = 1
+            dut.mpkt_status.value = int(MoldStatus.OK)
+            dut.mpkt_gap.value = gap
+            dut.mpkt_msgs.value = msgs
+            dut.mpkt_oversize.value = over
+            await RisingEdge(dut.net_clk)
+            dut.mpkt_valid.value = 0
+
+    cocotb.start_soon(packets())
+    phases: set[int] = set()
+    for _ in range(300):
+        seq, got = await w.snap.snapshot()
+        await w.snap.check(seq, got)
+        edge = w.snap.edge_index[w.snap.accepts[seq - 1]]
+        for u in updates:
+            if -1 <= edge - w.snap.edge_index[u] <= 2:
+                phases.add(edge - w.snap.edge_index[u])
+        e = got[idx["FEED.EXPECTED_SEQ"]]
+        moved = sum(got[idx[f"FEED.MOLD_{n}"]] for n in ("MSGS", "OVERSIZE_MSGS", "GAP_MSGS"))
+        assert (e - e0) & MASK64 == moved & MASK64, (
+            f"snapshot {seq}: EXPECTED_SEQ - E0 = {(e - e0) & MASK64}, counters account for {moved & MASK64}")
+        assert got[idx["FEED.FEED_STATE"]] == 1, "synced"
+        if phases == {-1, 0, 1, 2}:
+            break
+        for _ in range(w.rng.randint(0, 3)):
+            await RisingEdge(dut.net_clk)
+    assert phases == {-1, 0, 1, 2}, f"snapshot phases around a feed update: {sorted(phases)}"
 
 
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang

@@ -30,7 +30,10 @@
 //                request is the rising edge of its singlepulse field: a pulse held one more cycle by
 //                regblock must not make a second transfer resync again (a resync is not idempotent).
 //                FEED_STATUS.commit_busy as NET_STATUS. The snapshot also takes the mold_stats
-//                counters and feed_expected_seq/synced/eos in the same net_clk cycle.
+//                counters and the feed state in the same net_clk cycle. feed_* go through
+//                FEED_DELAY = 2 registers first, so that the state belongs to the same packet
+//                events as the counters: moldudp64_rx shows a packet's feed update 1 cycle before
+//                its mpkt_valid, and mold_stats counts the event 1 cycle after it.
 // Reset        : host_rst and net_rst asserted together (one source, one reset_sync per domain,
 //                cdc_handshake contract). After reset cfg_rx_en, cfg_feed_en, cfg_session_check and
 //                cfg_resync are 0; the other cfg_* are undefined until the first commit of their
@@ -88,7 +91,7 @@ module hft_csr_wrap
     output logic                 cfg_resync_learn,
     output logic [         63:0] cfg_resync_seq,
 
-    // moldudp64_rx packet event and feed state
+    // moldudp64_rx packet event and feed state (a packet's update 1 cycle before its event)
     input logic                mpkt_valid,
     input mold_status_e        mpkt_status,
     input logic         [63:0] mpkt_gap,
@@ -319,11 +322,22 @@ module hft_csr_wrap
       .cnt         (mold_cnt)
   );
 
+  // Feed state delayed to the cycle in which mold_stats holds the packet event that made it.
+  localparam int unsigned FEED_DELAY = 2;
+  logic [FEED_DELAY-1:0][63:0] feed_seq_q;
+  logic [FEED_DELAY-1:0] feed_synced_q, feed_eos_q;
+
+  always_ff @(posedge net_clk) begin
+    feed_seq_q    <= {feed_seq_q[FEED_DELAY-2:0], feed_expected_seq};
+    feed_synced_q <= {feed_synced_q[FEED_DELAY-2:0], feed_synced};
+    feed_eos_q    <= {feed_eos_q[FEED_DELAY-2:0], feed_eos};
+  end
+
   assign snap_src.rx           = cnt;
   assign snap_src.mold         = mold_cnt;
-  assign snap_src.expected_seq = feed_expected_seq;
-  assign snap_src.synced       = feed_synced;
-  assign snap_src.eos          = feed_eos;
+  assign snap_src.expected_seq = feed_seq_q[FEED_DELAY-1];
+  assign snap_src.synced       = feed_synced_q[FEED_DELAY-1];
+  assign snap_src.eos          = feed_eos_q[FEED_DELAY-1];
 
   always_ff @(posedge net_clk) begin
     if (net_rst) begin
