@@ -52,6 +52,40 @@ def test_udp_rx_props_fires(prop, capsys):
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
 
 
+MOLD_TB = ["firmware/rtl/core/hft_pkg.sv", "firmware/tb/sva/mold_props.sv", "firmware/tb/sv/tb_mold_props.sv"]
+# HFT_VIOLATE number in tb_mold_props.sv -> the assertion's message.
+MOLD_VIOLATIONS = {
+    "a_in_keep_full": (1, "input beat before tlast without a full tkeep"),
+    "a_in_keep_contig": (2, "input tlast beat with a non-contiguous tkeep"),
+    "a_in_meta_stable": (3, "s_udp_* changed inside an input packet"),
+    "a_msg_len": (4, "message length outside MOLD_MIN_LEN..MOLD_MAX_MSG"),
+    "a_msg_zero_tail": (5, "message bytes after the length are not 0"),
+    "a_msg_seq_up": (6, "message seq does not go up within a packet"),
+    "a_msg_in_packet": (7, "message with no input packet awaiting its event"),
+    "a_pkt_after_tlast": (8, "packet event not 3 cycles after an input tlast"),
+    "a_tlast_gets_pkt": (9, "input tlast without a packet event 3 cycles later"),
+    "a_pkt_msgs_count": (10, "m_pkt_msgs differs from the messages output since the last event"),
+    "a_unframed_no_msgs": (11, "messages output for a DISABLED, OTHER_FEED, RUNT or SESSION packet"),
+    "a_status_legal": (12, "packet status is not a mold_status_e code"),
+}
+
+
+def test_mold_props_quiet_on_legal_traffic():
+    """Legal traffic that hits every property's antecedent fires nothing."""
+    run_svtb(top="tb_mold_props", filelists=[], tb_files=MOLD_TB)
+
+
+@pytest.mark.parametrize("prop", list(MOLD_VIOLATIONS))
+def test_mold_props_fires(prop, capsys):
+    """Each violation fires its own assertion, and only that one."""
+    k, message = MOLD_VIOLATIONS[prop]
+    with pytest.raises(AssertionError, match="exited with|expected one"):
+        run_svtb(top="tb_mold_props", filelists=[], tb_files=MOLD_TB, defines={"HFT_VIOLATE": k})
+    out = capsys.readouterr().out
+    fired = [name for name, (_, msg) in MOLD_VIOLATIONS.items() if msg in out]
+    assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
+
+
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
 # HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
 FIFO_VIOLATIONS = {

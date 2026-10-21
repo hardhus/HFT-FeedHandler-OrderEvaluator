@@ -39,3 +39,21 @@ bind eth_ip_udp_rx udp_rx_props #(
     .pay(pay),
     .tail_q(tail_q)
 );
+
+bind moldudp64_rx mold_props #(
+    .META_W(16 + FIDX_W + 64)
+) u_mold_props (
+    .clk         (clk),
+    .rst         (rst),
+    .s_tvalid    (s_axis_udp_tvalid),
+    .s_tlast     (s_axis_udp_tlast),
+    .s_tkeep     (s_axis_udp_tkeep),
+    .s_meta      ({s_udp_len, s_udp_filter_idx, s_udp_sof_ts}),
+    .m_msg_valid (m_msg_valid),
+    .m_msg_len   (m_msg_len),
+    .m_msg_data  (m_msg_data),
+    .m_msg_seq   (m_msg_seq),
+    .m_pkt_valid (m_pkt_valid),
+    .m_pkt_status(m_pkt_status),
+    .m_pkt_msgs  (m_pkt_msgs)
+);

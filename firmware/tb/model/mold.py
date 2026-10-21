@@ -360,6 +360,11 @@ class _FeedGen:
         return cats
 
 
+def feed_categories(cfg: FeedConfig) -> list[str]:
+    """Category names random_feed() uses for this config ("sync" first): coverage bins."""
+    return ["sync"] + [name for name, *_ in _FeedGen(random.Random(0), cfg).categories()]
+
+
 def random_feed(rng: random.Random, n: int, cfg: FeedConfig) -> list[FeedPacket]:
     """n packets for a feed that starts out of sync (reset state). The first packet is in
     order and synchronizes; then each round holds every category `weight` times in random

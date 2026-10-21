@@ -23,12 +23,14 @@ once every event is out.
 import random
 from collections import deque
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from common.clocks import start_clock
+from common.coverage import Coverage
 from common.runner import run_cocotb
 from model.mold import (
     HDR_LEN,
@@ -42,9 +44,11 @@ from model.mold import (
     MoldStatus,
     eos,
     expect,
+    feed_categories,
     heartbeat,
     itch_like,
     pack,
+    random_feed,
 )
 from model.mold import resync as model_resync
 
@@ -954,5 +958,134 @@ async def tc_seq_wrap(dut):
     await m.finish()
 
 
-def test_moldudp64_rx():
-    run_cocotb(toplevel="moldudp64_rx", filelists=["common.f", "core.f"], test_module="test_moldudp64_rx")
+N_RANDOM = 10_000  # 05 F3 "done": do not lower
+N_LINE_RATE = 2000
+CFG_B = FeedConfig(enable=True, session_check=False, session=b"FEED-B-001", filter_mask=0xFF)
+
+
+def coverage_bins(cfgs: tuple[FeedConfig, ...]) -> list[str]:
+    """Required bins of tc_random_golden (11 §2.9)."""
+    cats = sorted({c for cfg in cfgs for c in feed_categories(cfg)})
+    return [
+        *(f"status_{s.name}" for s in MoldStatus),
+        "gap", "no_gap", "dup_partial", "oversize", "synced_now",
+        *(f"start_lane_{k}" for k in range(8)), *(f"end_lane_{k}" for k in range(8)), "length_split",
+        "ipg0", "tvalid_gap",
+        "resync_between", "resync_first_beat", "resync_in_packet", "resync_after_tlast",
+        *(f"cat_{c}" for c in cats),
+    ]  # fmt: skip
+
+
+@cocotb.test(timeout_time=500, timeout_unit="ms")
+async def tc_random_golden(dut):
+    """10^4 random_feed() packets match the model exactly (every message, event and feed state
+    cycle). Two configs: A/B lines on entries 0 and 5 with the session check, then every entry
+    and no check (a learn resync between them). Random IPG (half 0), tvalid gaps, and resync
+    pulses that set E to the value the model already holds (on a first beat, in a packet, after
+    tlast, between packets): they leave the sequence as the generator meant it and exercise the
+    waiting logic and the eos clear. Ends with the coverage gate (coverage.json)."""
+    rng = random.Random(random.getrandbits(32))
+    cfg_a = replace(CFG, filter_mask=0x21)
+    m = await start(dut)
+    cov = Coverage("moldudp64_rx.tc_random_golden", coverage_bins((cfg_a, CFG_B)))
+    n_msgs = 0
+    for half, cfg in enumerate((cfg_a, CFG_B)):
+        if half:
+            await m.resync(learn=True)
+        m.set_cfg(**{k: getattr(cfg, k) for k in ("session_check", "session", "filter_mask")})
+        for i, t in enumerate(random_feed(rng, N_RANDOM // 2, cfg)):
+            ipg = 0 if rng.random() < 0.5 else rng.randint(1, 4)
+            if i and ipg and rng.random() < 0.05:  # not before the packet that synchronizes
+                await m.resync(learn=False, seq=m.next_seq())
+                cov.hit("resync_between")
+            await m.idle(ipg)
+            nbeats = (len(t.payload) + 7) // 8
+            gaps = {k: rng.randint(1, 3) for k in rng.sample(range(1, nbeats), min(2, nbeats - 1))} if (
+                nbeats > 1 and rng.random() < 0.3) else {}  # fmt: skip
+            m.set_cfg(enable=t.enable)
+            # A resync that sets E to the model's value at that point (before or after the packet).
+            resync: tuple[Resync, ...] = ()
+            r = rng.random() if i else 1.0
+            if r < 0.04:
+                resync = ((0, False, m.next_seq()),)
+                cov.hit("resync_first_beat")
+            elif r < 0.08 and nbeats > 1:
+                _, after = expect(t.payload, t.abort, t.filter_idx, m.cfg, m.state)
+                beat = rng.randint(1, nbeats)
+                resync = ((beat, False, after.expected),)
+                cov.hit("resync_after_tlast" if beat == nbeats else "resync_in_packet")
+            p = await m.send(t.payload, intent=t.intent, gaps=gaps, abort=t.abort, fidx=t.filter_idx,
+                             resync=resync, name=f"{t.category} #{half}.{i}")  # fmt: skip
+            m.set_cfg(enable=True)
+            w = p.want
+            cov.hit(f"status_{w.status.name}")
+            cov.hit(f"cat_{t.category}")
+            if w.status in (S.OK, S.HEARTBEAT, S.EOS):
+                cov.hit("gap" if w.gap else "no_gap")
+                n_msgs += len(w.msgs)
+            if w.status == S.OK and w.dup_msgs:
+                cov.hit("dup_partial")
+            if w.oversize:
+                cov.hit("oversize")
+            if w.synced_now:
+                cov.hit("synced_now")
+            if ipg == 0:
+                cov.hit("ipg0")
+            if gaps:
+                cov.hit("tvalid_gap")
+    await m.finish()
+    for start_lane, end_lane in m.lanes:  # every output message's lanes, seen by the monitor
+        cov.hit(f"start_lane_{start_lane}")
+        cov.hit(f"end_lane_{end_lane}")
+        if start_lane == 1:  # length field in lane 7 and lane 0 of the next beat
+            cov.hit("length_split")
+    assert n_msgs > N_RANDOM, f"only {n_msgs} accepted messages"
+    cov.check(Path.cwd())  # the run directory
+
+
+@cocotb.test(timeout_time=200, timeout_unit="ms")
+async def tc_line_rate_b2b(dut):
+    """11 §2.2, zero loss at line rate: 2000 in-order packets at IPG 0 (tvalid held high from the
+    first to the last). Half are full of 12-B S/W messages, a quarter of 6-B messages (8-B
+    blocks: a block boundary in every beat, the densest supported case), the rest mixed ITCH;
+    sizes up to 1472 B. Every message exact; the monitor counts them all."""
+    m = await start(dut)
+    sent = 0
+    for i in range(N_LINE_RATE):
+        r = random.random()
+        size = 1472 if random.random() < 0.5 else random.randint(28, 400)
+        if r < 0.5:
+            msgs = [itch_like(random, random.choice("SW")) for _ in range(max(1, (size - HDR_LEN) // 14))]
+        elif r < 0.75:
+            msgs = msgs_of(*[6] * ((size - HDR_LEN) // 8))
+        else:
+            msgs = []
+            while HDR_LEN + sum(2 + len(x) for x in msgs) + 52 <= size:
+                msgs += itch(1)
+            msgs = msgs or itch(1)
+        await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, name=f"packet {i} ({len(msgs)} messages)")
+        sent += len(msgs)
+    await m.finish()
+    assert m.n_msgs == sent, f"{m.n_msgs} messages out, {sent} sent"
+
+
+# The long tests run as their own pytest entries (parallel workers, one shared build); GROUP
+# only gives each entry its own run directory.
+LONG_TESTS = ("tc_random_golden", "tc_line_rate_b2b")
+
+
+def directed_tests() -> list[str]:
+    """Every tc_* of this module that is not a long test. Built when called, after the whole module
+    is loaded, so a test defined anywhere in the file is in exactly one group."""
+    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS]
+
+
+@pytest.mark.parametrize("group", ["directed", *LONG_TESTS])
+def test_moldudp64_rx(group):
+    run_cocotb(
+        toplevel="moldudp64_rx",
+        filelists=["common.f", "core.f"],
+        test_module="test_moldudp64_rx",
+        testcase=directed_tests() if group == "directed" else group,
+        extra_env={"GROUP": group},
+    )
