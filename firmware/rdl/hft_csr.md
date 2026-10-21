@@ -17,6 +17,7 @@ Don't override. Generated from: hft_csr
 |------|----------|---------------|
 | 0x000|  GLOBAL  |     Global    |
 | 0x100|    NET   |Network receive|
+| 0x200|   FEED   | MoldUDP64 feed|
 | 0x400|   STATS  |   Statistics  |
 
 ## GLOBAL register file
@@ -55,11 +56,11 @@ Don't override. Generated from: hft_csr
 
 |Bits|Identifier|Access| Reset |Name|
 |----|----------|------|-------|----|
-|31:0|  version |   r  |0x50000|  — |
+|31:0|  version |   r  |0x50001|  — |
 
 #### version field
 
-<p>Major.minor of this map: 0x0005_0000 is the F5 map. Software checks it before use.</p>
+<p>Major.minor of this map: 0x0005_0001 is the F5 map with the F3 FEED block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
 
 ### SCRATCH register
 
@@ -565,6 +566,857 @@ Don't override. Generated from: hft_csr
 #### en field
 
 <p>Entry enabled.</p>
+
+## FEED register file
+
+- Absolute Address: 0x200
+- Base Offset: 0x200
+- Size: 0xC0
+
+<p>moldudp64_rx configuration, resync and counters. FEED_CTRL, SESSION_* and RESYNC_SEQ_* are a shadow like the NET block: FEED_COMMIT moves them to the net clock domain in one transfer. EXPECTED_SEQ, FEED_STATE and the MOLD_* counters (net clock domain, 64 bit, wrap; cleared only by reset) are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS counters; STATS_SEQ counts both. MOLD_<status> is at 0x0240 + 8 * status, status = mold_status_e in hft_pkg.sv.</p>
+
+|Offset|    Identifier    |            Name            |
+|------|------------------|----------------------------|
+| 0x00 |     FEED_CTRL    |        Feed control        |
+| 0x04 |     SESSION_0    |     Session, bytes 0..3    |
+| 0x08 |     SESSION_1    |     Session, bytes 4..7    |
+| 0x0C |     SESSION_2    |     Session, bytes 8..9    |
+| 0x10 |   RESYNC_SEQ_LO  | Resync sequence number, low|
+| 0x14 |   RESYNC_SEQ_HI  |Resync sequence number, high|
+| 0x18 |    FEED_COMMIT   |           Commit           |
+| 0x1C |    FEED_STATUS   |           Status           |
+| 0x20 |   EXPECTED_SEQ   |       64-bit counter       |
+| 0x28 |    FEED_STATE    |         Feed state         |
+| 0x40 |      MOLD_OK     |       64-bit counter       |
+| 0x48 |  MOLD_HEARTBEAT  |       64-bit counter       |
+| 0x50 |     MOLD_EOS     |       64-bit counter       |
+| 0x58 |     MOLD_DUP     |       64-bit counter       |
+| 0x60 |   MOLD_DISABLED  |       64-bit counter       |
+| 0x68 |  MOLD_OTHER_FEED |       64-bit counter       |
+| 0x70 |    MOLD_ABORT    |       64-bit counter       |
+| 0x78 |     MOLD_RUNT    |       64-bit counter       |
+| 0x80 |   MOLD_SESSION   |       64-bit counter       |
+| 0x88 | MOLD_UNSUPPORTED |       64-bit counter       |
+| 0x90 |  MOLD_MALFORMED  |       64-bit counter       |
+| 0x98 |     MOLD_MSGS    |       64-bit counter       |
+| 0xA0 |   MOLD_DUP_MSGS  |       64-bit counter       |
+| 0xA8 |MOLD_OVERSIZE_MSGS|       64-bit counter       |
+| 0xB0 |  MOLD_GAP_EVENTS |       64-bit counter       |
+| 0xB8 |   MOLD_GAP_MSGS  |       64-bit counter       |
+
+### FEED_CTRL register
+
+- Absolute Address: 0x200
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|  Identifier |Access|Reset|Name|
+|----|-------------|------|-----|----|
+|  0 |    enable   |  rw  | 0x0 |  — |
+|  1 |session_check|  rw  | 0x0 |  — |
+|  2 | resync_learn|  rw  | 0x0 |  — |
+|15:8| filter_mask |  rw  | 0x0 |  — |
+
+#### enable field
+
+<p>Feed enabled. 0 after reset: every packet is counted as DISABLED until software has committed a configuration with enable = 1.</p>
+
+#### session_check field
+
+<p>Compare each packet's session with SESSION_0..2; a different one makes the packet SESSION.</p>
+
+#### resync_learn field
+
+<p>What FEED_COMMIT.resync does: 1 = learn (out of sync until the next accepted packet, which then sets the expected sequence number), 0 = set the expected sequence number to RESYNC_SEQ.</p>
+
+#### filter_mask field
+
+<p>Bit i: eth_ip_udp_rx filter entry i belongs to this feed (the A and B lines in the same mask).</p>
+
+### SESSION_0 register
+
+- Absolute Address: 0x204
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Session bytes 0..3 in wire order, byte 0 in [31:24] ("SESSION001" -&gt; 0x53455353).</p>
+
+### SESSION_1 register
+
+- Absolute Address: 0x208
+- Base Offset: 0x8
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Session bytes 4..7, byte 4 in [31:24] ("SESSION001" -&gt; 0x494F4E30).</p>
+
+### SESSION_2 register
+
+- Absolute Address: 0x20C
+- Base Offset: 0xC
+- Size: 0x4
+
+| Bits|Identifier|Access|Reset|Name|
+|-----|----------|------|-----|----|
+|31:16|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Session bytes 8 and 9, byte 8 in [31:24] ("SESSION001" -&gt; 0x3031).</p>
+
+### RESYNC_SEQ_LO register
+
+- Absolute Address: 0x210
+- Base Offset: 0x10
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|    seq   |  rw  | 0x0 |  — |
+
+#### seq field
+
+<p>Expected sequence number set by a resync with resync_learn = 0, bits [31:0].</p>
+
+### RESYNC_SEQ_HI register
+
+- Absolute Address: 0x214
+- Base Offset: 0x14
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|    seq   |  rw  | 0x0 |  — |
+
+#### seq field
+
+<p>Bits [63:32] of the resync sequence number.</p>
+
+### FEED_COMMIT register
+
+- Absolute Address: 0x218
+- Base Offset: 0x18
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  commit  |   w  | 0x0 |  — |
+|  1 |  resync  |   w  | 0x0 |  — |
+
+#### commit field
+
+<p>Write 1: send FEED_CTRL, SESSION_* and RESYNC_SEQ_* to moldudp64_rx (atomic; it takes them at the first beat of each packet). A commit while the previous one is in flight is not lost: the newest shadow is sent when the transfer is free.</p>
+
+#### resync field
+
+<p>Write 1: commit as above and resync the feed with resync_learn and RESYNC_SEQ of that commit. moldudp64_rx applies it between packets, or after the packet in progress. Like a self-clearing command bit, a request stays pending until a transfer carries it: it is never lost, and requests made before that merge into one resync with the newest shadow. FEED_STATUS.commit_busy reads 0 once it is in moldudp64_rx; software that wants two separate resyncs waits for that between them.</p>
+
+### FEED_STATUS register
+
+- Absolute Address: 0x21C
+- Base Offset: 0x1C
+- Size: 0x4
+
+|Bits| Identifier|Access|Reset|Name|
+|----|-----------|------|-----|----|
+|  0 |commit_busy|   r  |  —  |  — |
+
+#### commit_busy field
+
+<p>1 while a commit or resync is pending or in flight. 0: every write before the last FEED_COMMIT is in effect in moldudp64_rx.</p>
+
+## EXPECTED_SEQ register file
+
+- Absolute Address: 0x220
+- Base Offset: 0x20
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x220
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x224
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+### FEED_STATE register
+
+- Absolute Address: 0x228
+- Base Offset: 0x28
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  synced  |   r  |  —  |  — |
+|  1 |    eos   |   r  |  —  |  — |
+
+#### synced field
+
+<p>In sync (an accepted packet set the expected sequence number), at the last snapshot.</p>
+
+#### eos field
+
+<p>End of session seen: set by an accepted end-of-session packet, kept by heartbeats, cleared by an accepted normal packet or a resync; at the last snapshot.</p>
+
+## MOLD_OK register file
+
+- Absolute Address: 0x240
+- Base Offset: 0x40
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x240
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x244
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_HEARTBEAT register file
+
+- Absolute Address: 0x248
+- Base Offset: 0x48
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x248
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x24C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_EOS register file
+
+- Absolute Address: 0x250
+- Base Offset: 0x50
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x250
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x254
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_DUP register file
+
+- Absolute Address: 0x258
+- Base Offset: 0x58
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x258
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x25C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_DISABLED register file
+
+- Absolute Address: 0x260
+- Base Offset: 0x60
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x260
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x264
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_OTHER_FEED register file
+
+- Absolute Address: 0x268
+- Base Offset: 0x68
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x268
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x26C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_ABORT register file
+
+- Absolute Address: 0x270
+- Base Offset: 0x70
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x270
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x274
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_RUNT register file
+
+- Absolute Address: 0x278
+- Base Offset: 0x78
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x278
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x27C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_SESSION register file
+
+- Absolute Address: 0x280
+- Base Offset: 0x80
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x280
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x284
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_UNSUPPORTED register file
+
+- Absolute Address: 0x288
+- Base Offset: 0x88
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x288
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x28C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_MALFORMED register file
+
+- Absolute Address: 0x290
+- Base Offset: 0x90
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x290
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x294
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_MSGS register file
+
+- Absolute Address: 0x298
+- Base Offset: 0x98
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x298
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x29C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_DUP_MSGS register file
+
+- Absolute Address: 0x2A0
+- Base Offset: 0xA0
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x2A0
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x2A4
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_OVERSIZE_MSGS register file
+
+- Absolute Address: 0x2A8
+- Base Offset: 0xA8
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x2A8
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x2AC
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_GAP_EVENTS register file
+
+- Absolute Address: 0x2B0
+- Base Offset: 0xB0
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x2B0
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x2B4
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## MOLD_GAP_MSGS register file
+
+- Absolute Address: 0x2B8
+- Base Offset: 0xB8
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x2B8
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x2BC
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
 
 ## STATS register file
 

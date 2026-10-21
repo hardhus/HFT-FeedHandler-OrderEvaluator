@@ -228,7 +228,7 @@ async def tc_bring_up(dut):
     errors; the counters read through a snapshot are the hand-counted values."""
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0000, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0001, OKAY)
     frames = []
     for i in range(5):  # before any commit: receiver off
         frames.append((await sysm.send(udp_frame(bytes(range(20 + i))), gap=2)).frame)

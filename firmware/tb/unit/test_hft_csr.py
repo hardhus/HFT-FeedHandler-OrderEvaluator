@@ -183,7 +183,7 @@ async def tc_smoke(dut):
         return (await axil.write(addr, value.to_bytes(4, "little"))).resp
 
     assert await read32(ID) == (0x48465431, AxiResp.OKAY)
-    assert await read32(VERSION) == (0x0005_0000, AxiResp.OKAY)
+    assert await read32(VERSION) == (0x0005_0001, AxiResp.OKAY)
     assert await read32(SCRATCH) == (0, AxiResp.OKAY), "SCRATCH reset value"
     for _ in range(8):
         value = random.getrandbits(32)

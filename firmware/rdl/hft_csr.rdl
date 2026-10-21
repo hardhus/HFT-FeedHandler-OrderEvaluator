@@ -28,9 +28,9 @@ addrmap hft_csr {
         reg {
             name = "Register map version";
             field {
-                desc = "Major.minor of this map: 0x0005_0000 is the F5 map. Software checks it before use.";
+                desc = "Major.minor of this map: 0x0005_0001 is the F5 map with the F3 FEED block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
                 sw = r; hw = na;
-            } version[31:0] = 32'h0005_0000;
+            } version[31:0] = 32'h0005_0001;
         } VERSION @ 0x4;
 
         reg {
@@ -133,6 +133,122 @@ addrmap hft_csr {
             } value[31:0];
         } HI @ 0x4;
     };
+
+    regfile {
+        name = "MoldUDP64 feed";
+        desc = "moldudp64_rx configuration, resync and counters. FEED_CTRL, SESSION_* and RESYNC_SEQ_* are a shadow like the NET block: FEED_COMMIT moves them to the net clock domain in one transfer. EXPECTED_SEQ, FEED_STATE and the MOLD_* counters (net clock domain, 64 bit, wrap; cleared only by reset) are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS counters; STATS_SEQ counts both. MOLD_<status> is at 0x0240 + 8 * status, status = mold_status_e in hft_pkg.sv.";
+
+        reg {
+            name = "Feed control";
+            field {
+                desc = "Feed enabled. 0 after reset: every packet is counted as DISABLED until software has committed a configuration with enable = 1.";
+                sw = rw; hw = r;
+            } enable[0:0] = 1'b0;
+            field {
+                desc = "Compare each packet's session with SESSION_0..2; a different one makes the packet SESSION.";
+                sw = rw; hw = r;
+            } session_check[1:1] = 1'b0;
+            field {
+                desc = "What FEED_COMMIT.resync does: 1 = learn (out of sync until the next accepted packet, which then sets the expected sequence number), 0 = set the expected sequence number to RESYNC_SEQ.";
+                sw = rw; hw = r;
+            } resync_learn[2:2] = 1'b0;
+            field {
+                desc = "Bit i: eth_ip_udp_rx filter entry i belongs to this feed (the A and B lines in the same mask).";
+                sw = rw; hw = r;
+            } filter_mask[15:8] = 8'h0;
+        } FEED_CTRL @ 0x00;
+
+        reg {
+            name = "Session, bytes 0..3";
+            field {
+                desc = "Session bytes 0..3 in wire order, byte 0 in [31:24] (\"SESSION001\" -> 0x53455353).";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } SESSION_0 @ 0x04;
+
+        reg {
+            name = "Session, bytes 4..7";
+            field {
+                desc = "Session bytes 4..7, byte 4 in [31:24] (\"SESSION001\" -> 0x494F4E30).";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } SESSION_1 @ 0x08;
+
+        reg {
+            name = "Session, bytes 8..9";
+            field {
+                desc = "Session bytes 8 and 9, byte 8 in [31:24] (\"SESSION001\" -> 0x3031).";
+                sw = rw; hw = r;
+            } bytes[31:16] = 16'h0;
+        } SESSION_2 @ 0x0C;
+
+        reg {
+            name = "Resync sequence number, low";
+            field {
+                desc = "Expected sequence number set by a resync with resync_learn = 0, bits [31:0].";
+                sw = rw; hw = r;
+            } seq[31:0] = 32'h0;
+        } RESYNC_SEQ_LO @ 0x10;
+
+        reg {
+            name = "Resync sequence number, high";
+            field {
+                desc = "Bits [63:32] of the resync sequence number.";
+                sw = rw; hw = r;
+            } seq[31:0] = 32'h0;
+        } RESYNC_SEQ_HI @ 0x14;
+
+        reg {
+            name = "Commit";
+            field {
+                desc = "Write 1: send FEED_CTRL, SESSION_* and RESYNC_SEQ_* to moldudp64_rx (atomic; it takes them at the first beat of each packet). A commit while the previous one is in flight is not lost: the newest shadow is sent when the transfer is free.";
+                sw = w; hw = r; singlepulse;
+            } commit[0:0] = 1'b0;
+            field {
+                desc = "Write 1: commit as above and resync the feed with resync_learn and RESYNC_SEQ of that commit. moldudp64_rx applies it between packets, or after the packet in progress. Like a self-clearing command bit, a request stays pending until a transfer carries it: it is never lost, and requests made before that merge into one resync with the newest shadow. FEED_STATUS.commit_busy reads 0 once it is in moldudp64_rx; software that wants two separate resyncs waits for that between them.";
+                sw = w; hw = r; singlepulse;
+            } resync[1:1] = 1'b0;
+        } FEED_COMMIT @ 0x18;
+
+        reg {
+            name = "Status";
+            field {
+                desc = "1 while a commit or resync is pending or in flight. 0: every write before the last FEED_COMMIT is in effect in moldudp64_rx.";
+                sw = r; hw = w;
+            } commit_busy[0:0];
+        } FEED_STATUS @ 0x1C;
+
+        counter64 EXPECTED_SEQ @ 0x20;  // next expected sequence number (snapshot)
+
+        reg {
+            name = "Feed state";
+            field {
+                desc = "In sync (an accepted packet set the expected sequence number), at the last snapshot.";
+                sw = r; hw = w;
+            } synced[0:0];
+            field {
+                desc = "End of session seen: set by an accepted end-of-session packet, kept by heartbeats, cleared by an accepted normal packet or a resync; at the last snapshot.";
+                sw = r; hw = w;
+            } eos[1:1];
+        } FEED_STATE @ 0x28;
+
+        counter64 MOLD_OK            @ 0x40;  // packets per status (mold_status_e)
+        counter64 MOLD_HEARTBEAT     @ 0x48;
+        counter64 MOLD_EOS           @ 0x50;
+        counter64 MOLD_DUP           @ 0x58;
+        counter64 MOLD_DISABLED      @ 0x60;
+        counter64 MOLD_OTHER_FEED    @ 0x68;
+        counter64 MOLD_ABORT         @ 0x70;
+        counter64 MOLD_RUNT          @ 0x78;
+        counter64 MOLD_SESSION       @ 0x80;
+        counter64 MOLD_UNSUPPORTED   @ 0x88;
+        counter64 MOLD_MALFORMED     @ 0x90;
+        counter64 MOLD_MSGS          @ 0x98;  // messages of OK, HEARTBEAT and EOS packets
+        counter64 MOLD_DUP_MSGS      @ 0xA0;  // messages below the expected sequence number
+        counter64 MOLD_OVERSIZE_MSGS @ 0xA8;  // messages longer than 64 B, skipped
+        counter64 MOLD_GAP_EVENTS    @ 0xB0;  // accepted packets with a gap
+        counter64 MOLD_GAP_MSGS      @ 0xB8;  // messages skipped by gaps
+    } FEED @ 0x0200;
 
     regfile {
         name = "Statistics";

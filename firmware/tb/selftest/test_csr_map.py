@@ -21,8 +21,13 @@ HFT_PKG = FW / "rtl" / "core" / "hft_pkg.sv"
 HEADER_CHECK = Path(__file__).with_name("csr_header_check.cpp")
 
 DROPS = ("DISABLED", "FCS", "MAC", "ETHERTYPE", "IP_HDR", "FRAG", "PROTO", "FILTER", "LEN")
+MOLD_STATUSES = (
+    "OK", "HEARTBEAT", "EOS", "DUP", "DISABLED", "OTHER_FEED", "ABORT", "RUNT", "SESSION", "UNSUPPORTED", "MALFORMED",
+)  # fmt: skip
+# FEED counters after the per-status ones, with their addresses.
+MOLD_EXTRA = {"MSGS": 0x0298, "DUP_MSGS": 0x02A0, "OVERSIZE_MSGS": 0x02A8, "GAP_EVENTS": 0x02B0, "GAP_MSGS": 0x02B8}
 
-# Every register of the F5 map: path -> address.
+# Every register of the map (F5 + F3 FEED block): path -> address.
 EXPECTED = {
     "GLOBAL.ID": 0x0000,
     "GLOBAL.VERSION": 0x0004,
@@ -34,6 +39,49 @@ EXPECTED = {
     "NET.NET_STATUS": 0x0110,
     **{f"NET.FILTER[{i}].IP": 0x0120 + 8 * i for i in range(8)},
     **{f"NET.FILTER[{i}].PORT_EN": 0x0124 + 8 * i for i in range(8)},
+    "FEED.FEED_CTRL": 0x0200,
+    "FEED.SESSION_0": 0x0204,
+    "FEED.SESSION_1": 0x0208,
+    "FEED.SESSION_2": 0x020C,
+    "FEED.RESYNC_SEQ_LO": 0x0210,
+    "FEED.RESYNC_SEQ_HI": 0x0214,
+    "FEED.FEED_COMMIT": 0x0218,
+    "FEED.FEED_STATUS": 0x021C,
+    "FEED.EXPECTED_SEQ.LO": 0x0220,
+    "FEED.EXPECTED_SEQ.HI": 0x0224,
+    "FEED.FEED_STATE": 0x0228,
+    "FEED.MOLD_OK.LO": 0x0240,
+    "FEED.MOLD_OK.HI": 0x0244,
+    "FEED.MOLD_HEARTBEAT.LO": 0x0248,
+    "FEED.MOLD_HEARTBEAT.HI": 0x024C,
+    "FEED.MOLD_EOS.LO": 0x0250,
+    "FEED.MOLD_EOS.HI": 0x0254,
+    "FEED.MOLD_DUP.LO": 0x0258,
+    "FEED.MOLD_DUP.HI": 0x025C,
+    "FEED.MOLD_DISABLED.LO": 0x0260,
+    "FEED.MOLD_DISABLED.HI": 0x0264,
+    "FEED.MOLD_OTHER_FEED.LO": 0x0268,
+    "FEED.MOLD_OTHER_FEED.HI": 0x026C,
+    "FEED.MOLD_ABORT.LO": 0x0270,
+    "FEED.MOLD_ABORT.HI": 0x0274,
+    "FEED.MOLD_RUNT.LO": 0x0278,
+    "FEED.MOLD_RUNT.HI": 0x027C,
+    "FEED.MOLD_SESSION.LO": 0x0280,
+    "FEED.MOLD_SESSION.HI": 0x0284,
+    "FEED.MOLD_UNSUPPORTED.LO": 0x0288,
+    "FEED.MOLD_UNSUPPORTED.HI": 0x028C,
+    "FEED.MOLD_MALFORMED.LO": 0x0290,
+    "FEED.MOLD_MALFORMED.HI": 0x0294,
+    "FEED.MOLD_MSGS.LO": 0x0298,
+    "FEED.MOLD_MSGS.HI": 0x029C,
+    "FEED.MOLD_DUP_MSGS.LO": 0x02A0,
+    "FEED.MOLD_DUP_MSGS.HI": 0x02A4,
+    "FEED.MOLD_OVERSIZE_MSGS.LO": 0x02A8,
+    "FEED.MOLD_OVERSIZE_MSGS.HI": 0x02AC,
+    "FEED.MOLD_GAP_EVENTS.LO": 0x02B0,
+    "FEED.MOLD_GAP_EVENTS.HI": 0x02B4,
+    "FEED.MOLD_GAP_MSGS.LO": 0x02B8,
+    "FEED.MOLD_GAP_MSGS.HI": 0x02BC,
     "STATS.STATS_CTRL": 0x0400,
     "STATS.STATS_SEQ": 0x0404,
     "STATS.RX_PKTS.LO": 0x0410,
@@ -60,9 +108,9 @@ EXPECTED = {
     "STATS.DROP_LEN.HI": 0x0464,
 }
 
-# Blocks with registers in F5 and their address ranges; the rest of the 64 KiB window is
-# reserved (FEED 0x0200, RING 0x0300, RISK 0x0500, STRATEGY 0x1000, TX 0x2000, SYMBOL 0x8000).
-BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "STATS": (0x0400, 0x0500)}
+# Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved
+# (RING 0x0300, RISK 0x0500, STRATEGY 0x1000, TX 0x2000, SYMBOL 0x8000).
+BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "STATS": (0x0400, 0x0500)}
 
 
 def test_every_register_at_its_address():
@@ -73,7 +121,7 @@ def test_every_register_at_its_address():
 def test_constants():
     regs = regs_by_path()
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
-    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0000  # F5 map
+    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0001  # F5 map + F3 FEED block (minor)
 
 
 def test_drop_counters_follow_reason_codes():
@@ -84,6 +132,26 @@ def test_drop_counters_follow_reason_codes():
     for name, code in codes.items():
         assert regs[f"STATS.DROP_{name}.LO"].addr == 0x0420 + 8 * (code - 1), name
     assert not [p for p in regs if p.startswith("STATS.DROP_") and p.split(".")[1][5:] not in codes]
+
+
+def test_mold_counters_follow_status_codes():
+    """MOLD_<status> exists for every mold_status_e code of hft_pkg.sv, at 0x0240 + 8 * code; the
+    message and gap counters follow at the MOLD_CNT_* indices of hft_pkg.sv."""
+    pkg = HFT_PKG.read_text()
+    codes = {m[1]: int(m[2]) for m in re.finditer(r"\bMOLD_(\w+)\s*=\s*4'd(\d+)", pkg)}
+    assert set(codes) == set(MOLD_STATUSES), "status codes and MOLD_* counters differ"
+    regs = regs_by_path()
+    for name, code in codes.items():
+        assert regs[f"FEED.MOLD_{name}.LO"].addr == 0x0240 + 8 * code, name
+    # MOLD_CNT_MSGS = 1 + int'(MOLD_MALFORMED), then +1 .. +4 (the counter index in mold_stats)
+    first = 1 + codes["MALFORMED"]
+    offsets = {m[1]: int(m[2]) for m in re.finditer(r"\bMOLD_CNT_(\w+)\s*=\s*MOLD_CNT_MSGS\s*\+\s*(\d+)", pkg)}
+    index = {"MSGS": first} | {n: first + k for n, k in offsets.items()}
+    assert set(index) == set(MOLD_EXTRA)
+    for name, i in index.items():
+        assert regs[f"FEED.MOLD_{name}.LO"].addr == 0x0240 + 8 * i == MOLD_EXTRA[name], name
+    mold = [p for p in regs if p.startswith("FEED.MOLD_") and p.endswith(".LO")]
+    assert len(mold) == len(MOLD_STATUSES) + len(MOLD_EXTRA)
 
 
 def test_layout_rules():
@@ -106,13 +174,21 @@ def test_access_kinds():
         r = regs[path]
         return {(True, True): "RW", (True, False): "RO", (False, True): "WO"}[r.readable, r.writable]
 
-    ro = {"GLOBAL.ID", "GLOBAL.VERSION", "NET.NET_STATUS", "STATS.STATS_SEQ"}
-    ro |= {p for p in EXPECTED if p.startswith("STATS.") and p.endswith((".LO", ".HI"))}
-    wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL"}
+    ro = {"GLOBAL.ID", "GLOBAL.VERSION", "NET.NET_STATUS", "STATS.STATS_SEQ", "FEED.FEED_STATUS", "FEED.FEED_STATE"}
+    ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.")) and p.endswith((".LO", ".HI"))}
+    ro -= {"FEED.RESYNC_SEQ_LO", "FEED.RESYNC_SEQ_HI"}  # software writes the resync value
+    wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL", "FEED.FEED_COMMIT"}
     assert {p: kind(p) for p in EXPECTED} == {p: "RO" if p in ro else "WO" if p in wo else "RW" for p in EXPECTED}
     pulses = {f"{r.path}.{f.name}" for r in csr_map() for f in r.fields if f.singlepulse}
-    assert pulses == {"NET.NET_COMMIT.commit", "STATS.STATS_CTRL.snapshot"}
+    assert pulses == {"NET.NET_COMMIT.commit", "STATS.STATS_CTRL.snapshot", "FEED.FEED_COMMIT.commit",
+                      "FEED.FEED_COMMIT.resync"}  # fmt: skip
     assert regs["NET.NET_CTRL"].fields[0].reset == 0, "rx_en must reset to 0 (receiver off)"
+    ctrl = {f.name: f for f in regs["FEED.FEED_CTRL"].fields}
+    assert (ctrl["enable"].lsb, ctrl["enable"].reset) == (0, 0), "feed enable must reset to 0"
+    assert (ctrl["session_check"].lsb, ctrl["resync_learn"].lsb, ctrl["filter_mask"].lsb) == (1, 2, 8)
+    assert {f.name: f.lsb for f in regs["FEED.FEED_COMMIT"].fields} == {"commit": 0, "resync": 1}
+    assert {f.name: f.lsb for f in regs["FEED.FEED_STATE"].fields} == {"synced": 0, "eos": 1}
+    assert regs["FEED.SESSION_2"].fields[0].lsb == 16, "session bytes 8..9 in [31:16]"
 
 
 def test_no_field_written_by_both_sw_and_hw():
@@ -139,7 +215,7 @@ def test_model_access_rules():
     assert m.read(a["GLOBAL.ID"]) == (0x48465431, OKAY)
     assert m.write(a["GLOBAL.ID"], 0) == (SLVERR, set())
     assert m.read(a["NET.NET_COMMIT"]) == (0, SLVERR)
-    assert m.read(0x0200) == (0, SLVERR) and m.write(0xFFFC, 1) == (SLVERR, set())
+    assert m.read(0x0300) == (0, SLVERR) and m.write(0xFFFC, 1) == (SLVERR, set())
     assert m.write(a["NET.FILTER[2].PORT_EN"], 0xFFFF_FFFF, strb=0b0100) == (OKAY, set())
     assert m.read(a["NET.FILTER[2].PORT_EN"]) == (1 << 16, OKAY), "only byte 2 written, only en is in it"
     assert m.write(a["NET.NET_COMMIT"], 1) == (OKAY, {"NET.NET_COMMIT.commit"})

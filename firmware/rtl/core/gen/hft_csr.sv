@@ -267,6 +267,85 @@ module hft_csr (
             } FILTER[8];
         } NET;
         struct {
+            logic FEED_CTRL;
+            logic SESSION_0;
+            logic SESSION_1;
+            logic SESSION_2;
+            logic RESYNC_SEQ_LO;
+            logic RESYNC_SEQ_HI;
+            logic FEED_COMMIT;
+            logic FEED_STATUS;
+            struct {
+                logic LO;
+                logic HI;
+            } EXPECTED_SEQ;
+            logic FEED_STATE;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_OK;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_HEARTBEAT;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_EOS;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_DUP;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_DISABLED;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_OTHER_FEED;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_ABORT;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_RUNT;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_SESSION;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_UNSUPPORTED;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_MALFORMED;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_MSGS;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_DUP_MSGS;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_OVERSIZE_MSGS;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_GAP_EVENTS;
+            struct {
+                logic LO;
+                logic HI;
+            } MOLD_GAP_MSGS;
+        } FEED;
+        struct {
             logic STATS_CTRL;
             logic STATS_SEQ;
             struct {
@@ -360,6 +439,135 @@ module hft_csr (
             is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h124 + (16)'(i0) * 16'h8);
             is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h124 + (16)'(i0) * 16'h8);
         end
+        decoded_reg_strb.FEED.FEED_CTRL = cpuif_req_masked & (cpuif_addr == 16'h200);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h200);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h200);
+        decoded_reg_strb.FEED.SESSION_0 = cpuif_req_masked & (cpuif_addr == 16'h204);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h204);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h204);
+        decoded_reg_strb.FEED.SESSION_1 = cpuif_req_masked & (cpuif_addr == 16'h208);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h208);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h208);
+        decoded_reg_strb.FEED.SESSION_2 = cpuif_req_masked & (cpuif_addr == 16'h20c);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h20c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h20c);
+        decoded_reg_strb.FEED.RESYNC_SEQ_LO = cpuif_req_masked & (cpuif_addr == 16'h210);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h210);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h210);
+        decoded_reg_strb.FEED.RESYNC_SEQ_HI = cpuif_req_masked & (cpuif_addr == 16'h214);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h214);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h214);
+        decoded_reg_strb.FEED.FEED_COMMIT = cpuif_req_masked & (cpuif_addr == 16'h218) & cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h218);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h218) & cpuif_req_is_wr;
+        decoded_reg_strb.FEED.FEED_STATUS = cpuif_req_masked & (cpuif_addr == 16'h21c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h21c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h21c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.EXPECTED_SEQ.LO = cpuif_req_masked & (cpuif_addr == 16'h220) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h220);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h220) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.EXPECTED_SEQ.HI = cpuif_req_masked & (cpuif_addr == 16'h224) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h224);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h224) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.FEED_STATE = cpuif_req_masked & (cpuif_addr == 16'h228) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h228);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h228) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OK.LO = cpuif_req_masked & (cpuif_addr == 16'h240) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h240);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h240) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OK.HI = cpuif_req_masked & (cpuif_addr == 16'h244) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h244);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h244) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_HEARTBEAT.LO = cpuif_req_masked & (cpuif_addr == 16'h248) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h248);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h248) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_HEARTBEAT.HI = cpuif_req_masked & (cpuif_addr == 16'h24c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h24c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h24c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_EOS.LO = cpuif_req_masked & (cpuif_addr == 16'h250) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h250);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h250) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_EOS.HI = cpuif_req_masked & (cpuif_addr == 16'h254) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h254);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h254) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DUP.LO = cpuif_req_masked & (cpuif_addr == 16'h258) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h258);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h258) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DUP.HI = cpuif_req_masked & (cpuif_addr == 16'h25c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h25c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h25c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DISABLED.LO = cpuif_req_masked & (cpuif_addr == 16'h260) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h260);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h260) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DISABLED.HI = cpuif_req_masked & (cpuif_addr == 16'h264) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h264);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h264) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OTHER_FEED.LO = cpuif_req_masked & (cpuif_addr == 16'h268) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h268);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h268) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OTHER_FEED.HI = cpuif_req_masked & (cpuif_addr == 16'h26c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h26c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h26c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_ABORT.LO = cpuif_req_masked & (cpuif_addr == 16'h270) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h270);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h270) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_ABORT.HI = cpuif_req_masked & (cpuif_addr == 16'h274) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h274);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h274) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_RUNT.LO = cpuif_req_masked & (cpuif_addr == 16'h278) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h278);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h278) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_RUNT.HI = cpuif_req_masked & (cpuif_addr == 16'h27c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h27c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h27c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_SESSION.LO = cpuif_req_masked & (cpuif_addr == 16'h280) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h280);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h280) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_SESSION.HI = cpuif_req_masked & (cpuif_addr == 16'h284) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h284);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h284) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_UNSUPPORTED.LO = cpuif_req_masked & (cpuif_addr == 16'h288) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h288);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h288) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_UNSUPPORTED.HI = cpuif_req_masked & (cpuif_addr == 16'h28c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h28c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h28c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_MALFORMED.LO = cpuif_req_masked & (cpuif_addr == 16'h290) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h290);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h290) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_MALFORMED.HI = cpuif_req_masked & (cpuif_addr == 16'h294) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h294);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h294) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_MSGS.LO = cpuif_req_masked & (cpuif_addr == 16'h298) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h298);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h298) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h29c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h29c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h29c) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DUP_MSGS.LO = cpuif_req_masked & (cpuif_addr == 16'h2a0) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2a0);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2a0) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_DUP_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h2a4) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2a4);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2a4) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OVERSIZE_MSGS.LO = cpuif_req_masked & (cpuif_addr == 16'h2a8) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2a8);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2a8) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_OVERSIZE_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h2ac) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2ac);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2ac) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_GAP_EVENTS.LO = cpuif_req_masked & (cpuif_addr == 16'h2b0) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2b0);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2b0) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_GAP_EVENTS.HI = cpuif_req_masked & (cpuif_addr == 16'h2b4) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2b4);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2b4) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_GAP_MSGS.LO = cpuif_req_masked & (cpuif_addr == 16'h2b8) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2b8);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2b8) & !cpuif_req_is_wr;
+        decoded_reg_strb.FEED.MOLD_GAP_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2bc);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
         decoded_reg_strb.STATS.STATS_CTRL = cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h400);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
@@ -507,6 +715,66 @@ module hft_csr (
                 struct {
                     logic next;
                     logic load_next;
+                } enable;
+                struct {
+                    logic next;
+                    logic load_next;
+                } session_check;
+                struct {
+                    logic next;
+                    logic load_next;
+                } resync_learn;
+                struct {
+                    logic [7:0] next;
+                    logic load_next;
+                } filter_mask;
+            } FEED_CTRL;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } bytes;
+            } SESSION_0;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } bytes;
+            } SESSION_1;
+            struct {
+                struct {
+                    logic [15:0] next;
+                    logic load_next;
+                } bytes;
+            } SESSION_2;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } seq;
+            } RESYNC_SEQ_LO;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } seq;
+            } RESYNC_SEQ_HI;
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
+                } commit;
+                struct {
+                    logic next;
+                    logic load_next;
+                } resync;
+            } FEED_COMMIT;
+        } FEED;
+        struct {
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
                 } snapshot;
             } STATS_CTRL;
             struct {
@@ -569,6 +837,55 @@ module hft_csr (
                 } PORT_EN;
             } FILTER[8];
         } NET;
+        struct {
+            struct {
+                struct {
+                    logic value;
+                } enable;
+                struct {
+                    logic value;
+                } session_check;
+                struct {
+                    logic value;
+                } resync_learn;
+                struct {
+                    logic [7:0] value;
+                } filter_mask;
+            } FEED_CTRL;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } bytes;
+            } SESSION_0;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } bytes;
+            } SESSION_1;
+            struct {
+                struct {
+                    logic [15:0] value;
+                } bytes;
+            } SESSION_2;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } seq;
+            } RESYNC_SEQ_LO;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } seq;
+            } RESYNC_SEQ_HI;
+            struct {
+                struct {
+                    logic value;
+                } commit;
+                struct {
+                    logic value;
+                } resync;
+            } FEED_COMMIT;
+        } FEED;
         struct {
             struct {
                 struct {
@@ -795,6 +1112,265 @@ module hft_csr (
         end
         assign hwif_out.NET.FILTER[i0].PORT_EN.en.value = field_storage.NET.FILTER[i0].PORT_EN.en.value;
     end
+    // Field: hft_csr.FEED.FEED_CTRL.enable
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_CTRL.enable.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_CTRL.enable.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_CTRL.enable.next = next_c;
+        field_combo.FEED.FEED_CTRL.enable.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_CTRL.enable.value <= 1'h0;
+        end else begin
+            if(field_combo.FEED.FEED_CTRL.enable.load_next) begin
+                field_storage.FEED.FEED_CTRL.enable.value <= field_combo.FEED.FEED_CTRL.enable.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_CTRL.enable.value = field_storage.FEED.FEED_CTRL.enable.value;
+    // Field: hft_csr.FEED.FEED_CTRL.session_check
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_CTRL.session_check.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_CTRL.session_check.value & ~decoded_wr_biten[1:1]) | (decoded_wr_data[1:1] & decoded_wr_biten[1:1]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_CTRL.session_check.next = next_c;
+        field_combo.FEED.FEED_CTRL.session_check.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_CTRL.session_check.value <= 1'h0;
+        end else begin
+            if(field_combo.FEED.FEED_CTRL.session_check.load_next) begin
+                field_storage.FEED.FEED_CTRL.session_check.value <= field_combo.FEED.FEED_CTRL.session_check.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_CTRL.session_check.value = field_storage.FEED.FEED_CTRL.session_check.value;
+    // Field: hft_csr.FEED.FEED_CTRL.resync_learn
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_CTRL.resync_learn.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_CTRL.resync_learn.value & ~decoded_wr_biten[2:2]) | (decoded_wr_data[2:2] & decoded_wr_biten[2:2]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_CTRL.resync_learn.next = next_c;
+        field_combo.FEED.FEED_CTRL.resync_learn.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_CTRL.resync_learn.value <= 1'h0;
+        end else begin
+            if(field_combo.FEED.FEED_CTRL.resync_learn.load_next) begin
+                field_storage.FEED.FEED_CTRL.resync_learn.value <= field_combo.FEED.FEED_CTRL.resync_learn.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_CTRL.resync_learn.value = field_storage.FEED.FEED_CTRL.resync_learn.value;
+    // Field: hft_csr.FEED.FEED_CTRL.filter_mask
+    always_comb begin
+        automatic logic [7:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_CTRL.filter_mask.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_CTRL.filter_mask.value & ~decoded_wr_biten[15:8]) | (decoded_wr_data[15:8] & decoded_wr_biten[15:8]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_CTRL.filter_mask.next = next_c;
+        field_combo.FEED.FEED_CTRL.filter_mask.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_CTRL.filter_mask.value <= 8'h0;
+        end else begin
+            if(field_combo.FEED.FEED_CTRL.filter_mask.load_next) begin
+                field_storage.FEED.FEED_CTRL.filter_mask.value <= field_combo.FEED.FEED_CTRL.filter_mask.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_CTRL.filter_mask.value = field_storage.FEED.FEED_CTRL.filter_mask.value;
+    // Field: hft_csr.FEED.SESSION_0.bytes
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.SESSION_0.bytes.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.SESSION_0 && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.SESSION_0.bytes.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.SESSION_0.bytes.next = next_c;
+        field_combo.FEED.SESSION_0.bytes.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.SESSION_0.bytes.value <= 32'h0;
+        end else begin
+            if(field_combo.FEED.SESSION_0.bytes.load_next) begin
+                field_storage.FEED.SESSION_0.bytes.value <= field_combo.FEED.SESSION_0.bytes.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.SESSION_0.bytes.value = field_storage.FEED.SESSION_0.bytes.value;
+    // Field: hft_csr.FEED.SESSION_1.bytes
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.SESSION_1.bytes.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.SESSION_1 && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.SESSION_1.bytes.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.SESSION_1.bytes.next = next_c;
+        field_combo.FEED.SESSION_1.bytes.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.SESSION_1.bytes.value <= 32'h0;
+        end else begin
+            if(field_combo.FEED.SESSION_1.bytes.load_next) begin
+                field_storage.FEED.SESSION_1.bytes.value <= field_combo.FEED.SESSION_1.bytes.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.SESSION_1.bytes.value = field_storage.FEED.SESSION_1.bytes.value;
+    // Field: hft_csr.FEED.SESSION_2.bytes
+    always_comb begin
+        automatic logic [15:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.SESSION_2.bytes.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.SESSION_2 && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.SESSION_2.bytes.value & ~decoded_wr_biten[31:16]) | (decoded_wr_data[31:16] & decoded_wr_biten[31:16]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.SESSION_2.bytes.next = next_c;
+        field_combo.FEED.SESSION_2.bytes.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.SESSION_2.bytes.value <= 16'h0;
+        end else begin
+            if(field_combo.FEED.SESSION_2.bytes.load_next) begin
+                field_storage.FEED.SESSION_2.bytes.value <= field_combo.FEED.SESSION_2.bytes.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.SESSION_2.bytes.value = field_storage.FEED.SESSION_2.bytes.value;
+    // Field: hft_csr.FEED.RESYNC_SEQ_LO.seq
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.RESYNC_SEQ_LO.seq.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.RESYNC_SEQ_LO && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.RESYNC_SEQ_LO.seq.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.RESYNC_SEQ_LO.seq.next = next_c;
+        field_combo.FEED.RESYNC_SEQ_LO.seq.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.RESYNC_SEQ_LO.seq.value <= 32'h0;
+        end else begin
+            if(field_combo.FEED.RESYNC_SEQ_LO.seq.load_next) begin
+                field_storage.FEED.RESYNC_SEQ_LO.seq.value <= field_combo.FEED.RESYNC_SEQ_LO.seq.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.RESYNC_SEQ_LO.seq.value = field_storage.FEED.RESYNC_SEQ_LO.seq.value;
+    // Field: hft_csr.FEED.RESYNC_SEQ_HI.seq
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.RESYNC_SEQ_HI.seq.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.RESYNC_SEQ_HI && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.RESYNC_SEQ_HI.seq.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.FEED.RESYNC_SEQ_HI.seq.next = next_c;
+        field_combo.FEED.RESYNC_SEQ_HI.seq.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.RESYNC_SEQ_HI.seq.value <= 32'h0;
+        end else begin
+            if(field_combo.FEED.RESYNC_SEQ_HI.seq.load_next) begin
+                field_storage.FEED.RESYNC_SEQ_HI.seq.value <= field_combo.FEED.RESYNC_SEQ_HI.seq.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.RESYNC_SEQ_HI.seq.value = field_storage.FEED.RESYNC_SEQ_HI.seq.value;
+    // Field: hft_csr.FEED.FEED_COMMIT.commit
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_COMMIT.commit.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_COMMIT && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_COMMIT.commit.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end else begin // singlepulse clears back to 0
+            next_c = '0;
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_COMMIT.commit.next = next_c;
+        field_combo.FEED.FEED_COMMIT.commit.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_COMMIT.commit.value <= 1'h0;
+        end else begin
+            if(field_combo.FEED.FEED_COMMIT.commit.load_next) begin
+                field_storage.FEED.FEED_COMMIT.commit.value <= field_combo.FEED.FEED_COMMIT.commit.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_COMMIT.commit.value = field_storage.FEED.FEED_COMMIT.commit.value;
+    // Field: hft_csr.FEED.FEED_COMMIT.resync
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.FEED.FEED_COMMIT.resync.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.FEED.FEED_COMMIT && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.FEED.FEED_COMMIT.resync.value & ~decoded_wr_biten[1:1]) | (decoded_wr_data[1:1] & decoded_wr_biten[1:1]);
+            load_next_c = '1;
+        end else begin // singlepulse clears back to 0
+            next_c = '0;
+            load_next_c = '1;
+        end
+        field_combo.FEED.FEED_COMMIT.resync.next = next_c;
+        field_combo.FEED.FEED_COMMIT.resync.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.FEED.FEED_COMMIT.resync.value <= 1'h0;
+        end else begin
+            if(field_combo.FEED.FEED_COMMIT.resync.load_next) begin
+                field_storage.FEED.FEED_COMMIT.resync.value <= field_combo.FEED.FEED_COMMIT.resync.next;
+            end
+        end
+    end
+    assign hwif_out.FEED.FEED_COMMIT.resync.value = field_storage.FEED.FEED_COMMIT.resync.value;
     // Field: hft_csr.STATS.STATS_CTRL.snapshot
     always_comb begin
         automatic logic [0:0] next_c;
@@ -882,7 +1458,7 @@ module hft_csr (
             readback_data_var[ad_hi(16'h0)][31:0] = 32'h48465431;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h4)) begin
-            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50000;
+            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50001;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h8)) begin
             readback_data_var[ad_hi(16'h8)][31:0] = field_storage.GLOBAL.SCRATCH.value.value;
@@ -908,6 +1484,136 @@ module hft_csr (
                 readback_data_var[ad_hi(16'h124 + (16)'(i0) * 16'h8)][15:0] = field_storage.NET.FILTER[i0].PORT_EN.port.value;
                 readback_data_var[ad_hi(16'h124 + (16)'(i0) * 16'h8)][16] = field_storage.NET.FILTER[i0].PORT_EN.en.value;
             end
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h200)) begin
+            readback_data_var[ad_hi(16'h200)][0] = field_storage.FEED.FEED_CTRL.enable.value;
+            readback_data_var[ad_hi(16'h200)][1] = field_storage.FEED.FEED_CTRL.session_check.value;
+            readback_data_var[ad_hi(16'h200)][2] = field_storage.FEED.FEED_CTRL.resync_learn.value;
+            readback_data_var[ad_hi(16'h200)][15:8] = field_storage.FEED.FEED_CTRL.filter_mask.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h204)) begin
+            readback_data_var[ad_hi(16'h204)][31:0] = field_storage.FEED.SESSION_0.bytes.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h208)) begin
+            readback_data_var[ad_hi(16'h208)][31:0] = field_storage.FEED.SESSION_1.bytes.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h20c)) begin
+            readback_data_var[ad_hi(16'h20c)][31:16] = field_storage.FEED.SESSION_2.bytes.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h210)) begin
+            readback_data_var[ad_hi(16'h210)][31:0] = field_storage.FEED.RESYNC_SEQ_LO.seq.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h214)) begin
+            readback_data_var[ad_hi(16'h214)][31:0] = field_storage.FEED.RESYNC_SEQ_HI.seq.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h21c)) begin
+            readback_data_var[ad_hi(16'h21c)][0] = hwif_in.FEED.FEED_STATUS.commit_busy.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h220)) begin
+            readback_data_var[ad_hi(16'h220)][31:0] = hwif_in.FEED.EXPECTED_SEQ.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h224)) begin
+            readback_data_var[ad_hi(16'h224)][31:0] = hwif_in.FEED.EXPECTED_SEQ.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h228)) begin
+            readback_data_var[ad_hi(16'h228)][0] = hwif_in.FEED.FEED_STATE.synced.next;
+            readback_data_var[ad_hi(16'h228)][1] = hwif_in.FEED.FEED_STATE.eos.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h240)) begin
+            readback_data_var[ad_hi(16'h240)][31:0] = hwif_in.FEED.MOLD_OK.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h244)) begin
+            readback_data_var[ad_hi(16'h244)][31:0] = hwif_in.FEED.MOLD_OK.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h248)) begin
+            readback_data_var[ad_hi(16'h248)][31:0] = hwif_in.FEED.MOLD_HEARTBEAT.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h24c)) begin
+            readback_data_var[ad_hi(16'h24c)][31:0] = hwif_in.FEED.MOLD_HEARTBEAT.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h250)) begin
+            readback_data_var[ad_hi(16'h250)][31:0] = hwif_in.FEED.MOLD_EOS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h254)) begin
+            readback_data_var[ad_hi(16'h254)][31:0] = hwif_in.FEED.MOLD_EOS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h258)) begin
+            readback_data_var[ad_hi(16'h258)][31:0] = hwif_in.FEED.MOLD_DUP.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h25c)) begin
+            readback_data_var[ad_hi(16'h25c)][31:0] = hwif_in.FEED.MOLD_DUP.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h260)) begin
+            readback_data_var[ad_hi(16'h260)][31:0] = hwif_in.FEED.MOLD_DISABLED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h264)) begin
+            readback_data_var[ad_hi(16'h264)][31:0] = hwif_in.FEED.MOLD_DISABLED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h268)) begin
+            readback_data_var[ad_hi(16'h268)][31:0] = hwif_in.FEED.MOLD_OTHER_FEED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h26c)) begin
+            readback_data_var[ad_hi(16'h26c)][31:0] = hwif_in.FEED.MOLD_OTHER_FEED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h270)) begin
+            readback_data_var[ad_hi(16'h270)][31:0] = hwif_in.FEED.MOLD_ABORT.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h274)) begin
+            readback_data_var[ad_hi(16'h274)][31:0] = hwif_in.FEED.MOLD_ABORT.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h278)) begin
+            readback_data_var[ad_hi(16'h278)][31:0] = hwif_in.FEED.MOLD_RUNT.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h27c)) begin
+            readback_data_var[ad_hi(16'h27c)][31:0] = hwif_in.FEED.MOLD_RUNT.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h280)) begin
+            readback_data_var[ad_hi(16'h280)][31:0] = hwif_in.FEED.MOLD_SESSION.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h284)) begin
+            readback_data_var[ad_hi(16'h284)][31:0] = hwif_in.FEED.MOLD_SESSION.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h288)) begin
+            readback_data_var[ad_hi(16'h288)][31:0] = hwif_in.FEED.MOLD_UNSUPPORTED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h28c)) begin
+            readback_data_var[ad_hi(16'h28c)][31:0] = hwif_in.FEED.MOLD_UNSUPPORTED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h290)) begin
+            readback_data_var[ad_hi(16'h290)][31:0] = hwif_in.FEED.MOLD_MALFORMED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h294)) begin
+            readback_data_var[ad_hi(16'h294)][31:0] = hwif_in.FEED.MOLD_MALFORMED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h298)) begin
+            readback_data_var[ad_hi(16'h298)][31:0] = hwif_in.FEED.MOLD_MSGS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h29c)) begin
+            readback_data_var[ad_hi(16'h29c)][31:0] = hwif_in.FEED.MOLD_MSGS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2a0)) begin
+            readback_data_var[ad_hi(16'h2a0)][31:0] = hwif_in.FEED.MOLD_DUP_MSGS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2a4)) begin
+            readback_data_var[ad_hi(16'h2a4)][31:0] = hwif_in.FEED.MOLD_DUP_MSGS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2a8)) begin
+            readback_data_var[ad_hi(16'h2a8)][31:0] = hwif_in.FEED.MOLD_OVERSIZE_MSGS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2ac)) begin
+            readback_data_var[ad_hi(16'h2ac)][31:0] = hwif_in.FEED.MOLD_OVERSIZE_MSGS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2b0)) begin
+            readback_data_var[ad_hi(16'h2b0)][31:0] = hwif_in.FEED.MOLD_GAP_EVENTS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2b4)) begin
+            readback_data_var[ad_hi(16'h2b4)][31:0] = hwif_in.FEED.MOLD_GAP_EVENTS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2b8)) begin
+            readback_data_var[ad_hi(16'h2b8)][31:0] = hwif_in.FEED.MOLD_GAP_MSGS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h2bc)) begin
+            readback_data_var[ad_hi(16'h2bc)][31:0] = hwif_in.FEED.MOLD_GAP_MSGS.HI.value.next;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h404)) begin
             readback_data_var[ad_hi(16'h404)][31:0] = field_storage.STATS.STATS_SEQ.seq.value;

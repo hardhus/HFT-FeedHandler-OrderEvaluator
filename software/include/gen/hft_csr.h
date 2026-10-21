@@ -20,7 +20,7 @@ extern "C" {
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bm 0xffffffff
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bp 0
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bw 32
-#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50000
+#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50001
 
 // reg - hft_csr::GLOBAL::SCRATCH
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bm 0xffffffff
@@ -101,17 +101,68 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__NET__FILTER_t FILTER[8];
 } hft_csr__NET_t;
 
-// reg - hft_csr::STATS::STATS_CTRL
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bw 1
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_reset 0x0
+// reg - hft_csr::FEED::FEED_CTRL
+#define HFT_CSR__FEED__FEED_CTRL__ENABLE_bm 0x1
+#define HFT_CSR__FEED__FEED_CTRL__ENABLE_bp 0
+#define HFT_CSR__FEED__FEED_CTRL__ENABLE_bw 1
+#define HFT_CSR__FEED__FEED_CTRL__ENABLE_reset 0x0
+#define HFT_CSR__FEED__FEED_CTRL__SESSION_CHECK_bm 0x2
+#define HFT_CSR__FEED__FEED_CTRL__SESSION_CHECK_bp 1
+#define HFT_CSR__FEED__FEED_CTRL__SESSION_CHECK_bw 1
+#define HFT_CSR__FEED__FEED_CTRL__SESSION_CHECK_reset 0x0
+#define HFT_CSR__FEED__FEED_CTRL__RESYNC_LEARN_bm 0x4
+#define HFT_CSR__FEED__FEED_CTRL__RESYNC_LEARN_bp 2
+#define HFT_CSR__FEED__FEED_CTRL__RESYNC_LEARN_bw 1
+#define HFT_CSR__FEED__FEED_CTRL__RESYNC_LEARN_reset 0x0
+#define HFT_CSR__FEED__FEED_CTRL__FILTER_MASK_bm 0xff00
+#define HFT_CSR__FEED__FEED_CTRL__FILTER_MASK_bp 8
+#define HFT_CSR__FEED__FEED_CTRL__FILTER_MASK_bw 8
+#define HFT_CSR__FEED__FEED_CTRL__FILTER_MASK_reset 0x0
 
-// reg - hft_csr::STATS::STATS_SEQ
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bm 0xffffffff
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bp 0
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bw 32
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_reset 0x0
+// reg - hft_csr::FEED::SESSION_0
+#define HFT_CSR__FEED__SESSION_0__BYTES_bm 0xffffffff
+#define HFT_CSR__FEED__SESSION_0__BYTES_bp 0
+#define HFT_CSR__FEED__SESSION_0__BYTES_bw 32
+#define HFT_CSR__FEED__SESSION_0__BYTES_reset 0x0
+
+// reg - hft_csr::FEED::SESSION_1
+#define HFT_CSR__FEED__SESSION_1__BYTES_bm 0xffffffff
+#define HFT_CSR__FEED__SESSION_1__BYTES_bp 0
+#define HFT_CSR__FEED__SESSION_1__BYTES_bw 32
+#define HFT_CSR__FEED__SESSION_1__BYTES_reset 0x0
+
+// reg - hft_csr::FEED::SESSION_2
+#define HFT_CSR__FEED__SESSION_2__BYTES_bm 0xffff0000
+#define HFT_CSR__FEED__SESSION_2__BYTES_bp 16
+#define HFT_CSR__FEED__SESSION_2__BYTES_bw 16
+#define HFT_CSR__FEED__SESSION_2__BYTES_reset 0x0
+
+// reg - hft_csr::FEED::RESYNC_SEQ_LO
+#define HFT_CSR__FEED__RESYNC_SEQ_LO__SEQ_bm 0xffffffff
+#define HFT_CSR__FEED__RESYNC_SEQ_LO__SEQ_bp 0
+#define HFT_CSR__FEED__RESYNC_SEQ_LO__SEQ_bw 32
+#define HFT_CSR__FEED__RESYNC_SEQ_LO__SEQ_reset 0x0
+
+// reg - hft_csr::FEED::RESYNC_SEQ_HI
+#define HFT_CSR__FEED__RESYNC_SEQ_HI__SEQ_bm 0xffffffff
+#define HFT_CSR__FEED__RESYNC_SEQ_HI__SEQ_bp 0
+#define HFT_CSR__FEED__RESYNC_SEQ_HI__SEQ_bw 32
+#define HFT_CSR__FEED__RESYNC_SEQ_HI__SEQ_reset 0x0
+
+// reg - hft_csr::FEED::FEED_COMMIT
+#define HFT_CSR__FEED__FEED_COMMIT__COMMIT_bm 0x1
+#define HFT_CSR__FEED__FEED_COMMIT__COMMIT_bp 0
+#define HFT_CSR__FEED__FEED_COMMIT__COMMIT_bw 1
+#define HFT_CSR__FEED__FEED_COMMIT__COMMIT_reset 0x0
+#define HFT_CSR__FEED__FEED_COMMIT__RESYNC_bm 0x2
+#define HFT_CSR__FEED__FEED_COMMIT__RESYNC_bp 1
+#define HFT_CSR__FEED__FEED_COMMIT__RESYNC_bw 1
+#define HFT_CSR__FEED__FEED_COMMIT__RESYNC_reset 0x0
+
+// reg - hft_csr::FEED::FEED_STATUS
+#define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bm 0x1
+#define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bp 0
+#define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bw 1
 
 // reg - hft_csr::counter64::LO
 #define HFT_CSR__COUNTER64__LO__VALUE_bm 0xffffffff
@@ -128,6 +179,57 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t LO;
     uint32_t HI;
 } hft_csr__counter64_t;
+
+// reg - hft_csr::FEED::FEED_STATE
+#define HFT_CSR__FEED__FEED_STATE__SYNCED_bm 0x1
+#define HFT_CSR__FEED__FEED_STATE__SYNCED_bp 0
+#define HFT_CSR__FEED__FEED_STATE__SYNCED_bw 1
+#define HFT_CSR__FEED__FEED_STATE__EOS_bm 0x2
+#define HFT_CSR__FEED__FEED_STATE__EOS_bp 1
+#define HFT_CSR__FEED__FEED_STATE__EOS_bw 1
+
+// regfile - hft_csr::FEED
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t FEED_CTRL;
+    uint32_t SESSION_0;
+    uint32_t SESSION_1;
+    uint32_t SESSION_2;
+    uint32_t RESYNC_SEQ_LO;
+    uint32_t RESYNC_SEQ_HI;
+    uint32_t FEED_COMMIT;
+    uint32_t FEED_STATUS;
+    hft_csr__counter64_t EXPECTED_SEQ;
+    uint32_t FEED_STATE;
+    uint8_t RESERVED_2c_3f[0x14];
+    hft_csr__counter64_t MOLD_OK;
+    hft_csr__counter64_t MOLD_HEARTBEAT;
+    hft_csr__counter64_t MOLD_EOS;
+    hft_csr__counter64_t MOLD_DUP;
+    hft_csr__counter64_t MOLD_DISABLED;
+    hft_csr__counter64_t MOLD_OTHER_FEED;
+    hft_csr__counter64_t MOLD_ABORT;
+    hft_csr__counter64_t MOLD_RUNT;
+    hft_csr__counter64_t MOLD_SESSION;
+    hft_csr__counter64_t MOLD_UNSUPPORTED;
+    hft_csr__counter64_t MOLD_MALFORMED;
+    hft_csr__counter64_t MOLD_MSGS;
+    hft_csr__counter64_t MOLD_DUP_MSGS;
+    hft_csr__counter64_t MOLD_OVERSIZE_MSGS;
+    hft_csr__counter64_t MOLD_GAP_EVENTS;
+    hft_csr__counter64_t MOLD_GAP_MSGS;
+} hft_csr__FEED_t;
+
+// reg - hft_csr::STATS::STATS_CTRL
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bw 1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_reset 0x0
+
+// reg - hft_csr::STATS::STATS_SEQ
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bm 0xffffffff
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bp 0
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bw 32
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_reset 0x0
 
 // regfile - hft_csr::STATS
 typedef struct __attribute__ ((__packed__)) {
@@ -152,7 +254,9 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__GLOBAL_t GLOBAL;
     uint8_t RESERVED_c_ff[0xf4];
     hft_csr__NET_t NET;
-    uint8_t RESERVED_160_3ff[0x2a0];
+    uint8_t RESERVED_160_1ff[0xa0];
+    hft_csr__FEED_t FEED;
+    uint8_t RESERVED_2c0_3ff[0x140];
     hft_csr__STATS_t STATS;
 } hft_csr_t;
 

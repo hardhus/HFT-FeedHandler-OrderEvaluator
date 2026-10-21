@@ -20,12 +20,12 @@ package hft_csr_pkg;
     } hft_csr__NET__in_t;
 
     typedef struct {
-        logic incr;
-    } hft_csr__STATS__STATS_SEQ__seq__in_t;
+        logic next;
+    } hft_csr__FEED__FEED_STATUS__commit_busy__in_t;
 
     typedef struct {
-        hft_csr__STATS__STATS_SEQ__seq__in_t seq;
-    } hft_csr__STATS__STATS_SEQ__in_t;
+        hft_csr__FEED__FEED_STATUS__commit_busy__in_t commit_busy;
+    } hft_csr__FEED__FEED_STATUS__in_t;
 
     typedef struct {
         logic [31:0] next;
@@ -49,6 +49,49 @@ package hft_csr_pkg;
     } hft_csr__counter64__in_t;
 
     typedef struct {
+        logic next;
+    } hft_csr__FEED__FEED_STATE__synced__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__FEED__FEED_STATE__eos__in_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_STATE__synced__in_t synced;
+        hft_csr__FEED__FEED_STATE__eos__in_t eos;
+    } hft_csr__FEED__FEED_STATE__in_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_STATUS__in_t FEED_STATUS;
+        hft_csr__counter64__in_t EXPECTED_SEQ;
+        hft_csr__FEED__FEED_STATE__in_t FEED_STATE;
+        hft_csr__counter64__in_t MOLD_OK;
+        hft_csr__counter64__in_t MOLD_HEARTBEAT;
+        hft_csr__counter64__in_t MOLD_EOS;
+        hft_csr__counter64__in_t MOLD_DUP;
+        hft_csr__counter64__in_t MOLD_DISABLED;
+        hft_csr__counter64__in_t MOLD_OTHER_FEED;
+        hft_csr__counter64__in_t MOLD_ABORT;
+        hft_csr__counter64__in_t MOLD_RUNT;
+        hft_csr__counter64__in_t MOLD_SESSION;
+        hft_csr__counter64__in_t MOLD_UNSUPPORTED;
+        hft_csr__counter64__in_t MOLD_MALFORMED;
+        hft_csr__counter64__in_t MOLD_MSGS;
+        hft_csr__counter64__in_t MOLD_DUP_MSGS;
+        hft_csr__counter64__in_t MOLD_OVERSIZE_MSGS;
+        hft_csr__counter64__in_t MOLD_GAP_EVENTS;
+        hft_csr__counter64__in_t MOLD_GAP_MSGS;
+    } hft_csr__FEED__in_t;
+
+    typedef struct {
+        logic incr;
+    } hft_csr__STATS__STATS_SEQ__seq__in_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_SEQ__seq__in_t seq;
+    } hft_csr__STATS__STATS_SEQ__in_t;
+
+    typedef struct {
         hft_csr__STATS__STATS_SEQ__in_t STATS_SEQ;
         hft_csr__counter64__in_t RX_PKTS;
         hft_csr__counter64__in_t RX_BYTES;
@@ -65,6 +108,7 @@ package hft_csr_pkg;
 
     typedef struct {
         hft_csr__NET__in_t NET;
+        hft_csr__FEED__in_t FEED;
         hft_csr__STATS__in_t STATS;
     } hft_csr__in_t;
 
@@ -141,6 +185,92 @@ package hft_csr_pkg;
 
     typedef struct {
         logic value;
+    } hft_csr__FEED__FEED_CTRL__enable__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__FEED__FEED_CTRL__session_check__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__FEED__FEED_CTRL__resync_learn__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__FEED__FEED_CTRL__filter_mask__out_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_CTRL__enable__out_t enable;
+        hft_csr__FEED__FEED_CTRL__session_check__out_t session_check;
+        hft_csr__FEED__FEED_CTRL__resync_learn__out_t resync_learn;
+        hft_csr__FEED__FEED_CTRL__filter_mask__out_t filter_mask;
+    } hft_csr__FEED__FEED_CTRL__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__FEED__SESSION_0__bytes__out_t;
+
+    typedef struct {
+        hft_csr__FEED__SESSION_0__bytes__out_t bytes;
+    } hft_csr__FEED__SESSION_0__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__FEED__SESSION_1__bytes__out_t;
+
+    typedef struct {
+        hft_csr__FEED__SESSION_1__bytes__out_t bytes;
+    } hft_csr__FEED__SESSION_1__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__FEED__SESSION_2__bytes__out_t;
+
+    typedef struct {
+        hft_csr__FEED__SESSION_2__bytes__out_t bytes;
+    } hft_csr__FEED__SESSION_2__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__FEED__RESYNC_SEQ_LO__seq__out_t;
+
+    typedef struct {
+        hft_csr__FEED__RESYNC_SEQ_LO__seq__out_t seq;
+    } hft_csr__FEED__RESYNC_SEQ_LO__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__FEED__RESYNC_SEQ_HI__seq__out_t;
+
+    typedef struct {
+        hft_csr__FEED__RESYNC_SEQ_HI__seq__out_t seq;
+    } hft_csr__FEED__RESYNC_SEQ_HI__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__FEED__FEED_COMMIT__commit__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__FEED__FEED_COMMIT__resync__out_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_COMMIT__commit__out_t commit;
+        hft_csr__FEED__FEED_COMMIT__resync__out_t resync;
+    } hft_csr__FEED__FEED_COMMIT__out_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_CTRL__out_t FEED_CTRL;
+        hft_csr__FEED__SESSION_0__out_t SESSION_0;
+        hft_csr__FEED__SESSION_1__out_t SESSION_1;
+        hft_csr__FEED__SESSION_2__out_t SESSION_2;
+        hft_csr__FEED__RESYNC_SEQ_LO__out_t RESYNC_SEQ_LO;
+        hft_csr__FEED__RESYNC_SEQ_HI__out_t RESYNC_SEQ_HI;
+        hft_csr__FEED__FEED_COMMIT__out_t FEED_COMMIT;
+    } hft_csr__FEED__out_t;
+
+    typedef struct {
+        logic value;
     } hft_csr__STATS__STATS_CTRL__snapshot__out_t;
 
     typedef struct {
@@ -153,6 +283,7 @@ package hft_csr_pkg;
 
     typedef struct {
         hft_csr__NET__out_t NET;
+        hft_csr__FEED__out_t FEED;
         hft_csr__STATS__out_t STATS;
     } hft_csr__out_t;
 endpackage
