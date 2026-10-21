@@ -475,6 +475,27 @@ async def tc_feed_commit_latency(dut):
     assert net <= allowed, f"net edges acceptance -> landed: {sorted(net)}, documented {sorted(allowed)}"
 
 
+class PendingWatch:
+    """Grey box, host side: events that reach the FEED path while a request waits for the
+    handshake (feed_pending_q): a change of the shadow, and a resync request (rising edge)."""
+
+    def __init__(self, root):
+        self.root, self.shadow_changes, self.resync_requests = root, 0, 0
+        cocotb.start_soon(self._run())
+
+    async def _run(self) -> None:
+        r = self.root
+        prev = None
+        while True:
+            await RisingEdge(r.host_clk)
+            await ReadOnly()
+            shadow = int(r.feed_shadow.value)
+            if r.feed_pending_q.value:
+                self.shadow_changes += int(prev is not None and shadow != prev)
+                self.resync_requests += int(r.feed_resync_req.value)
+            prev = shadow
+
+
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_feed_commit_atomic(dut):
     """100 random FEED configurations, each written in random order and committed, sometimes
@@ -490,6 +511,26 @@ async def tc_feed_commit_atomic(dut):
     await w.feed.wait_idle()
     assert await w.feed.applied() == w.feed.committed[-1]
     assert len(w.feed.seen) >= 50
+    # A commit queued behind a busy handshake, then a whole new configuration written into the
+    # shadow while that commit still waits: the commit carries the shadow of its own pulse (the
+    # buffer), never the newer writes.
+    watch = PendingWatch(dut)
+    for _ in range(10):
+        cfg = FeedCfg.random(w.rng)
+        await w.feed.write_cfg(cfg)
+        await w.feed.commit()  # takes the handshake
+        w.feed.committed.append(cfg)
+        before = watch.shadow_changes
+        pend = [w.drv.write_nowait(FEED_COMMIT, 1)]  # waits behind it (pending)
+        newer = FeedCfg.random(w.rng)
+        for a, d in newer.writes():
+            pend.append(w.drv.write_nowait(a, d))
+            w.feed.regs[a] = d
+        for q in pend:
+            assert (await q.wait())[1] == OKAY
+        await w.feed.wait_idle()
+        assert watch.shadow_changes > before, "no shadow write landed while the commit was pending"
+        assert await w.feed.applied() == cfg, "writes after a commit reached cfg_*"
     w.feed.check_done()
     assert w.feed.resyncs == 0, "a commit without resync made cfg_resync"
 
@@ -563,6 +604,22 @@ async def tc_feed_resync(dut):
         assert await w.feed.applied() == new
         assert len(w.feed.expected) == transfers + 2, "expected the commit and one merged resync transfer"
         assert w.feed.resyncs == before + 1, "two resync requests in one window did not merge into one"
+    # A resync requested while a plain commit waits behind a busy handshake: it merges into that
+    # commit's transfer (resync once), it is not lost.
+    watch = PendingWatch(dut)
+    for _ in range(10):
+        cfg = FeedCfg.random(w.rng)
+        await w.feed.write_cfg(cfg)
+        before, transfers, seen = w.feed.resyncs, len(w.feed.expected), watch.resync_requests
+        w.feed.committed += [cfg, cfg, cfg]
+        w.feed.resync_requests += 1
+        pend = [w.drv.write_nowait(FEED_COMMIT, 1), w.drv.write_nowait(FEED_COMMIT, 1), w.drv.write_nowait(FEED_COMMIT, 2)]
+        for q in pend:
+            assert (await q.wait())[1] == OKAY
+        await w.feed.wait_idle()
+        assert watch.resync_requests > seen, "the resync request did not arrive while a commit was pending"
+        assert len(w.feed.expected) == transfers + 2, "expected the first commit and one merged transfer"
+        assert w.feed.resyncs == before + 1, "the resync request behind a pending commit was lost"
     w.feed.check_done()
 
 
