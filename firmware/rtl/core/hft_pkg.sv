@@ -60,4 +60,13 @@ package hft_pkg;
     MOLD_UNSUPPORTED = 4'd9,
     MOLD_MALFORMED   = 4'd10
   } mold_status_e;
+
+  // MoldUDP64 counters (mold_stats, FEED block of the CSR map): index = status (one per packet),
+  // then the message and gap counters.
+  localparam int unsigned MOLD_CNT_MSGS = 1 + int'(MOLD_MALFORMED);  // messages of accepted packets
+  localparam int unsigned MOLD_CNT_DUP_MSGS = MOLD_CNT_MSGS + 1;
+  localparam int unsigned MOLD_CNT_OVERSIZE_MSGS = MOLD_CNT_MSGS + 2;
+  localparam int unsigned MOLD_CNT_GAP_EVENTS = MOLD_CNT_MSGS + 3;  // packets with a gap
+  localparam int unsigned MOLD_CNT_GAP_MSGS = MOLD_CNT_MSGS + 4;  // messages skipped
+  localparam int unsigned MOLD_N_CNT = MOLD_CNT_MSGS + 5;
 endpackage
