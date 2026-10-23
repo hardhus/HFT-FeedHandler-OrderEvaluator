@@ -7,8 +7,9 @@
 module moldudp64_rx_ooc
   import hft_pkg::*;
 #(
-    parameter  int unsigned N_FILTERS = 8,
-    localparam int unsigned FIDX_W    = (N_FILTERS > 1) ? $clog2(N_FILTERS) : 1
+    parameter int unsigned N_FILTERS = 8,
+    parameter int unsigned CTX_W = 2 * ITCH_N_CLASS,  // itch_decoder class enable and filter
+    localparam int unsigned FIDX_W = (N_FILTERS > 1) ? $clog2(N_FILTERS) : 1
 ) (
     input  logic                              clk,
     input  logic                              rst,
@@ -27,11 +28,13 @@ module moldudp64_rx_ooc
     input  logic                              cfg_resync,
     input  logic                              cfg_resync_learn,
     input  logic         [              63:0] cfg_resync_seq,
+    input  logic         [         CTX_W-1:0] cfg_msg_ctx,
     output logic                              m_msg_valid,
     output logic         [8*MOLD_MAX_MSG-1:0] m_msg_data,
     output logic         [MOLD_MSG_LEN_W-1:0] m_msg_len,
     output logic         [              63:0] m_msg_seq,
     output logic         [              63:0] m_msg_sof_ts,
+    output logic         [         CTX_W-1:0] m_msg_ctx,
     output logic                              m_pkt_valid,
     output mold_status_e                      m_pkt_status,
     output logic         [              63:0] m_pkt_seq,
@@ -61,6 +64,7 @@ module moldudp64_rx_ooc
   logic                 resync_q;
   logic                 resync_learn_q;
   logic [         63:0] resync_seq_q;
+  logic [    CTX_W-1:0] msg_ctx_q;
 
   always_ff @(posedge clk) begin
     rst_q           <= rst;
@@ -79,10 +83,12 @@ module moldudp64_rx_ooc
     resync_q        <= cfg_resync;
     resync_learn_q  <= cfg_resync_learn;
     resync_seq_q    <= cfg_resync_seq;
+    msg_ctx_q       <= cfg_msg_ctx;
   end
 
   moldudp64_rx #(
-      .N_FILTERS(N_FILTERS)
+      .N_FILTERS(N_FILTERS),
+      .CTX_W    (CTX_W)
   ) u_rx (
       .clk              (clk),
       .rst              (rst_q),
@@ -101,11 +107,13 @@ module moldudp64_rx_ooc
       .cfg_resync       (resync_q),
       .cfg_resync_learn (resync_learn_q),
       .cfg_resync_seq   (resync_seq_q),
+      .cfg_msg_ctx      (msg_ctx_q),
       .m_msg_valid      (m_msg_valid),
       .m_msg_data       (m_msg_data),
       .m_msg_len        (m_msg_len),
       .m_msg_seq        (m_msg_seq),
       .m_msg_sof_ts     (m_msg_sof_ts),
+      .m_msg_ctx        (m_msg_ctx),
       .m_pkt_valid      (m_pkt_valid),
       .m_pkt_status     (m_pkt_status),
       .m_pkt_seq        (m_pkt_seq),

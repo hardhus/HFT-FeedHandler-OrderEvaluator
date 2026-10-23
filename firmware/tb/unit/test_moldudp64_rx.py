@@ -7,6 +7,8 @@ state carried from packet to packet as the RTL carries it:
 - exactly one packet event per input packet, after its messages: status, gap, message, dup
   and oversize counts, synced_now, the header's seq/count (packets of at least MOLD_HDR_LEN
   bytes);
+- m_msg_ctx of every message: cfg_msg_ctx on its packet's first beat (cfg_msg_ctx is random
+  on every other beat and cycle);
 - feed_expected_seq/feed_synced/feed_eos in every cycle, against a timeline of the model's
   states: a packet's update (with the resyncs waiting on it) is visible 2 cycles after its
   tlast, a resync on a first beat or between packets 1 cycle after the pulse, a reset 1 cycle
@@ -57,6 +59,7 @@ MSG_LATENCY = 2  # input beat with a message's last byte -> m_msg_valid (11 §2.
 PKT_LATENCY = 3  # input tlast -> m_pkt_valid
 SESSION = b"SESSION001"
 CFG = FeedConfig(enable=True, session_check=True, session=SESSION, filter_mask=0x01)
+CTX_W = 12  # cfg_msg_ctx width: itch_decoder class enable and filter (as in the OOC harness)
 UDP_PAYLOAD_MAX = 65535 - 28  # largest UDP payload eth_ip_udp_rx delivers (ip_len 65535)
 S = MoldStatus
 
@@ -102,6 +105,7 @@ class Pkt:
     msg_latency: list[int] = field(default_factory=list)
     pkt_latency: int = -1
     pre: bool = False  # a resync on the first beat
+    ctx: int = field(default_factory=lambda: random.getrandbits(CTX_W))  # cfg_msg_ctx on the first beat
 
 
 class Mold:
@@ -169,6 +173,7 @@ class Mold:
         self.s_len.value = random.getrandbits(16)
         self.s_fidx.value = random.getrandbits(3)
         self.s_ts.value = random.getrandbits(64)
+        self.dut.cfg_msg_ctx.value = random.getrandbits(CTX_W)
         self.pulse(None)
 
     async def idle(self, cycles: int) -> None:
@@ -258,6 +263,7 @@ class Mold:
                 for _ in range(gaps[k]):  # a gap inside the packet: s_udp_* stay held
                     self.s_tvalid.value = 0
                     self.s_tdata.value = random.getrandbits(64)
+                    self.dut.cfg_msg_ctx.value = random.getrandbits(CTX_W)
                     self.pulse(None)
                     await RisingEdge(self.dut.clk)
             end = last and k == len(beats) - 1
@@ -269,6 +275,7 @@ class Mold:
             self.s_fidx.value = p.fidx
             self.s_ts.value = p.ts
             self.s_tvalid.value = 1
+            self.dut.cfg_msg_ctx.value = p.ctx if k == 0 else random.getrandbits(CTX_W)
             self.pulse(pulses[k][0] if k in pulses else None)
             if cfg_mid is not None and k == 1:
                 self.drive_cfg(cfg_mid)
@@ -349,6 +356,8 @@ class Mold:
             raise AssertionError(f"{p.name}: seq {seq} ({n} B) differs from byte {bad}: {vec[:n].hex()} vs {data.hex()}")
         assert not any(vec[n:]), f"{p.name}: seq {seq}: bytes after the length are not 0: {vec[n:].hex()}"
         assert int(self.m_ts.value) == p.ts, f"{p.name}: seq {seq} m_msg_sof_ts is not its packet's"
+        ctx = int(self.dut.m_msg_ctx.value)
+        assert ctx == p.ctx, f"{p.name}: seq {seq} m_msg_ctx {ctx:#x}, its packet's first beat {p.ctx:#x}"
         index = (seq - int.from_bytes(p.payload[10:18], "big")) % SEQ_MOD
         end = block_ends(p.payload)[index]
         latency = self.cycle - p.beats[end // 8]
@@ -1086,6 +1095,7 @@ def test_moldudp64_rx(group):
         toplevel="moldudp64_rx",
         filelists=["common.f", "core.f"],
         test_module="test_moldudp64_rx",
+        parameters={"CTX_W": CTX_W},
         testcase=directed_tests() if group == "directed" else group,
         extra_env={"GROUP": group},
     )

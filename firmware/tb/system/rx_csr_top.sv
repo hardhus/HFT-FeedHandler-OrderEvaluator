@@ -52,11 +52,13 @@ module rx_csr_top
     output logic [15:0] m_udp_len,
     output logic [ 2:0] m_udp_filter_idx,
 
+    // m_msg_ctx: cfg_msg_ctx is 0 until the ITCH config comes (F4 S8)
     output logic                      m_msg_valid,
     output logic [8*MOLD_MAX_MSG-1:0] m_msg_data,
     output logic [MOLD_MSG_LEN_W-1:0] m_msg_len,
     output logic [              63:0] m_msg_seq,
     output logic [              63:0] m_msg_sof_ts,
+    output logic                      m_msg_ctx,
 
     output logic                m_pkt_valid,
     output mold_status_e        m_pkt_status,
@@ -203,11 +205,13 @@ module rx_csr_top
       .cfg_resync       (cfg_resync),
       .cfg_resync_learn (cfg_resync_learn),
       .cfg_resync_seq   (cfg_resync_seq),
+      .cfg_msg_ctx      (1'b0),
       .m_msg_valid      (m_msg_valid),
       .m_msg_data       (m_msg_data),
       .m_msg_len        (m_msg_len),
       .m_msg_seq        (m_msg_seq),
       .m_msg_sof_ts     (m_msg_sof_ts),
+      .m_msg_ctx        (m_msg_ctx),
       .m_pkt_valid      (m_pkt_valid),
       .m_pkt_status     (m_pkt_status),
       .m_pkt_seq        (m_pkt_seq),

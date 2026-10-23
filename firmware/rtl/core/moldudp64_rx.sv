@@ -8,12 +8,16 @@
 // Input        : the eth_ip_udp_rx payload stream: byte 0 = tdata[7:0], tkeep full before tlast
 //                and contiguous on it, tuser on the tlast beat only, s_udp_* held from the first
 //                beat through tlast. cfg_* except cfg_resync* are sampled on the first beat
+// Context      : cfg_msg_ctx is opaque here (the ITCH decoder's per-packet config): sampled on
+//                the first beat with the other cfg_* and output with every message of the packet,
+//                so one FEED commit applies to a whole packet, framing and decoding alike
 // Reset        : rst between packets or with the source; a packet cut by it gets no event, and
 //                the feed state (expected seq, synced, eos) goes back to 0
 module moldudp64_rx
   import hft_pkg::*;
 #(
     parameter  int unsigned N_FILTERS = 8,
+    parameter  int unsigned CTX_W     = 1,
     localparam int unsigned FIDX_W    = (N_FILTERS > 1) ? $clog2(N_FILTERS) : 1
 ) (
     input logic clk,
@@ -37,6 +41,7 @@ module moldudp64_rx
     input logic                 cfg_resync,         // pulse
     input logic                 cfg_resync_learn,   // 1: learn the next packet's seq
     input logic [         63:0] cfg_resync_seq,     // otherwise: expected seq = this
+    input logic [    CTX_W-1:0] cfg_msg_ctx,        // passed to m_msg_ctx, per packet
 
     // One message per cycle: byte i = m_msg_data[8i+7:8i], bytes from m_msg_len on are 0
     output logic                      m_msg_valid,
@@ -44,6 +49,7 @@ module moldudp64_rx
     output logic [MOLD_MSG_LEN_W-1:0] m_msg_len,
     output logic [              63:0] m_msg_seq,
     output logic [              63:0] m_msg_sof_ts,
+    output logic [         CTX_W-1:0] m_msg_ctx,     // cfg_msg_ctx at the packet's first beat
 
     // One event per input packet, after its messages. Downstream keeps the packet's messages
     // only for MOLD_OK, MOLD_HEARTBEAT and MOLD_EOS.
@@ -118,7 +124,8 @@ module moldudp64_rx
   // ---- packet gates: config sampled on the first beat; the session is known after beat 1 ----
   logic first;
   logic dis_q, oth_q, chk_q, sess0_ok_q, sess_bad_q;  // disabled, other feed, session check
-  logic [15:0] sess_tail_q;  // cfg_session bytes 8..9
+  logic [     15:0] sess_tail_q;  // cfg_session bytes 8..9
+  logic [CTX_W-1:0] ctx_q;  // cfg_msg_ctx of the packet (see m_msg_ctx)
   logic sess0_ok, sess_bad, cur_dis, cur_oth, cur_sess, skip;
 
   assign first = beat && bcnt_q == '0;
@@ -144,6 +151,7 @@ module moldudp64_rx
       chk_q       <= cfg_session_check;
       sess0_ok_q  <= sess0_ok;
       sess_tail_q <= cfg_session[15:0];
+      ctx_q       <= cfg_msg_ctx;
     end
     if (hdr1) begin
       sess_bad_q <= sess_bad;
@@ -578,6 +586,10 @@ module moldudp64_rx
       m_msg_len    <= s1_end_new ? s1_len : cur_len_q;
       m_msg_seq    <= s1_end_new ? s1_seq : cur_seq_q;
       m_msg_sof_ts <= s1_ts;
+      // ctx_q needs no pipeline: no message ends on a first beat (header), and the next
+      // packet's first beat updates ctx_q in the edge that registers this packet's last
+      // message at the latest, so it still holds this packet's value (audit/12 S2).
+      m_msg_ctx    <= ctx_q;
     end
   end
 
