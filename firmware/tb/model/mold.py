@@ -230,8 +230,9 @@ Make = Callable[[], tuple[bytes, bool, int, bool]]  # -> (payload, abort, filter
 class _FeedGen:
     """Packet factory for one config. E/synced follow the intent of each packet made."""
 
-    def __init__(self, rng: random.Random, cfg: FeedConfig) -> None:
+    def __init__(self, rng: random.Random, cfg: FeedConfig, msg_source: Callable[[], bytes] | None = None) -> None:
         self.rng, self.cfg = rng, cfg
+        self.msg = msg_source or (lambda: itch_like(rng, rng.choice(list(ITCH50_LEN))))
         self.mine = [i for i in range(8) if cfg.filter_mask >> i & 1]
         self.others = [i for i in range(8) if not cfg.filter_mask >> i & 1]
         if not cfg.enable or not self.mine:
@@ -243,7 +244,7 @@ class _FeedGen:
         return self.rng.choice(self.mine)
 
     def itch_msgs(self, lo: int = 1, hi: int = 20) -> list[bytes]:
-        return [itch_like(self.rng, self.rng.choice(list(ITCH50_LEN))) for _ in range(self.rng.randint(lo, hi))]
+        return [self.msg() for _ in range(self.rng.randint(lo, hi))]
 
     def other_session(self) -> bytes:
         while True:
@@ -306,7 +307,7 @@ class _FeedGen:
     def oversize(self, n: int) -> bytes:
         msgs = [self.rng.randbytes(n)]
         while len(pack(b"", 0, msgs)) + 52 <= UDP_PAYLOAD_MAX and len(msgs) < 6:
-            msgs.insert(self.rng.randrange(len(msgs) + 1), itch_like(self.rng, self.rng.choice(list(ITCH50_LEN))))
+            msgs.insert(self.rng.randrange(len(msgs) + 1), self.msg())
         return self.in_order(msgs)
 
     def cut(self, in_length: bool) -> bytes:
@@ -365,11 +366,17 @@ def feed_categories(cfg: FeedConfig) -> list[str]:
     return ["sync"] + [name for name, *_ in _FeedGen(random.Random(0), cfg).categories()]
 
 
-def random_feed(rng: random.Random, n: int, cfg: FeedConfig) -> list[FeedPacket]:
+def random_feed(
+    rng: random.Random, n: int, cfg: FeedConfig, msg_source: Callable[[], bytes] | None = None
+) -> list[FeedPacket]:
     """n packets for a feed that starts out of sync (reset state). The first packet is in
     order and synchronizes; then each round holds every category `weight` times in random
-    order, so every category appears once n covers one round, whatever the seed."""
-    gen = _FeedGen(rng, cfg)
+    order, so every category appears once n covers one round, whatever the seed.
+
+    msg_source: the ITCH messages of the packets (default: itch_like(), real lengths and
+    random content; F4 passes model.itch messages). Lane-alignment fillers, unsupported and
+    oversize messages are made here whatever the source."""
+    gen = _FeedGen(rng, cfg, msg_source)
     out = [FeedPacket(gen.in_order(), False, gen.idx(), True, "sync", MoldStatus.OK)]
     cats = gen.categories()
     schedule = [c for c in cats for _ in range(c[1])]
