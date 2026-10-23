@@ -266,7 +266,7 @@ synth-csr:
 [extension(".ps1")]
 synth-core:
     $bad = 0
-    foreach ($top in "eth_ip_udp_rx_ooc", "moldudp64_rx_ooc") {
+    foreach ($top in "eth_ip_udp_rx_ooc", "moldudp64_rx_ooc", "itch_decoder_ooc") {
       foreach ($part in "{{ fpga_part }}", "{{ ref_part }}") {
         $out = just synth-ooc-on $part $top net2host core.f synth_ooc_core.f impl 2>&1
         if ($LASTEXITCODE) { $bad++ }
@@ -329,7 +329,7 @@ synth-csr:
 [unix]
 synth-core:
     bad=0
-    for top in eth_ip_udp_rx_ooc moldudp64_rx_ooc; do
+    for top in eth_ip_udp_rx_ooc moldudp64_rx_ooc itch_decoder_ooc; do
       for part in {{ fpga_part }} {{ ref_part }}; do
         out=$(just synth-ooc-on "$part" "$top" net2host core.f synth_ooc_core.f impl 2>&1)
         rc=$?

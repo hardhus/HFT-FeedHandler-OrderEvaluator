@@ -2,3 +2,4 @@
 # Paths are relative to this file.
 ../rtl/platform/synth_ooc/eth_ip_udp_rx_ooc.sv
 ../rtl/platform/synth_ooc/moldudp64_rx_ooc.sv
+../rtl/platform/synth_ooc/itch_decoder_ooc.sv
