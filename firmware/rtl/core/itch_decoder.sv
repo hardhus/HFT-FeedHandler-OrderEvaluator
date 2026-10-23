@@ -1,4 +1,5 @@
-// itch_decoder: ITCH 5.0 message classifier and field decoder for the moldudp64_rx output.
+// itch_decoder: ITCH 5.0 message classifier, field decoder and stock-locate filter for the
+// moldudp64_rx output.
 // Clock domain : clk (net_clk)
 // Latency      : s_msg_valid -> m_ev_valid / m_res_valid 2 cycles; s_pkt_valid -> m_pkt_valid
 //                2 cycles, so a packet's event still follows its messages
@@ -10,8 +11,13 @@
 //                decoded). Fields that do not apply are 0. Values are not validated.
 // Header       : stock locate, tracking number, timestamp for messages of >= ITCH_HDR_LEN bytes,
 //                in every class; 0 for shorter ones
-// Config       : s_msg_class_en comes with each message: moldudp64_rx samples it (cfg_msg_ctx)
-//                on the packet's first beat, so one FEED commit applies to whole packets
+// Config       : s_msg_class_en/s_msg_class_filter come with each message: moldudp64_rx samples
+//                them (cfg_msg_ctx) on the packet's first beat, so a FEED commit applies to whole
+//                packets
+// Pass         : class disabled -> MASKED; class filtered, stock locate != 0 and its bitmap bit 0
+//                -> FILTERED; else OUT (m_ev_valid). A message without a header has locate 0
+// Bitmap       : symbol_filter; looked up with the message's input cycle (a write accepted in the
+//                same cycle is not seen yet, one accepted earlier is); 0 after a reset
 // Reset        : a message or packet event in the pipeline when rst is high is dropped
 module itch_decoder
   import hft_pkg::*;
@@ -25,7 +31,8 @@ module itch_decoder
     input logic [MOLD_MSG_LEN_W-1:0] s_msg_len,
     input logic [              63:0] s_msg_seq,
     input logic [              63:0] s_msg_sof_ts,
-    input logic [  ITCH_N_CLASS-1:0] s_msg_class_en, // bit c: class c is output, else MASKED
+    input logic [  ITCH_N_CLASS-1:0] s_msg_class_en,     // bit c: class c is output, else MASKED
+    input logic [  ITCH_N_CLASS-1:0] s_msg_class_filter, // bit c: class c goes through the bitmap
 
     // Packet events (moldudp64_rx), passed through with the messages' latency
     input logic                s_pkt_valid,
@@ -37,6 +44,16 @@ module itch_decoder
     input logic         [15:0] s_pkt_dup_msgs,
     input logic         [15:0] s_pkt_oversize,
     input logic                s_pkt_synced_now,
+
+    // Symbol bitmap commands (hft_csr_wrap): bit i of word w = locate 32w + i
+    input  logic        sym_req_valid,
+    output logic        sym_req_ready,
+    input  logic        sym_req_wr,
+    input  logic [10:0] sym_req_addr,
+    input  logic [31:0] sym_req_wdata,
+    input  logic [ 3:0] sym_req_wstrb,
+    output logic        sym_rsp_valid,
+    output logic [31:0] sym_rsp_rdata,
 
 
     // One event per output message. Alpha fields (side, stock, attribution, printable,
@@ -187,7 +204,11 @@ module itch_decoder
   end
   assign cls = (type_cls != ITCH_UNKNOWN && s_msg_len != spec_len) ? ITCH_MALFORMED : type_cls;
 
-  logic v1_q, en1_q, hdr1_q;
+  logic [15:0] locate;  // filter key: the header's stock locate (bytes 1-2)
+
+  assign locate = {s_msg_data[15:8], s_msg_data[23:16]};
+
+  logic v1_q, en1_q, filt1_q, hdr1_q, loc0_1_q;
   itch_class_e                      cls1_q;
   logic        [               7:0] type1_q;
   logic        [MOLD_MSG_LEN_W-1:0] len1_q;
@@ -197,6 +218,8 @@ module itch_decoder
   always_ff @(posedge clk) begin
     v1_q      <= rst ? 1'b0 : s_msg_valid;
     en1_q     <= s_msg_class_en[cls];
+    filt1_q   <= s_msg_class_filter[cls];
+    loc0_1_q  <= locate == '0;
     hdr1_q    <= s_msg_len >= MOLD_MSG_LEN_W'(ITCH_HDR_LEN);
     cls1_q    <= cls;
     type1_q   <= typ;
@@ -206,7 +229,31 @@ module itch_decoder
     sof_ts1_q <= s_msg_sof_ts;
   end
 
+  logic lk_hit;
+
+  symbol_filter u_sym (
+      .clk          (clk),
+      .rst          (rst),
+      .lk_locate    (locate),
+      .lk_hit       (lk_hit),
+      .sym_req_valid(sym_req_valid),
+      .sym_req_ready(sym_req_ready),
+      .sym_req_wr   (sym_req_wr),
+      .sym_req_addr (sym_req_addr),
+      .sym_req_wdata(sym_req_wdata),
+      .sym_req_wstrb(sym_req_wstrb),
+      .sym_rsp_valid(sym_rsp_valid),
+      .sym_rsp_rdata(sym_rsp_rdata)
+  );
+
   // ===================== Stage 1 -> 2: pass decision, fields =====================
+  logic          filtered;
+  itch_outcome_e outcome;
+
+  // No header (shorter than ITCH_HDR_LEN): locate 0, never filtered.
+  assign filtered = filt1_q && hdr1_q && !loc0_1_q && !lk_hit;
+  assign outcome  = !en1_q ? ITCH_RES_MASKED : filtered ? ITCH_RES_FILTERED : ITCH_RES_OUT;
+
   logic decoded;
   logic [63:0] order_ref, new_ref, shares, match, stock;
   logic [31:0] price, attribution;
@@ -284,10 +331,10 @@ module itch_decoder
   end
 
   always_ff @(posedge clk) begin
-    m_ev_valid       <= rst ? 1'b0 : v1_q && en1_q;
+    m_ev_valid       <= rst ? 1'b0 : v1_q && outcome == ITCH_RES_OUT;
     m_res_valid      <= rst ? 1'b0 : v1_q;
     m_res_class      <= cls1_q;
-    m_res_outcome    <= en1_q ? ITCH_RES_OUT : ITCH_RES_MASKED;
+    m_res_outcome    <= outcome;
     m_ev_class       <= cls1_q;
     m_ev_type        <= type1_q;
     m_ev_len         <= len1_q;

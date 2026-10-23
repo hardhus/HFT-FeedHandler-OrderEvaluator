@@ -1,14 +1,19 @@
-"""itch_decoder: ITCH 5.0 classifier and field decoder (audit/12).
+"""itch_decoder: ITCH 5.0 classifier, field decoder and symbol filter (audit/12).
 
 Every input message is checked against the golden model (model/itch.py), in order:
 - exactly one result per message (class, outcome) and an event exactly when the outcome is
   OUT: class, type, length, seq, sof_ts, the common header, every normalized field (0 where it
   does not apply) and the raw vector;
 - every packet event passes through unchanged;
-- latency with exact equality on every result, event and packet event: 2 cycles.
-s_msg_class_en comes with each message (moldudp64_rx samples it on the packet's first beat);
-it is random in idle cycles. A reset drops what is in the pipeline: inputs of the reset cycle
-and the cycle before.
+- latency with exact equality on every result, event and packet event: 2 cycles;
+- the symbol bitmap: a model copy, updated by each accepted write in its cycle after that
+  cycle's lookup (READ_FIRST: a lookup in the write's cycle sees the old word); every read
+  response against it, every response exactly 1 cycle after its command; sym_req_ready in every
+  cycle: 0 in reset and for exactly 2048 cycles after it (the sweep), when the model is all 0.
+s_msg_class_en/s_msg_class_filter come with each message (moldudp64_rx samples them on the
+packet's first beat); they are random in idle cycles, as is every command field without
+sym_req_valid. A reset drops what is in the pipeline: inputs of the reset cycle and the cycle
+before.
 """
 
 import random
@@ -39,6 +44,7 @@ from selftest.test_itch_model import HAND, HAND_NORM, hexbytes
 
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
 LATENCY = 2  # s_msg_valid -> m_ev_valid / m_res_valid, s_pkt_valid -> m_pkt_valid (12 §2.4)
+SWEEP = 2048  # cycles of the bitmap sweep after a reset (one word per cycle)
 ALL_EN = (1 << len(ItchClass)) - 1
 C = ItchClass
 EV_PORTS = ("order_ref", "new_ref", "shares", "price", "match", "side", "stock", "attribution", "printable",
@@ -64,6 +70,16 @@ class Want:
     res: Result
 
 
+@dataclass
+class Cmd:
+    wr: bool
+    addr: int
+    wdata: int = 0
+    wstrb: int = 0xF
+    rdata: int | None = None  # read response, filled by the monitor
+    cycle: int = -1  # cycle it was accepted
+
+
 def random_pkt() -> dict[str, int]:
     p = {k: random.getrandbits(w) for k, w in PKT_WIDTHS.items()}
     p["status"] = random.choice(list(MoldStatus)).value
@@ -86,6 +102,12 @@ class Dec:
         self.order: list[tuple[int, str]] = []  # (cycle, "msg"/"pkt") of every output
         self.latencies: list[int] = []
         self.class_en = ALL_EN  # driven with the next messages
+        self.class_filter = 0
+        self.bm = Bitmap()  # model of the bitmap RAM
+        self.sweep_left = 0  # cycles of the sweep still to come (sym_req_ready low)
+        self.pending: Cmd | None = None  # driven until accepted
+        self.rsp_q: deque[Cmd] = deque()  # accepted, response due
+        self.done: list[Cmd] = []  # every completed command
 
     # ---- input
     def garbage(self) -> None:
@@ -97,6 +119,12 @@ class Dec:
         d.s_msg_seq.value = random.getrandbits(64)
         d.s_msg_sof_ts.value = random.getrandbits(64)
         d.s_msg_class_en.value = random.getrandbits(len(ItchClass))
+        d.s_msg_class_filter.value = random.getrandbits(len(ItchClass))
+        d.sym_req_valid.value = 0
+        d.sym_req_wr.value = random.getrandbits(1)
+        d.sym_req_addr.value = random.getrandbits(11)
+        d.sym_req_wdata.value = random.getrandbits(32)
+        d.sym_req_wstrb.value = random.getrandbits(4)
         d.s_pkt_valid.value = 0
         for k, w in PKT_WIDTHS.items():
             getattr(d, f"s_pkt_{k}").value = random.getrandbits(w)
@@ -105,9 +133,17 @@ class Dec:
         self.class_en = en
 
     async def step(self, msg: Msg | None = None, pkt: dict | None = None) -> None:
-        """One cycle: a message and/or a packet event (or neither), then the clock edge."""
+        """One cycle: a message and/or a packet event (or neither) and the pending command (if
+        any), then the clock edge."""
         self.garbage()
         d = self.dut
+        if self.pending is not None:
+            c = self.pending
+            d.sym_req_valid.value = 1
+            d.sym_req_wr.value = int(c.wr)
+            d.sym_req_addr.value = c.addr
+            d.sym_req_wdata.value = c.wdata
+            d.sym_req_wstrb.value = c.wstrb
         if msg is not None:
             assert MIN_LEN <= len(msg.data) <= MAX_MSG, "moldudp64_rx delivers 6..64 bytes"
             d.s_msg_valid.value = 1
@@ -116,6 +152,7 @@ class Dec:
             d.s_msg_seq.value = msg.seq
             d.s_msg_sof_ts.value = msg.sof_ts
             d.s_msg_class_en.value = self.class_en
+            d.s_msg_class_filter.value = self.class_filter
             self.sent.append(msg)
         if pkt is not None:
             d.s_pkt_valid.value = 1
@@ -135,8 +172,41 @@ class Dec:
         for _ in range(cycles):
             await self.step()
 
+    def issue(self, cmd: Cmd) -> Cmd:
+        """Drive cmd from the next step on until it is accepted (no wait)."""
+        assert self.pending is None, "one command at a time"
+        self.pending = cmd
+        return cmd
+
+    async def command(self, cmd: Cmd) -> Cmd:
+        """Issue cmd and step until its response is out; returns it (rdata for a read)."""
+        self.issue(cmd)
+        while self.pending is not None or self.rsp_q:
+            await self.step()
+        return cmd
+
+    async def write(self, addr: int, wdata: int, wstrb: int = 0xF) -> None:
+        await self.command(Cmd(True, addr, wdata, wstrb))
+
+    async def read(self, addr: int) -> int:
+        return (await self.command(Cmd(False, addr))).rdata
+
+    async def subscribe(self, locates: list[int], on: bool = True) -> None:
+        """Set (or clear) the bits of these locates, a whole-word write each (from the model)."""
+        for loc in locates:
+            word = self.bm.read(loc >> 5)
+            bit = 1 << (loc & 31)
+            await self.write(loc >> 5, word | bit if on else word & ~bit)
+
+    async def wait_sweep(self) -> None:
+        while self.sweep_left or self.dut.rst.value:
+            await self.step()
+
     async def finish(self) -> None:
+        while self.pending is not None:
+            await self.step()
         await self.idle(LATENCY + 4)
+        assert not self.rsp_q, "command response missing"
         assert not self.sent and not self.sent_pkts, "input not seen by the monitor"
         assert not self.out_q, f"{self.out_q[0].msg.name or self.out_q[0].msg.data.hex()}: no result"
         assert not self.pkt_q, "packet event not forwarded"
@@ -155,18 +225,35 @@ class Dec:
             await ReadOnly()
             self.cycle += 1
             self._check_outputs()
-            if d.rst.value:  # the input of the cycle before is dropped (this cycle's: below)
+            rst = bool(d.rst.value)
+            ready = not rst and self.sweep_left == 0
+            assert bool(d.sym_req_ready.value) == ready, f"cycle {self.cycle}: sym_req_ready, model {ready}"
+            if rst:  # the input of the cycle before is dropped (this cycle's: below)
                 while self.out_q and self.out_q[-1].cycle >= self.cycle - 1:
                     self.out_q.pop()
                 while self.pkt_q and self.pkt_q[-1][0] >= self.cycle - 1:
                     self.pkt_q.pop()
-            if d.s_msg_valid.value:
+                self.sweep_left = SWEEP
+                self.bm = Bitmap()  # all 0 after the sweep; lookups during it give 0 too
+            elif self.sweep_left:
+                self.sweep_left -= 1
+            if d.s_msg_valid.value:  # the lookup reads the bitmap before this cycle's write
                 assert self.sent, "input message that the test did not send"
                 m = self.sent.popleft()
-                cfg = ItchConfig(class_en=int(d.s_msg_class_en.value), class_filter=0)
-                ev, res = expect(m.data, cfg, Bitmap())
-                if not d.rst.value:
+                cfg = ItchConfig(int(d.s_msg_class_en.value), int(d.s_msg_class_filter.value))
+                ev, res = expect(m.data, cfg, self.bm)
+                if not rst:
                     self.out_q.append(Want(m, self.cycle, ev, res))
+            if d.sym_req_valid.value and ready:
+                c = self.pending
+                assert c is not None, "command that the test did not issue"
+                c.cycle = self.cycle
+                if c.wr:
+                    self.bm.write(c.addr, c.wdata, c.wstrb)
+                else:
+                    c.rdata = self.bm.read(c.addr)
+                self.rsp_q.append(c)
+                self.pending = None
             if d.s_pkt_valid.value:
                 assert self.sent_pkts, "input packet event that the test did not send"
                 p = self.sent_pkts.popleft()
@@ -210,6 +297,16 @@ class Dec:
             self.order.append((self.cycle, "pkt"))
         else:
             self._due(self.pkt_q, "packet event")
+        if d.sym_rsp_valid.value:
+            assert self.rsp_q, f"cycle {self.cycle}: command response with none outstanding"
+            c = self.rsp_q.popleft()
+            assert self.cycle - c.cycle == 1, f"command response {self.cycle - c.cycle} cycles after it"
+            if not c.wr:
+                got = int(d.sym_rsp_rdata.value)
+                assert got == c.rdata, f"read word {c.addr}: {got:#010x}, model {c.rdata:#010x}"
+            self.done.append(c)
+        else:
+            assert not self.rsp_q, f"cycle {self.cycle}: command response missing"
 
     def _event(self) -> dict[str, int]:
         d = self.dut
@@ -490,6 +587,185 @@ async def tc_reset_mid_packet(dut):
     await dec.send([Msg(body(random.choice(list(SPEC)))) for _ in range(20)])
     await dec.step(pkt=random_pkt())
     await dec.finish()
+
+
+def with_locate(typ: str, locate: int, n: int | None = None) -> bytes:
+    """A message of type typ (n bytes, default its length) whose header carries this locate."""
+    m = bytearray(body(typ, n))
+    m[1:3] = locate.to_bytes(2, "big")
+    return bytes(m)
+
+
+def each_class_at(locate: int) -> list[Msg]:
+    """One message of every class with this locate: ORDER, TRADE, ADMIN, AUCTION, UNKNOWN (type
+    0x00, 21 bytes), MALFORMED (A one byte short)."""
+    msgs = [Msg(with_locate(t, locate), name=f"{c.name}@{locate}") for c, t in
+            ((C.ORDER, "A"), (C.TRADE, "P"), (C.ADMIN, "R"), (C.AUCTION, "I"))]  # fmt: skip
+    unknown = bytearray(bytes([0x00]) + random.randbytes(20))
+    unknown[1:3] = locate.to_bytes(2, "big")
+    msgs += [Msg(bytes(unknown), name=f"UNKNOWN@{locate}"), Msg(with_locate("A", locate, 35), name=f"MALFORMED@{locate}")]
+    return msgs
+
+
+def outcomes(dec: Dec, since: int) -> dict[str, Outcome]:
+    return {m.name: r.outcome for m, r in dec.results[since:]}
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")
+async def tc_symbol_filter(dut):
+    """Bit i of word w is locate 32w + i: subscribed locates at word edges (1, 31, 32, 63, 64,
+    65535) pass, their neighbours are FILTERED, locate 0 always passes; a cleared bit filters
+    again. Outcomes by hand, besides the model."""
+    dec = await start(dut)
+    await dec.wait_sweep()
+    dec.class_filter = ALL_EN
+    subs = [1, 31, 32, 63, 64, 65535, 1000]
+    await dec.subscribe(subs)
+    locs = [0, 1, 2, 30, 31, 32, 33, 62, 63, 64, 65, 999, 1000, 1001, 65534, 65535]
+    n = len(dec.results)
+    await dec.send([Msg(with_locate("A", loc), name=str(loc)) for loc in locs])
+    await dec.idle(LATENCY + 1)
+    want = {str(loc): Outcome.OUT if loc == 0 or loc in subs else Outcome.FILTERED for loc in locs}
+    assert outcomes(dec, n) == want
+    await dec.subscribe([32, 65535], on=False)
+    n = len(dec.results)
+    await dec.send([Msg(with_locate("P", loc), name=str(loc)) for loc in (31, 32, 33, 65535)])
+    await dec.idle(LATENCY + 1)
+    assert outcomes(dec, n) == {"31": Outcome.OUT, "32": Outcome.FILTERED, "33": Outcome.FILTERED,
+                                "65535": Outcome.FILTERED}  # fmt: skip
+    for w in range(2048):  # every word, through the lookup: one subscribed locate each
+        await dec.write(w, 1 << (w % 32))
+    n = len(dec.results)
+    await dec.send([Msg(with_locate("A", 32 * w + b), name=f"{w}.{b}") for w in range(2048) for b in
+                    (w % 32, (w + 1) % 32)])  # fmt: skip
+    await dec.finish()
+    got = outcomes(dec, n)
+    assert sum(o == Outcome.OUT for o in got.values()) == 2048, "one subscribed locate per word"
+    assert got["0.0"] == Outcome.OUT and got["0.1"] == Outcome.FILTERED
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")
+async def tc_class_filter(dut):
+    """Every value of s_msg_class_filter with one unsubscribed message of every class: only the
+    filtered classes are FILTERED (count by hand); a disabled class is MASKED before the filter;
+    a message shorter than the header (locate 0) and locate 0 itself are never filtered."""
+    dec = await start(dut)
+    await dec.wait_sweep()  # nothing subscribed
+    filtered = 0
+    n = len(dec.results)
+    for f in range(1 << len(C)):
+        dec.class_filter = f
+        await dec.send(each_class_at(7))
+    await dec.idle(LATENCY + 1)
+    filtered = sum(r.outcome == Outcome.FILTERED for _, r in dec.results[n:])
+    assert filtered == sum(bin(f).count("1") for f in range(1 << len(C)))
+    dec.class_filter = ALL_EN
+    dec.set_class_en(0)
+    n = len(dec.results)
+    await dec.send(each_class_at(7))
+    await dec.idle(LATENCY + 1)
+    assert all(r.outcome == Outcome.MASKED for _, r in dec.results[n:])
+    dec.set_class_en(ALL_EN)
+    short = [Msg(bytes([0x00]) + b"\xff" * (k - 1), name=f"short{k}") for k in range(MIN_LEN, 11)]
+    n = len(dec.results)
+    await dec.send(short + each_class_at(0))
+    await dec.finish()
+    assert all(r.outcome == Outcome.OUT for _, r in dec.results[n:])
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def tc_bitmap_write_during_lookup(dut):
+    """A lookup in the cycle a command writes its word sees the old word (READ_FIRST, one clock);
+    from the next cycle on, the new one. Set and clear, the looked-up bit and another bit of the
+    same word, with the message in the cycle before, the same cycle and the cycle after."""
+    dec = await start(dut)
+    await dec.wait_sweep()
+    dec.class_filter = ALL_EN
+    loc, w = 100, 100 >> 5  # word 3, bit 4
+    seq = []
+    for val, name in ((1 << 4, "set"), (0, "clear"), (1 << 4 | 1 << 9, "set+other"), (1 << 9, "clear, other kept")):
+        await dec.step(Msg(with_locate("A", loc), name=f"{name}: before"))
+        dec.issue(Cmd(True, w, val))
+        await dec.step(Msg(with_locate("A", loc), name=f"{name}: same cycle"))
+        await dec.step(Msg(with_locate("A", loc), name=f"{name}: after"))
+        await dec.idle(2)
+        seq.append(name)
+    await dec.finish()
+    got = {m.name: r.outcome for m, r in dec.results}
+    O, F = Outcome.OUT, Outcome.FILTERED
+    want = {"set": (F, F, O), "clear": (O, O, F), "set+other": (F, F, O), "clear, other kept": (O, O, F)}
+    for name in seq:
+        assert tuple(got[f"{name}: {k}"] for k in ("before", "same cycle", "after")) == want[name], name
+    assert all(c.cycle >= 0 for c in dec.done) and len(dec.done) == 4
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")
+async def tc_sweep_after_reset(dut):
+    """The RAM has no reset: after a reset every word is written 0 (2048 cycles). During the
+    sweep sym_req_ready is 0 (a command waits and is accepted in the first cycle after it) and a
+    lookup gives 0, also for words still holding 1; afterwards every word reads 0. A reset during
+    the sweep starts it again. Power-up: the first sweep clears Verilator's random RAM."""
+    dec = await start(dut)
+    await dec.wait_sweep()
+    for w in range(2048):  # power-up sweep: every word 0
+        assert await dec.read(w) == 0, f"word {w} after power-up"
+    for w in range(2048):
+        dec.issue(Cmd(True, w, 0xFFFFFFFF))
+        await dec.step()
+    await dec.finish()
+    assert await dec.read(2047) == 0xFFFFFFFF
+    dec.class_filter = ALL_EN
+    for again in (False, True):
+        await dec.reset(1)
+        start_cycle = dec.cycle + 1  # first cycle after the reset
+        if again:  # reset again in the middle of the sweep
+            await dec.idle(1000)
+            await dec.reset(2)
+            start_cycle = dec.cycle + 1
+        cmd = dec.issue(Cmd(False, 2047))
+        n = len(dec.results)
+        for i in range(SWEEP):  # every cycle a message on a word not yet swept (from the top)
+            await dec.step(Msg(with_locate("A", 65535 - 32 * i), name=f"sweep {i}"))
+        await dec.idle(4)
+        assert all(r.outcome == Outcome.FILTERED for _, r in dec.results[n:]), "lookup during the sweep"
+        assert cmd.cycle == start_cycle + SWEEP, f"command accepted {cmd.cycle - start_cycle} cycles after the reset"
+        assert cmd.rdata == 0
+    for w in range(2048):
+        assert await dec.read(w) == 0, f"word {w} after the sweep"
+    await dec.finish()
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")
+async def tc_sym_read_write(dut):
+    """Every byte strobe on random words (the result by hand), back-to-back commands (one per
+    cycle, valid held), and commands interleaved with message traffic through the filter."""
+    dec = await start(dut)
+    await dec.wait_sweep()
+    for strb in range(16):
+        w = random.randrange(2048)
+        old = random.getrandbits(32)
+        await dec.write(w, old)
+        new = random.getrandbits(32)
+        await dec.write(w, new, strb)
+        mask = sum(0xFF << 8 * b for b in range(4) if strb >> b & 1)
+        assert await dec.read(w) == (old & ~mask) | (new & mask), f"strobe {strb:04b}"
+    words = random.sample(range(2048), 64)
+    for w in words:  # back to back: the next command in the cycle after acceptance
+        dec.issue(Cmd(True, w, random.getrandbits(32), random.getrandbits(4)))
+        await dec.step()
+    for w in words:
+        dec.issue(Cmd(False, w))
+        await dec.step()
+    dec.class_filter = ALL_EN
+    for i in range(3000):  # traffic with commands at random, the filter on
+        if dec.pending is None and random.random() < 0.3:
+            w = random.randrange(2048)
+            dec.issue(Cmd(random.random() < 0.6, w, random.getrandbits(32), random.getrandbits(4)))
+        loc = random.choice([0, random.randrange(65536), 32 * random.choice(words) + random.randrange(32)])
+        await dec.step(Msg(with_locate(random.choice("AFEPQ"), loc)) if random.random() < 0.8 else None)
+    await dec.finish()
+    assert sum(c.wr for c in dec.done) > 100 and sum(not c.wr for c in dec.done) > 100
+    assert {r.outcome for _, r in dec.results} >= {Outcome.OUT, Outcome.FILTERED}
 
 
 # The long tests run as their own pytest entries (parallel workers, one shared build).
