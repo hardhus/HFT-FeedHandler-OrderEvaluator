@@ -94,7 +94,11 @@ Build outputs go to `build/`:
   For reference (WSL, 2 workers, 173 tests after F2): a warm `just test` takes about 2.3 minutes. After F5
   (235 tests) a full `just ci` takes about 11.5 minutes on WSL and 12 minutes on the Raspberry Pi 5; the longest
   entries are the two `tc_rx_csr_random` runs (2000 frames with commits and snapshots, about 75 s each). The longest test
-  is `tc_random_golden` (10⁴ frames, about 50 s); the cocotb harness runs about 6k cycles/s. Right after a WSL
+  is `tc_random_golden` (10⁴ frames, about 50 s); the cocotb harness runs about 6k cycles/s.
+  After F3 (338 tests), with the builds reused, the test phase of `just ci` takes about 7 minutes on WSL. The longest
+  entries are `tc_rx_csr_random` (about 70 s per run), `tc_feed_random` (2000 feed frames with resyncs and
+  snapshots, about 55 s per run) and the `hft_csr_wrap` directed group (up to 46 s per profile); the MoldUDP64
+  unit tests `tc_line_rate_b2b` and `tc_random_golden` (10⁴ packets) take about 35 s each. Right after a WSL
   restart (cold file cache) the same run took 4 minutes. A cold build of all F1 tests took 10 to 36 minutes on
   `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
 - **Every run has a seed.** Each test prints a line such as
@@ -142,7 +146,7 @@ Build outputs go to `build/`:
 | `scoreboard.py` | In-order scoreboard (catches loss, duplication and reordering) |
 | `coverage.py` | `Coverage(name, required_bins)`: `hit(bin)` (an unknown bin fails at once), `check(out_dir)` writes `coverage.json` and fails if a required bin is empty |
 | `axil.py` | `AxilDriver`: AXI4-Lite manager for what cocotbext-axi does not do (W before AW, garbage after each handshake, random `bready`/`rready`, many requests in flight) |
-| `csr_env.py` | `hft_csr_wrap` harness shared by its unit test and the system test: NET configurations and commit, the `cfg_*` atomicity monitor, the counter snapshot and its model |
+| `csr_env.py` | `hft_csr_wrap` harness shared by its unit test and the system test: NET and FEED configurations and commits, the `cfg_*` atomicity monitors, resync requests (none lost, merged per transfer), the counter snapshot and its model (feed state included) |
 
 ### Generated CSR code (F5)
 
@@ -170,8 +174,15 @@ so an unintended shift fails), then `just fmt lint test`.
   - every pair of faults, for the priority order;
   - the reason codes against `hft_pkg.sv`;
   - that the generator's intent and the model agree on 2000 random frames.
+- `mold.py` is the reference for `moldudp64_rx`, also pure Python. `expect(payload, abort, filter_idx, cfg, state)`
+  applies the MoldUDP64 rules to the byte string, with no notion of beats or lanes. Packet builders, a hand-written
+  ITCH 5.0 length table and `random_feed()` (round-robin categories, so coverage does not depend on the seed)
+  produce the stimulus. `tb/selftest/test_mold_model.py` (`just test-one mold_model`) checks hand-written packets,
+  every pair of faults for the priority, the status codes against `hft_pkg.sv`, the 2⁶⁴ wrap and the generator.
+  The system test chains the two models: the F2 model's payload, abort and filter index go into `mold.expect`.
 - **Coverage is a gate.** `tc_random_golden` hits named bins (reasons, last-beat cases, MAC classes, filter
-  entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The counts are written to
+  entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The MoldUDP64 `tc_random_golden`,
+  `tc_rx_csr_random` and `tc_feed_random` have their own gates. The counts are written to
   `coverage.json` in the test's run directory. Bins are not removed to make a test pass.
 
 AXI/AXI-Stream drivers come from [cocotbext-axi](https://github.com/alexforencich/cocotbext-axi). It works with

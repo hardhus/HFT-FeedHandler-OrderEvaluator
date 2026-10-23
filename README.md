@@ -29,7 +29,7 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core: receive filter, CSR block and counters; parser, book, rules and DMA engine planned |
+| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, CSR block and counters; ITCH parser, book, rules and DMA engine planned |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
@@ -70,8 +70,8 @@ for the RTL rules.
   - SVA checkers are bound in every test.
   - Timing passes at 156.25 MHz in OOC synthesis.
 - **F5, host registers:** a SystemRDL map generates the AXI4-Lite register block, the C header and the register
-  reference ([`firmware/rtl/core/`](firmware/rtl/core/README.md#csr-block-hft_csr-hft_csr_wrap-rx_stats)); CI
-  fails if a generated file is stale.
+  reference ([`firmware/rtl/core/`](firmware/rtl/core/README.md#csr-block-hft_csr-hft_csr_wrap-rx_stats-mold_stats));
+  CI fails if a generated file is stale.
   - The receiver's configuration is committed atomically across clock domains, and the counters are read through
     a snapshot taken in one network clock cycle.
   - Regressions for the legacy register bank's bugs (lost writes, unlatched write data, lost responses under
@@ -80,6 +80,19 @@ for the RTL rules.
     configurations and takes snapshots, each frame checked against the model.
   - Placed and routed out of context: Kintex UltraScale+ at 156.25/250 MHz and Artix-7 at 156.25/125 MHz.
   - `just ci` is green on GitHub Actions (x64, arm64) and on a Raspberry Pi 5 (235 tests).
+- **F3, MoldUDP64:** `moldudp64_rx` in [`firmware/rtl/core/`](firmware/rtl/core/README.md#moldudp64_rx).
+  - It splits each packet into messages at line rate, one 64-byte message vector per cycle, for any block alignment
+    (legacy: one message per packet at a fixed offset).
+  - It tracks the expected sequence number: gaps, duplicates and A/B line arbitration (partial overlaps included),
+    heartbeat, end of session, session check, and a software resync. One event per packet tells downstream whether
+    to keep its messages, which leave cut-through before the packet is fully checked.
+  - A FEED register block: configuration and resync over an atomic commit, the expected sequence number and 16
+    counters in the same snapshot as the receive counters.
+  - Every message and packet event is checked against a pure-Python MoldUDP64 model (10⁴ random packets with a
+    coverage gate, line rate at back-to-back packets); the system test chains it with the F2 model on 2000 frames
+    with A/B copies, resyncs and snapshots, and checks the sequence accounting between snapshots.
+  - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
+  - `just ci` passes 338 tests.
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.
