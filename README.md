@@ -92,7 +92,7 @@ for the RTL rules.
     coverage gate, line rate at back-to-back packets); the system test chains it with the F2 model on 2000 frames
     with A/B copies, resyncs and snapshots, and checks the sequence accounting between snapshots.
   - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
-  - `just ci` passes 338 tests.
+  - `just ci` is green on GitHub Actions (x64, arm64) and on a Raspberry Pi 5 (338 tests).
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.
