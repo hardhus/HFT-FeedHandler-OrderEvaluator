@@ -69,4 +69,17 @@ package hft_pkg;
   localparam int unsigned MOLD_CNT_GAP_EVENTS = MOLD_CNT_MSGS + 3;  // packets with a gap
   localparam int unsigned MOLD_CNT_GAP_MSGS = MOLD_CNT_MSGS + 4;  // messages skipped
   localparam int unsigned MOLD_N_CNT = MOLD_CNT_MSGS + 5;
+
+  // ---- ITCH 5.0 (itch_decoder) ----
+  // Message class = counter index (itch_stats). ORDER and TRADE messages are decoded into
+  // fields; ADMIN, AUCTION and UNKNOWN pass with the common header and the raw vector only.
+  // MALFORMED: a known type whose length is not the specification length (not decoded).
+  typedef enum logic [2:0] {
+    ITCH_ORDER     = 3'd0,  // A F E C X D U
+    ITCH_TRADE     = 3'd1,  // P Q B
+    ITCH_ADMIN     = 3'd2,  // S R H Y L V W K J h
+    ITCH_AUCTION   = 3'd3,  // I N O
+    ITCH_UNKNOWN   = 3'd4,  // any other type byte
+    ITCH_MALFORMED = 3'd5
+  } itch_class_e;
 endpackage

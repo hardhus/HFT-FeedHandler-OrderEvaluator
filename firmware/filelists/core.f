@@ -4,3 +4,6 @@
 ../rtl/core/eth_ip_udp_rx.sv
 ../rtl/core/moldudp64_rx.sv
 ../rtl/core/mold_stats.sv
+../rtl/core/symbol_filter.sv
+../rtl/core/itch_decoder.sv
+../rtl/core/itch_stats.sv
