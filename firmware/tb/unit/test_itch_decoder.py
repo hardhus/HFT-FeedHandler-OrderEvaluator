@@ -19,12 +19,14 @@ before.
 import random
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
 
 from common.clocks import start_clock
+from common.coverage import Coverage
 from common.runner import run_cocotb
 from model.itch import (
     PRICE4,
@@ -38,6 +40,8 @@ from model.itch import (
     Result,
     encode,
     expect,
+    itch_categories,
+    itch_stream,
 )
 from model.mold import MAX_MSG, MIN_LEN, MoldStatus
 from selftest.test_itch_model import HAND, HAND_NORM, hexbytes
@@ -45,6 +49,8 @@ from selftest.test_itch_model import HAND, HAND_NORM, hexbytes
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
 LATENCY = 2  # s_msg_valid -> m_ev_valid / m_res_valid, s_pkt_valid -> m_pkt_valid (12 §2.4)
 SWEEP = 2048  # cycles of the bitmap sweep after a reset (one word per cycle)
+N_RANDOM = 100_000  # messages of tc_random_golden (05 F4 "done" criterion)
+N_LINE_RATE = 20_000  # messages of tc_line_rate, one per cycle
 ALL_EN = (1 << len(ItchClass)) - 1
 C = ItchClass
 EV_PORTS = ("order_ref", "new_ref", "shares", "price", "match", "side", "stock", "attribution", "printable",
@@ -768,8 +774,116 @@ async def tc_sym_read_write(dut):
     assert {r.outcome for _, r in dec.results} >= {Outcome.OUT, Outcome.FILTERED}
 
 
+@cocotb.test(timeout_time=5000, timeout_unit="ms")
+async def tc_random_golden(dut):
+    """N_RANDOM messages from the model's generator (every category round-robin: the 23 types,
+    each one byte short and long, unknown type bytes, edge locates, field extremes) in packets of
+    1..20 messages, each packet with its own class enable and filter; bitmap writes to the word
+    of the message in the same cycle (READ_FIRST) and lookups of it right after, reads, idle gaps
+    and IPG 0, packet events alone and with the next packet's first message, and a reset half
+    way (with the pipeline empty). Every output against the model; coverage bins are a gate."""
+    dec = await start(dut)
+    cats = itch_categories()
+    bins = [f"cat_{c}" for c in cats] + [f"res_{c.name}_{o.name}" for c in C for o in Outcome]
+    bins += ["cfg_change", "ipg0", "idle_gap", "pkt_with_msg", "pkt_alone", "write_same_cycle", "write_next_cycle",
+             "read", "reset"]  # fmt: skip
+    cov = Coverage("itch_decoder", bins)
+    subs = Bitmap()  # what the generator calls subscribed; loaded into the RTL after each sweep
+    for loc in random.sample(range(1, 65536), 3000) + [1, 31, 32, 65535]:
+        subs.set(loc)
+
+    async def load() -> None:
+        await dec.wait_sweep()
+        for w in range(2048):
+            if subs.words[w]:
+                await dec.write(w, subs.words[w])
+
+    await load()
+    stream = itch_stream(random, ItchConfig(), subs)
+    sent, pkt_due, again = 0, None, None
+    while sent < N_RANDOM:
+        if random.random() < 0.3:
+            dec.set_class_en(ALL_EN if random.random() < 0.5 else random.getrandbits(len(C)))
+            dec.class_filter = random.getrandbits(len(C))
+            cov.hit("cfg_change")
+        for i in range(min(random.randint(1, 20), N_RANDOM - sent)):
+            m = next(stream)
+            msg = Msg(m.msg, name=m.category)
+            if again is not None:  # the same message right after a write of its word
+                msg, again = Msg(again, name=msg.name), None
+                cov.hit("write_next_cycle")
+            r = random.random()
+            if dec.pending is None and r < 0.03:  # toggle this message's bit in its own cycle
+                loc = int.from_bytes(msg.data[1:3], "big")
+                dec.issue(Cmd(True, loc >> 5, dec.bm.read(loc >> 5) ^ 1 << (loc & 31)))
+                cov.hit("write_same_cycle")
+                again = msg.data
+            elif dec.pending is None and r < 0.04:
+                dec.issue(Cmd(False, random.randrange(2048)))
+                cov.hit("read")
+            pkt = None
+            if i == 0 and pkt_due is not None:
+                pkt, pkt_due = pkt_due, None
+                cov.hit("pkt_with_msg")
+            await dec.step(msg, pkt=pkt)
+            sent += 1
+            gap = random.choice([0, 0, 0, 1, 2])
+            cov.hit("ipg0" if gap == 0 else "idle_gap")
+            await dec.idle(gap)
+        if random.random() < 0.5:
+            pkt_due = random_pkt()  # with the next packet's first message
+        else:
+            await dec.step(pkt=random_pkt())
+            cov.hit("pkt_alone")
+        if sent >= N_RANDOM // 2 and not cov.bins["reset"]:
+            while dec.pending is not None:
+                await dec.step()
+            await dec.idle(LATENCY)  # nothing in the pipeline (drops: tc_reset_mid_packet)
+            await dec.reset(random.randint(1, 3))
+            pkt_due, again = None, None
+            cov.hit("reset")
+            await load()
+    if pkt_due is not None:
+        await dec.step(pkt=pkt_due)
+    await dec.finish()
+    for m, res in dec.results:
+        cov.hit(f"cat_{m.name}")
+        cov.hit(f"res_{res.cls.name}_{res.outcome.name}")
+    assert len(dec.results) == N_RANDOM, f"{len(dec.results)} results for {N_RANDOM} messages"
+    cov.check(Path.cwd())
+
+
+@cocotb.test(timeout_time=500, timeout_unit="ms")
+async def tc_line_rate(dut):
+    """Zero loss at line rate: N_LINE_RATE messages in consecutive cycles (s_msg_valid held),
+    the class filter on with part of the locates subscribed, packet events in the same cycle as
+    a message every 1..10 messages. One result per message, all exact."""
+    dec = await start(dut)
+    await dec.wait_sweep()
+    subs = Bitmap()
+    for loc in random.sample(range(1, 65536), 20000):
+        subs.set(loc)
+    for w in range(2048):
+        await dec.write(w, subs.words[w])
+    dec.class_filter = ALL_EN
+    stream = itch_stream(random, ItchConfig(), subs)
+    n0, pkts, next_pkt = len(dec.results), 0, random.randint(1, 10)
+    for i in range(N_LINE_RATE):
+        m = next(stream)
+        pkt = None
+        if i == next_pkt:
+            pkt, next_pkt = random_pkt(), i + random.randint(1, 10)
+            pkts += 1
+        await dec.step(Msg(m.msg, name=m.category), pkt=pkt)
+    await dec.finish()
+    res = dec.results[n0:]
+    assert len(res) == N_LINE_RATE, f"{len(res)} results for {N_LINE_RATE} messages"
+    assert sum(k == "pkt" for _, k in dec.order) == pkts
+    assert {r.outcome for _, r in res} == {Outcome.OUT, Outcome.FILTERED}
+
+
 # The long tests run as their own pytest entries (parallel workers, one shared build).
-LONG_TESTS: tuple[str, ...] = ()
+LONG_TESTS = ("tc_random_golden", "tc_line_rate")
 
 
 def directed_tests() -> list[str]:

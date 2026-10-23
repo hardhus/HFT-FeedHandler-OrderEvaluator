@@ -86,6 +86,44 @@ def test_mold_props_fires(prop, capsys):
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
 
 
+ITCH_TB = ["firmware/rtl/core/hft_pkg.sv", "firmware/tb/sva/itch_props.sv", "firmware/tb/sv/tb_itch_props.sv"]
+# HFT_VIOLATE number in tb_itch_props.sv -> the assertion's message.
+ITCH_VIOLATIONS = {
+    "a_in_len": (1, "input message length outside MOLD_MIN_LEN..MOLD_MAX_MSG"),
+    "a_msg_gets_res": (2, "input message without a result 2 cycles later"),
+    "a_res_after_msg": (3, "result not 2 cycles after an input message"),
+    "a_ev_iff_out": (4, "m_ev_valid differs from a result with outcome OUT"),
+    "a_class_legal": (5, "result class is not an itch_class_e code"),
+    "a_outcome_legal": (6, "result outcome is not an itch_outcome_e code"),
+    "a_ev_class_same": (7, "event class differs from the result class"),
+    "a_undecoded_zero": (8, "normalized fields not 0 for an ADMIN, AUCTION, UNKNOWN or MALFORMED event"),
+    "a_raw_is_input": (9, "m_ev_raw, m_ev_len or m_ev_type is not the input message"),
+    "a_short_no_header": (10, "header fields not 0 for a message shorter than the header"),
+    "a_pkt_gets_fwd": (11, "input packet event not forwarded 2 cycles later"),
+    "a_pkt_after_input": (12, "packet event not 2 cycles after an input packet event"),
+    "a_cmd_gets_rsp": (13, "accepted command without a response 1 cycle later"),
+    "a_rsp_after_cmd": (14, "command response not 1 cycle after an accepted command"),
+    "a_no_cmd_in_sweep": (15, "sym_req_ready during the bitmap sweep"),
+    "a_ready_after_sweep": (16, "sym_req_ready low after the bitmap sweep"),
+}
+
+
+def test_itch_props_quiet_on_legal_traffic():
+    """Legal traffic that hits every property's antecedent fires nothing."""
+    run_svtb(top="tb_itch_props", filelists=[], tb_files=ITCH_TB)
+
+
+@pytest.mark.parametrize("prop", list(ITCH_VIOLATIONS))
+def test_itch_props_fires(prop, capsys):
+    """Each violation fires its own assertion, and only that one."""
+    k, message = ITCH_VIOLATIONS[prop]
+    with pytest.raises(AssertionError, match="exited with|expected one"):
+        run_svtb(top="tb_itch_props", filelists=[], tb_files=ITCH_TB, defines={"HFT_VIOLATE": k})
+    out = capsys.readouterr().out
+    fired = [name for name, (_, msg) in ITCH_VIOLATIONS.items() if msg in out]
+    assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
+
+
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
 # HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
 FIFO_VIOLATIONS = {

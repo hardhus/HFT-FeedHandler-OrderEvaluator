@@ -57,3 +57,37 @@ bind moldudp64_rx mold_props #(
     .m_pkt_status(m_pkt_status),
     .m_pkt_msgs  (m_pkt_msgs)
 );
+
+bind itch_decoder itch_props u_itch_props (
+    .clk(clk),
+    .rst(rst),
+    .s_msg_valid(s_msg_valid),
+    .s_msg_data(s_msg_data),
+    .s_msg_len(s_msg_len),
+    .s_pkt_valid(s_pkt_valid),
+    .m_ev_valid(m_ev_valid),
+    .m_ev_class(m_ev_class),
+    .m_ev_type(m_ev_type),
+    .m_ev_len(m_ev_len),
+    .m_ev_raw(m_ev_raw),
+    .m_ev_header({m_ev_locate, m_ev_tracking, m_ev_ts}),
+    .m_ev_norm({
+      m_ev_order_ref,
+      m_ev_new_ref,
+      m_ev_shares,
+      m_ev_match,
+      m_ev_stock,
+      m_ev_price,
+      m_ev_attribution,
+      m_ev_side,
+      m_ev_printable,
+      m_ev_cross_type
+    }),
+    .m_res_valid(m_res_valid),
+    .m_res_class(m_res_class),
+    .m_res_outcome(m_res_outcome),
+    .m_pkt_valid(m_pkt_valid),
+    .sym_req_valid(sym_req_valid),
+    .sym_req_ready(sym_req_ready),
+    .sym_rsp_valid(sym_rsp_valid)
+);
