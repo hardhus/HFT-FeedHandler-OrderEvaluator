@@ -82,4 +82,54 @@ package hft_pkg;
     ITCH_UNKNOWN   = 3'd4,  // any other type byte
     ITCH_MALFORMED = 3'd5
   } itch_class_e;
+  localparam int unsigned ITCH_N_CLASS = 1 + int'(ITCH_MALFORMED);
+
+  // What happened to a message (one result per input message).
+  typedef enum logic [1:0] {
+    ITCH_RES_OUT      = 2'd0,  // m_ev_valid
+    ITCH_RES_FILTERED = 2'd1,  // class filtered and the stock locate not subscribed
+    ITCH_RES_MASKED   = 2'd2   // class disabled
+  } itch_outcome_e;
+
+  // Message type codes (TotalView-ITCH 5.0, revision 2023-04-28). K12: the legacy decoder used
+  // wrong codes; test_itch_model.py checks these against the model's table.
+  localparam logic [7:0] ITCH_T_SYSTEM_EVENT = 8'h53;  // "S"
+  localparam logic [7:0] ITCH_T_STOCK_DIRECTORY = 8'h52;  // "R"
+  localparam logic [7:0] ITCH_T_TRADING_ACTION = 8'h48;  // "H"
+  localparam logic [7:0] ITCH_T_REG_SHO = 8'h59;  // "Y"
+  localparam logic [7:0] ITCH_T_MP_POSITION = 8'h4C;  // "L"
+  localparam logic [7:0] ITCH_T_MWCB_DECLINE = 8'h56;  // "V"
+  localparam logic [7:0] ITCH_T_MWCB_STATUS = 8'h57;  // "W"
+  localparam logic [7:0] ITCH_T_IPO_QUOTING = 8'h4B;  // "K"
+  localparam logic [7:0] ITCH_T_LULD_COLLAR = 8'h4A;  // "J"
+  localparam logic [7:0] ITCH_T_OPERATIONAL_HALT = 8'h68;  // "h"
+  localparam logic [7:0] ITCH_T_ADD_ORDER = 8'h41;  // "A"
+  localparam logic [7:0] ITCH_T_ADD_ORDER_MPID = 8'h46;  // "F"
+  localparam logic [7:0] ITCH_T_ORDER_EXECUTED = 8'h45;  // "E"
+  localparam logic [7:0] ITCH_T_ORDER_EXECUTED_PRICE = 8'h43;  // "C"
+  localparam logic [7:0] ITCH_T_ORDER_CANCEL = 8'h58;  // "X"
+  localparam logic [7:0] ITCH_T_ORDER_DELETE = 8'h44;  // "D"
+  localparam logic [7:0] ITCH_T_ORDER_REPLACE = 8'h55;  // "U"
+  localparam logic [7:0] ITCH_T_TRADE = 8'h50;  // "P"
+  localparam logic [7:0] ITCH_T_CROSS_TRADE = 8'h51;  // "Q"
+  localparam logic [7:0] ITCH_T_BROKEN_TRADE = 8'h42;  // "B"
+  localparam logic [7:0] ITCH_T_NOII = 8'h49;  // "I"
+  localparam logic [7:0] ITCH_T_RPII = 8'h4E;  // "N"
+  localparam logic [7:0] ITCH_T_DLCR = 8'h4F;  // "O"
+  // Common header of every message: type (1), stock locate (2), tracking number (2), timestamp (6).
+  localparam int unsigned ITCH_HDR_LEN = 11;
+
+  // Big-endian unsigned integer of n <= 8 bytes at byte offset ofs of a message vector
+  // (byte i = v[8i+7:8i]): the first byte is the most significant (K3).
+  function automatic logic [63:0] msg_be(input logic [8*MOLD_MAX_MSG-1:0] v, input int unsigned ofs,
+                                         input int unsigned n);
+    logic [63:0] r;
+    r = '0;
+    for (int unsigned i = 0; i < 8; i++) begin
+      if (i < n) begin
+        r = {r[55:0], v[8*(ofs+i)+:8]};
+      end
+    end
+    return r;
+  endfunction
 endpackage

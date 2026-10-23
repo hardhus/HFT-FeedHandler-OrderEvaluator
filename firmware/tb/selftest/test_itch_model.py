@@ -162,6 +162,31 @@ def test_class_codes_match_rtl():
     assert rtl == {c.name: c.value for c in ItchClass}
 
 
+def test_outcome_codes_match_rtl():
+    """Outcome must equal itch_outcome_e in hft_pkg.sv (m_res_outcome)."""
+    rtl = {m[1]: int(m[2]) for m in re.finditer(r"\bITCH_RES_(\w+)\s*=\s*2'd(\d+)", HFT_PKG.read_text())}
+    assert rtl == {o.name: o.value for o in Outcome}
+
+
+# hft_pkg type code name -> specification letter, written out from the message table names.
+TYPE_NAMES = {
+    "SYSTEM_EVENT": "S", "STOCK_DIRECTORY": "R", "TRADING_ACTION": "H", "REG_SHO": "Y", "MP_POSITION": "L",
+    "MWCB_DECLINE": "V", "MWCB_STATUS": "W", "IPO_QUOTING": "K", "LULD_COLLAR": "J", "OPERATIONAL_HALT": "h",
+    "ADD_ORDER": "A", "ADD_ORDER_MPID": "F", "ORDER_EXECUTED": "E", "ORDER_EXECUTED_PRICE": "C",
+    "ORDER_CANCEL": "X", "ORDER_DELETE": "D", "ORDER_REPLACE": "U", "TRADE": "P", "CROSS_TRADE": "Q",
+    "BROKEN_TRADE": "B", "NOII": "I", "RPII": "N", "DLCR": "O",
+}  # fmt: skip
+
+
+def test_k12_type_codes_match_rtl():
+    """K12 (the legacy decoder used wrong type codes): every ITCH_T_* code in hft_pkg.sv is the
+    specification letter of its message, and the 23 codes are exactly the model's types."""
+    pattern = r"localparam\s+logic\s*\[7:0\]\s*ITCH_T_(\w+)\s*=\s*8'h([0-9A-Fa-f]{2})\s*;"
+    rtl = {m[1]: chr(int(m[2], 16)) for m in re.finditer(pattern, HFT_PKG.read_text())}
+    assert rtl == TYPE_NAMES
+    assert set(rtl.values()) == set(SPEC)
+
+
 def test_spec_lengths_match_mold():
     """Two tables written out independently: SPEC here, ITCH50_LEN in the MoldUDP64 model."""
     assert {t: s.length for t, s in SPEC.items()} == ITCH50_LEN
