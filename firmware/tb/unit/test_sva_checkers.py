@@ -124,6 +124,28 @@ def test_itch_props_fires(prop, capsys):
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
 
 
+ITCH_STATS_TB = ["firmware/rtl/core/hft_pkg.sv", "firmware/tb/sva/itch_stats_props.sv", "firmware/tb/sv/tb_itch_stats_props.sv"]
+ITCH_STATS_VIOLATIONS = {
+    "a_pend_limit": (1, "pending count past 16 bits (a packet of more than 65535 results)"),
+}
+
+
+def test_itch_stats_props_quiet_on_legal_traffic():
+    """A result on a full pending count with a packet event (legal) fires nothing."""
+    run_svtb(top="tb_itch_stats_props", filelists=[], tb_files=ITCH_STATS_TB)
+
+
+@pytest.mark.parametrize("prop", list(ITCH_STATS_VIOLATIONS))
+def test_itch_stats_props_fires(prop, capsys):
+    """The violation fires its own assertion."""
+    k, message = ITCH_STATS_VIOLATIONS[prop]
+    with pytest.raises(AssertionError, match="exited with|expected one"):
+        run_svtb(top="tb_itch_stats_props", filelists=[], tb_files=ITCH_STATS_TB, defines={"HFT_VIOLATE": k})
+    out = capsys.readouterr().out
+    fired = [name for name, (_, msg) in ITCH_STATS_VIOLATIONS.items() if msg in out]
+    assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
+
+
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
 # HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
 FIFO_VIOLATIONS = {

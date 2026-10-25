@@ -91,6 +91,12 @@ package hft_pkg;
     ITCH_RES_MASKED   = 2'd2   // class disabled
   } itch_outcome_e;
 
+  // ITCH counters (itch_stats, ITCH block of the CSR map): index = class, then one per outcome.
+  localparam int unsigned ITCH_CNT_OUT = ITCH_N_CLASS + int'(ITCH_RES_OUT);
+  localparam int unsigned ITCH_CNT_FILTERED = ITCH_N_CLASS + int'(ITCH_RES_FILTERED);
+  localparam int unsigned ITCH_CNT_MASKED = ITCH_N_CLASS + int'(ITCH_RES_MASKED);
+  localparam int unsigned ITCH_N_CNT = ITCH_CNT_MASKED + 1;
+
   // Message type codes (TotalView-ITCH 5.0, revision 2023-04-28). K12: the legacy decoder used
   // wrong codes; test_itch_model.py checks these against the model's table.
   localparam logic [7:0] ITCH_T_SYSTEM_EVENT = 8'h53;  // "S"

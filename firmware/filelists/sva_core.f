@@ -4,4 +4,5 @@
 ../tb/sva/udp_rx_props.sv
 ../tb/sva/mold_props.sv
 ../tb/sva/itch_props.sv
+../tb/sva/itch_stats_props.sv
 ../tb/sva/bind_core.sv

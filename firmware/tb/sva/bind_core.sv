@@ -91,3 +91,13 @@ bind itch_decoder itch_props u_itch_props (
     .sym_req_ready(sym_req_ready),
     .sym_rsp_valid(sym_rsp_valid)
 );
+
+bind itch_stats itch_stats_props #(
+    .PEND_W(PEND_W)
+) u_itch_stats_props (
+    .clk      (clk),
+    .rst      (rst),
+    .pkt_valid(pkt_valid),
+    .inc      (inc),
+    .pend     (pend)
+);
