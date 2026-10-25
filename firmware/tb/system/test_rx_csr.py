@@ -675,6 +675,15 @@ async def tc_feed_random(dut):
         replace(FEED_ON, enable=0),
     ]
     identity = {"prev": None, "checked": 0}
+    # Variants come from a shuffled bag, refilled when empty: each of them (feed off included) is
+    # committed once in every 10 FEED configurations, so status_DISABLED does not depend on the seed.
+    bag: list[FeedCfg] = []
+
+    def next_variant() -> FeedCfg:
+        if not bag:
+            bag.extend(variants)
+            rng.shuffle(bag)
+        return bag.pop()
 
     def check_identity(seq: int, values: list[int]) -> None:
         """Against the previous snapshot: in sync at both and no resync applied from FEED_DELAY + 2
@@ -717,7 +726,7 @@ async def tc_feed_random(dut):
             if x < 0.4:
                 await snapshot()
             elif x < 0.65:
-                await configure_feed(w, rng.choice(variants))
+                await configure_feed(w, next_variant())
             elif x < 0.9:
                 learn = rng.random() < 0.3
                 e = (sysm.state.expected + rng.randint(-30, 30)) % SEQ_MOD
