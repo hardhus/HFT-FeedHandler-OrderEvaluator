@@ -101,6 +101,11 @@ Build outputs go to `build/`:
   unit tests `tc_line_rate_b2b` and `tc_random_golden` (10⁴ packets) take about 35 s each. Right after a WSL
   restart (cold file cache) the same run took 4 minutes. A cold build of all F1 tests took 10 to 36 minutes on
   `/mnt/d`, mostly I/O wait; see Troubleshooting for a faster build directory.
+  After F4 (464 tests) a full `just ci` takes about 15 minutes on WSL (test phase 14 minutes, builds reused). The
+  longest entries are the `hft_csr_wrap` directed groups (80 to 130 s per profile), `tc_random_golden` of
+  `eth_ip_udp_rx` (about 110 s), `tc_rx_csr_random`, `tc_feed_random` and `tc_itch_random` (2000 frames each, 75
+  to 95 s per run); the ITCH unit test `tc_random_golden` (10⁵ messages) takes about 50 s. A change to
+  `sva_core.f` or `core.f` rebuilds every core build: about 30 minutes for the whole suite on WSL.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
@@ -180,9 +185,16 @@ so an unintended shift fails), then `just fmt lint test`.
   produce the stimulus. `tb/selftest/test_mold_model.py` (`just test-one mold_model`) checks hand-written packets,
   every pair of faults for the priority, the status codes against `hft_pkg.sv`, the 2⁶⁴ wrap and the generator.
   The system test chains the two models: the F2 model's payload, abort and filter index go into `mold.expect`.
+- `itch.py` is the reference for `itch_decoder`, also pure Python: the 23 TotalView-ITCH 5.0 types written out from
+  the specification (a page number on every line), `encode`/`decode`, `classify` and `expect(msg, cfg, bitmap)`
+  (class, outcome and the normalized event). `itch_stream()`/`random_itch()` produce real messages in 106
+  round-robin categories; `mold.random_feed(..., msg_source=...)` packs them into MoldUDP64 packets.
+  `tb/selftest/test_itch_model.py` (`just test-one itch_model`) checks hand-written hex messages for every type,
+  the class, outcome and type codes against `hft_pkg.sv`, the length table against `mold.py` and the field layout.
+  The system test chains all three models (F2 → F3 → F4).
 - **Coverage is a gate.** `tc_random_golden` hits named bins (reasons, last-beat cases, MAC classes, filter
-  entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The MoldUDP64 `tc_random_golden`,
-  `tc_rx_csr_random` and `tc_feed_random` have their own gates. The counts are written to
+  entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The MoldUDP64 and ITCH
+  `tc_random_golden`, `tc_rx_csr_random`, `tc_feed_random` and `tc_itch_random` have their own gates. The counts are written to
   `coverage.json` in the test's run directory. Bins are not removed to make a test pass.
 
 AXI/AXI-Stream drivers come from [cocotbext-axi](https://github.com/alexforencich/cocotbext-axi). It works with

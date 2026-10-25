@@ -29,7 +29,7 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, CSR block and counters; ITCH parser, book, rules and DMA engine planned |
+| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, CSR block and counters; DMA engine, book and rules planned |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
@@ -93,6 +93,22 @@ for the RTL rules.
     with A/B copies, resyncs and snapshots, and checks the sequence accounting between snapshots.
   - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
   - `just ci` is green on GitHub Actions (x64, arm64) and on a Raspberry Pi 5 (338 tests).
+- **F4, ITCH 5.0:** `itch_decoder` in [`firmware/rtl/core/`](firmware/rtl/core/README.md#itch_decoder).
+  - It classifies all 23 TotalView-ITCH 5.0 message types (revision 2023-04-28) by type and length and turns the
+    big-endian fields of the order and trade messages into numbers, one message per cycle. Admin, auction, unknown
+    and malformed messages pass with their header and the raw message for the host (legacy: wrong type codes and
+    byte order).
+  - A stock-locate filter: a 64 Kbit bitmap in block RAM that the host writes through the register map; a write's
+    response means it is in effect. Software chooses per message class what is output, filtered or masked, and the
+    change applies to whole packets.
+  - ITCH counters count only messages of packets that are kept, in the same snapshot as the feed counters, with two
+    accounting identities checked in every snapshot.
+  - Every message is checked against a pure-Python ITCH model written from the specification (10⁵ random messages
+    with a coverage gate, line rate); the system test chains it with the F2 and F3 models on 2000 frames of real
+    ITCH with bitmap and class-mask changes, resyncs and snapshots.
+  - The driver's rule after a reset (restore every register and the whole bitmap) is written down in the core
+    README.
+  - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.

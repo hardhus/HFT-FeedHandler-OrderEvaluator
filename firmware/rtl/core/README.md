@@ -6,20 +6,22 @@ they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`
 [`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis harnesses in
 [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The CSR blocks are in
 [`filelists/csr.f`](../../filelists/csr.f) (assertions [`sva_csr.f`](../../filelists/sva_csr.f), harness
-[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5 and F3 plans
-(audit 09, 10, 11); this file is the contract.
+[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3 and F4
+plans (audit 09, 10, 11, 12); this file is the contract.
 
 ## Catalog
 
 | Block | What it does | Phase |
 |-------|--------------|-------|
-| `hft_pkg` | Protocol constants, big-endian lane helpers `be16`/`be32`, receive reason codes `rx_reason_e`, MoldUDP64 constants and packet status codes `mold_status_e` | F2, F3 |
+| `hft_pkg` | Protocol constants, big-endian lane helpers `be16`/`be32`, receive reason codes `rx_reason_e`, MoldUDP64 constants and packet status codes `mold_status_e`, ITCH 5.0 type codes, `itch_class_e`, `itch_outcome_e`, `msg_be` | F2, F3, F4 |
 | `eth_ip_udp_rx` | Ethernet/IPv4/UDP receive filter: header checks, 8-entry (IP, port) filter table, UDP payload realigned to byte 0 | F2 |
 | `moldudp64_rx` | MoldUDP64 de-framer: one 64-B message vector per cycle, sequence tracking (gap, duplicate, A/B lines, heartbeat, end of session, resync), one event per packet | F3 |
+| `itch_decoder` | ITCH 5.0 classifier and field decoder, stock-locate filter (`symbol_filter`: 64 Kbit bitmap), packet events forwarded | F4 |
 | `gen/hft_csr` | AXI4-Lite register block, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL) | F5, F3 |
 | `rx_stats` | Receive counters: packets, bytes, one drop counter per reason (64 bit) | F5 |
 | `mold_stats` | Feed counters: one per packet status, plus messages, duplicate, oversize and gap counts (64 bit) | F3 |
-| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits, feed resync, counter snapshot | F5, F3 |
+| `itch_stats` | ITCH counters of committed messages: one per class and one per outcome (64 bit) | F4 |
+| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot | F5, F3, F4 |
 
 ## `eth_ip_udp_rx`
 
@@ -182,6 +184,7 @@ MoldUDP64 in brief (all fields big-endian):
 | `cfg_resync`, `cfg_resync_learn`, `cfg_resync_seq` | 1, 1, 64 | Resync pulse: learn the next packet's `seq`, or set the expected `seq` to `cfg_resync_seq` |
 | `m_msg_valid`, `m_msg_data`, `m_msg_len` | 1, 512, 7 | One message per cycle, no `ready`. Byte i = `m_msg_data[8i+7:8i]` (byte 0 = ITCH message type); bytes from `m_msg_len` on are 0. `m_msg_len` = 6..64 |
 | `m_msg_seq`, `m_msg_sof_ts` | 64, 64 | The message's sequence number; the packet's SOF timestamp |
+| `cfg_msg_ctx`, `m_msg_ctx` | `CTX_W`, `CTX_W` | An opaque per-packet context: sampled on the packet's first beat with the other `cfg_*` and given with each of its messages (F4: `ITCH_CTRL`, `CTX_W` = 12) |
 | `m_pkt_valid`, `m_pkt_status` | 1, `mold_status_e` | One event per input packet, after all of its messages |
 | `m_pkt_seq`, `m_pkt_count` | 64, 16 | Header `seq` and `count` (undefined for `RUNT`) |
 | `m_pkt_gap` | 64 | Messages skipped before this packet; non-zero only when accepted in sync |
@@ -315,8 +318,10 @@ Harness `rtl/platform/synth_ooc/moldudp64_rx_ooc.sv` (inputs registered, as for 
 
 | Part | Clock | LUT | FF | WNS (ns) | WHS (ns) | `report_cdc` | Gate |
 |------|-------|-----|----|----------|----------|--------------|------|
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 2482 | 2906 | +0.086 (synthesis +0.313) | +0.097 | no crossing | PASS |
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 2503 | 2906 | +2.502 (synthesis +4.419) | +0.043 | no crossing | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 2482 | 2942 | +0.155 (synthesis +0.313) | +0.097 | no crossing | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 2503 | 2942 | +3.441 (synthesis +4.419) | +0.042 | no crossing | PASS |
+
+Measured with the 12-bit per-packet context (`CTX_W` = 12, F4).
 
 The Artix-7 margin is small; the next steps, if a change breaks it, are a second realigner stage or one more
 stage in the sequence compare (latency + 1, with this file and the tests).
@@ -325,9 +330,146 @@ stage in the sequence compare (latency + 1, with this file and the tests).
 
 Re-requests (a TCP/UDP request to the exchange) are the host's job: the event gives the gap. One feed with one E
 (its A and B lines in one mask), no reordering buffer for messages after a gap, no decoding of `length` ≤ 5 at line
-rate. ITCH fields are decoded in F4.
+rate. ITCH fields are decoded in F4 (`itch_decoder`).
 
-## CSR block: `hft_csr`, `hft_csr_wrap`, `rx_stats`, `mold_stats`
+## `itch_decoder`
+
+Decodes each `moldudp64_rx` message as Nasdaq TotalView-ITCH 5.0 (specification revision 2023-04-28), in
+`net_clk`, one message per cycle, without backpressure. It classifies the message by type and length, turns the
+big-endian fields of the order and trade messages into numbers (legacy K3), filters by stock locate, and forwards
+every packet event with the same latency, so the rule "a packet's messages come before its event" still holds
+downstream. The 23 type codes are in `hft_pkg` (`ITCH_T_*`, legacy K12) and are checked against the model's table.
+
+### Ports
+
+| Port | Width | Meaning |
+|------|-------|---------|
+| `s_msg_valid`, `s_msg_data`, `s_msg_len`, `s_msg_seq`, `s_msg_sof_ts` | 1, 512, 7, 64, 64 | `moldudp64_rx`'s message vector (byte 0 = type, bytes from `len` on 0) |
+| `s_msg_class_en`, `s_msg_class_filter` | 6, 6 | `ITCH_CTRL` of the message's packet: `moldudp64_rx` carries it as its per-packet context (`cfg_msg_ctx` = `{class_filter, class_en}`), sampled with the other FEED settings on the packet's first beat, so a FEED commit applies to whole packets |
+| `s_pkt_*` | as `moldudp64_rx` `m_pkt_*` | Packet events, forwarded on `m_pkt_*` |
+| `sym_req_valid/ready/wr/addr/wdata/wstrb`, `sym_rsp_valid/rdata` | 1/1/1/11/32/4, 1/32 | Symbol bitmap commands from `hft_csr_wrap` (word address; bit i of word w = locate 32w + i) |
+| `m_ev_valid`, `m_ev_class`, `m_ev_type`, `m_ev_len`, `m_ev_seq`, `m_ev_sof_ts` | 1, 3, 8, 7, 64, 64 | One event per output message |
+| `m_ev_locate`, `m_ev_tracking`, `m_ev_ts` | 16, 16, 48 | Common header (stock locate, tracking number, timestamp in ns since midnight) |
+| `m_ev_order_ref` … `m_ev_cross_type` | below | Normalized fields; 0 where they do not apply |
+| `m_ev_raw` | 512 | The input vector, unchanged (every class; the host decodes the classes the hardware does not) |
+| `m_res_valid`, `m_res_class`, `m_res_outcome` | 1, 3, 2 | One result per input message (`itch_class_e`, `itch_outcome_e`), for the counters |
+| `m_pkt_*` | as `s_pkt_*` | The packet events, with the messages' latency |
+
+### Classes and the pass rule
+
+| Code | `itch_class_e` | Types | Output |
+|------|----------------|-------|--------|
+| 0 | `ITCH_ORDER` | A F E C X D U | header + normalized fields + raw |
+| 1 | `ITCH_TRADE` | P Q B | header + normalized fields + raw |
+| 2 | `ITCH_ADMIN` | S R H Y L V W K J h | header + raw |
+| 3 | `ITCH_AUCTION` | I N O | header + raw |
+| 4 | `ITCH_UNKNOWN` | every other type byte | header + raw |
+| 5 | `ITCH_MALFORMED` | a known type whose length is not the specification length | header + raw, not decoded |
+
+Unknown types are not dropped: the specification has grown (J 2017, h 2018, O 2023), and a feed that drops a
+message silently corrupts the host's book. Only the length is checked; field values (side, price limit, enums)
+are passed as they are.
+
+The **header** (locate, tracking, timestamp) is output for every class, MALFORMED included, when the message has
+at least 11 bytes (`ITCH_HDR_LEN`), else it is 0. The header is at the same offsets in every message.
+
+Per message, in this order (`m_res_outcome`):
+1. `class_en[class]` = 0 → `ITCH_RES_MASKED` (no event);
+2. `class_filter[class]` = 1, locate ≠ 0 and the locate's bitmap bit 0 → `ITCH_RES_FILTERED` (no event);
+3. else `ITCH_RES_OUT` (`m_ev_valid`).
+
+Locate 0 (market-wide messages: S, V, W, K) is never filtered. The filter key is `m_ev_locate`, so a message
+shorter than the header (locate 0) is never filtered either.
+
+### Normalized fields
+
+Alpha fields (side, stock, attribution, printable, cross type) are in wire order: byte 0 of the field in bits
+[7:0]. Integers are unsigned; prices are `Price(4)` (4 decimal places).
+
+| Field | Width | A | F | E | C | X | D | U | P | Q | B |
+|-------|-------|---|---|---|---|---|---|---|---|---|---|
+| `order_ref` | 64 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | original | ✓ | | |
+| `new_ref` | 64 | | | | | | | ✓ | | | |
+| `shares` | 64 | ✓ | ✓ | executed | executed | cancelled | | ✓ | ✓ | 8 B shares | |
+| `price` | 32 | ✓ | ✓ | | execution | | | ✓ | ✓ | cross price | |
+| `match` | 64 | | | ✓ | ✓ | | | | ✓ | ✓ | ✓ |
+| `side` | 8 | ✓ | ✓ | | | | | | ✓ | | |
+| `stock` | 64 | ✓ | ✓ | | | | | | ✓ | ✓ | |
+| `attribution` | 32 | | ✓ | | | | | | | | |
+| `printable` | 8 | | | | ✓ | | | | | | |
+| `cross_type` | 8 | | | | | | | | | ✓ | |
+
+E, C, X, D and U carry no price or side: the order book (order_ref → price, side, shares) is not in F4.
+
+### Symbol filter (`symbol_filter`, inside `itch_decoder`)
+
+- 2048 × 32-bit RAM on `net_clk` (two RAMB36): port A for the commands and the sweep (READ_FIRST, byte writes),
+  port B for one lookup per message. One clock: on Artix-7/UltraScale+ a read of an address that the other port
+  writes in the same cycle is undefined across clocks (UG473 conflict rules), so host writes reach the RAM as
+  commands in `net_clk`, never as a second clock port.
+- A lookup in the cycle a word is written sees the old word; from the next cycle on, the new one.
+- Commands one at a time (`sym_req_ready`); a write is in the RAM one cycle after acceptance, and every command
+  gets `sym_rsp_valid` one cycle after acceptance (read: `sym_rsp_rdata` = the word; write: an acknowledgement).
+- **Sweep after reset:** the RAM has no reset. When `rst` falls, the block writes 0 to all 2048 words (2048
+  cycles, about 13.1 µs); meanwhile `sym_req_ready` = 0 (a command waits) and every lookup gives 0 (filtered
+  classes are FILTERED). Then the bitmap reads 0: the deterministic reset value.
+
+### Latency
+
+Checked with exact equality on every output by every test:
+- `s_msg_valid` → `m_ev_valid` / `m_res_valid`: **2 cycles**;
+- `s_pkt_valid` → `m_pkt_valid`: **2 cycles**, so a packet event still follows its packet's last result. A message
+  in the same cycle as a packet event belongs to the next packet.
+
+Stage 1: type, class, length check, the lookup address from the input (bytes 1–2). Stage 2: bit select from the
+RAM word, the pass decision, field extraction into the output registers.
+
+### Contract for the consumer (F6)
+
+- Every event and result of a packet comes before that packet's `m_pkt_valid`. Downstream keeps them if the status
+  is `OK`, `HEARTBEAT` or `EOS` and drops them otherwise (as for `moldudp64_rx`).
+- The event's fields are those of the message as received; `m_ev_raw` holds the whole message for the classes the
+  hardware does not decode.
+
+### Reset
+
+`rst` is synchronous. A message or packet event in the pipeline when it comes is dropped; with `moldudp64_rx`'s
+reset rule, a packet cut by a reset has no event. After the reset the sweep runs (above).
+
+### Implementation notes (timing)
+
+The worst path is the lookup: RAM port B output → bit select (MUXF7/F8) → pass decision → `m_ev_valid`. It meets
+156.25 MHz on the Artix-7 without a RAM output register; field extraction fits in stage 2 (no third stage).
+
+### Verification
+
+| What | Where |
+|------|-------|
+| Golden model in pure Python: the 23 types written out from the specification (page per type), `encode`/`decode`, `classify`, `expect()` with the rules above, a random generator with 106 categories (every type, ±1 byte, unknown types, edge locates, field extremes) | `tb/model/itch.py` |
+| Model selftests (no simulator): hand-written hex messages for every type, K3 (`00 00 25 1C` = 9500), class and outcome codes and the 23 type codes against `hft_pkg.sv` (K12), the length table against `mold.ITCH50_LEN`, field layout without gaps or overlaps | `tb/selftest/test_itch_model.py` |
+| Directed tests: hand messages, K3, K12, every length ±1, all 256 type bytes × 6..64 B, field extremes, Q's 8-B shares, class mask, class filter, bitmap layout (every word), write during lookup, sweep after reset, byte strobes, packet forwarding, latency, reset in a packet | `tb/unit/test_itch_decoder.py` |
+| 10⁵ random messages against the model with config changes, bitmap writes in the lookup's cycle and reads, coverage gate (133 bins); line rate, one message per cycle, zero loss | `tc_random_golden`, `tc_line_rate` |
+| Assertions (16, bound in every core build) and their own tests | `tb/sva/itch_props.sv`, `tb/sv/tb_itch_props.sv`, `tb/unit/test_sva_checkers.py` |
+| System: `eth_ip_udp_rx` → `moldudp64_rx` → `itch_decoder` → `hft_csr_wrap`; every message, result and event against the chain model; hand-counted bring-up (locates learned from Stock Directory events); 2000 frames of real ITCH with ITCH_CTRL commits, bitmap writes and reads, resyncs, snapshots | `tb/system/test_rx_csr.py` (`tc_itch_bring_up`, `tc_itch_random`) |
+
+### Synthesis (OOC, `just synth-core`, placed and routed)
+
+Harness `rtl/platform/synth_ooc/itch_decoder_ooc.sv` (inputs registered).
+
+| Part | Clock | LUT | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
+|------|-------|-----|----|------|----------|----------|------|
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 635 | 3115 | 2 × RAMB36 | +0.978 (synthesis +1.145) | +0.100 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 634 | 3115 | 2 × RAMB36 | +4.097 (synthesis +4.751) | +0.045 | PASS |
+
+Most FFs are output registers (`m_ev_raw` alone is 512).
+
+### Out of scope
+
+The order book (order_ref → price, side, shares, for E/X/D/U) is a separate decision before F7. The 64-B host
+descriptor is F6's (the ring writer fills it from `m_ev_*`). Filtering by symbol name: the host maps names to
+locates (Stock Directory messages or Nasdaq's daily locate files) and writes the bitmap. Field content validation.
+
+## CSR block: `hft_csr`, `hft_csr_wrap`, `rx_stats`, `mold_stats`, `itch_stats`
 
 The host register interface, generated from one source: [`firmware/rdl/hft_csr.rdl`](../../rdl/hft_csr.rdl)
 (SystemRDL 2.0). `just gen` runs PeakRDL (`scripts/gen_csr.sh`) and writes:
@@ -354,12 +496,15 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 
 | Base | Block | Registers |
 |------|-------|-----------|
-| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0001`), `SCRATCH` (RW) |
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0002`), `SCRATCH` (RW) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
 | `0x0300` | RING | reserved (F6) |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
-| `0x0500`+ | RISK, STRATEGY, TX, SYMBOL | reserved (F4, F7) |
+| `0x0500` | RISK | reserved (F7) |
+| `0x0600` | ITCH | Shadow (carried by `FEED_COMMIT`): `ITCH_CTRL` (`class_en` bits 5:0, `class_filter` bits 13:8; bit = `itch_class_e` code). Snapshot: `ITCH_<class>` at `0x0640 + 8 × class`, then `ITCH_OUT`, `ITCH_FILTERED`, `ITCH_MASKED` at `0x0670`, `0x0678`, `0x0680` |
+| `0x1000`+ | STRATEGY, TX | reserved (F7) |
+| `0x8000` | SYMBOL | Memory, 2048 × 32 bit, RW: bit i of word w = stock locate 32w + i (1 = subscribed) |
 
 Software never writes a field that hardware also writes: shadow, command and status fields are in separate
 registers, so a hardware update cannot overwrite a host write (legacy K5). A selftest checks this rule on the RDL.
@@ -367,7 +512,8 @@ For the same reason the resync value (`RESYNC_SEQ`, written by software) and the
 (`EXPECTED_SEQ`, written by hardware) are two registers.
 
 `VERSION` is major.minor: a minor step only adds registers (software written for an older minor still works), a
-major step changes existing ones. The F3 FEED block made it `0x0005_0001`.
+major step changes existing ones. The F3 FEED block made it `0x0005_0001`, the F4 ITCH block and SYMBOL
+`0x0005_0002`.
 
 ### Config commit (NET)
 
@@ -388,11 +534,12 @@ the first commit; the receiver drops every frame as `DISABLED` until then.
 
 ### Config commit and resync (FEED)
 
-The FEED registers (`FEED_CTRL`, `SESSION_*`, `RESYNC_SEQ_*`) are a shadow like NET, with their own commit buffer
-and `cdc_handshake` (156 bits). `FEED_COMMIT.commit` sends them; `moldudp64_rx` takes its `cfg_*` at the first
-beat of each packet, so a packet sees the old or the new configuration as a whole. `FEED_STATUS.commit_busy`,
-coalescing and latency are as for NET. After reset `cfg_feed_en` and `cfg_session_check` are 0 until the first
-commit; the feed counts every packet as `DISABLED` until then.
+The FEED registers (`FEED_CTRL`, `SESSION_*`, `RESYNC_SEQ_*`) and `ITCH_CTRL` are a shadow like NET, with their
+own commit buffer and `cdc_handshake` (168 bits). `FEED_COMMIT.commit` sends them; `moldudp64_rx` takes its `cfg_*`
+at the first beat of each packet and carries `ITCH_CTRL` with the packet's messages (`cfg_msg_ctx`), so a packet
+sees the old or the new configuration as a whole, in both blocks. `FEED_STATUS.commit_busy`, coalescing and
+latency are as for NET. After reset `cfg_feed_en`, `cfg_session_check` and `cfg_class_en` are 0 until the first
+commit; the feed counts every packet as `DISABLED` and the decoder every message as `MASKED` until then.
 
 `FEED_COMMIT.resync` commits in the same way and asks `moldudp64_rx` to resync with the `resync_learn` and
 `RESYNC_SEQ` of that commit (learn the next packet's `seq`, or set E). It works like a self-clearing command bit:
@@ -439,27 +586,85 @@ delays `feed_*` by `FEED_DELAY` = 2 cycles. Between two snapshots taken in sync 
 
 (every sequence number is either a kept message, a skipped oversize message or a gap). The system test checks it.
 
+`itch_stats` counts only committed messages, as `MOLD_MSGS` does: each result of `itch_decoder` adds to 16-bit
+pending counts (one per class and per outcome); the forwarded packet event adds them to the counters for `OK`,
+`HEARTBEAT` and `EOS` and drops them otherwise. A result in the same cycle as a packet event belongs to the next
+packet. A packet has fewer than 2¹⁶ messages (at most 181 in a 1472-byte payload); an assertion
+(`itch_stats_props`) checks the pending limit. The ITCH counters are in the same snapshot. Both counter banks count
+the packet events `itch_decoder` forwards (2 cycles after `moldudp64_rx`'s), so `FEED_DELAY` is 4. In every
+snapshot:
+
+Σ `ITCH_<class>` = `MOLD_MSGS`, and `ITCH_OUT` + `ITCH_FILTERED` + `ITCH_MASKED` = Σ `ITCH_<class>`
+
+(the system test checks both in every snapshot).
+
+### Symbol bitmap (SYMBOL)
+
+A SYMBOL access (regblock external memory, one access in flight) goes to `itch_decoder`'s command port: the
+request (write flag, word address, data, byte strobes) over one `cdc_handshake` (48 bits, host → net), the
+response (read data) back over another (32 bits). The read or write is acknowledged when the response lands, so
+a write's BRESP means it is in the bitmap: every message looked up after it sees the new value.
+
+Latency (handshakes free, `itch_decoder` ready): request → transfer accepted 2 `host_clk` edges; accepted →
+command at the port `STAGES` + 2 `net_clk` edges; response → accepted 2 `net_clk` edges; accepted → ack
+`STAGES` + 1 `host_clk` edges (each crossing one edge more with CDC jitter); regblock adds its own response cycle.
+
+During the sweep after a reset (about 13.1 µs) an access waits at the port, and the bus with it: regblock keeps
+one access in flight, so other CSR accesses wait too. This is far below a PCIe completion timeout (50 µs at the
+least).
+
+### Software contract after reset
+
+A reset (power-on, and later a platform or PCIe reset; host and net reset together) returns the whole
+configuration to its reset values: `rx_en` = 0, `feed_en` = 0, `class_en` = 0, every shadow register to its
+reset value, and the SYMBOL bitmap to 0 (the sweep). Until software configures the device again, the receiver
+drops every frame (`DISABLED`), the feed counts every packet as `DISABLED`, and no ITCH message is output; a
+filtered class would drop its messages without an error, counted only in `ITCH_FILTERED`. The counters start
+again from 0.
+
+This is the standard device contract: a device reset clears the configuration and the driver restores it (NDIS
+`NdisMResetComplete` with `AddressingReset`; Linux NIC drivers rewrite their filter lists after a reset). The bitmap
+cannot be kept over a reset: block RAM content has no reset, and a value that looked kept would be undefined.
+
+The driver keeps its own copy of the configuration (it is the only source; it does not read the device back) and
+after every reset, in this order:
+1. checks `ID` and `VERSION`;
+2. writes the NET shadow and `NET_COMMIT`;
+3. writes all 2048 `SYMBOL` words, the unsubscribed ones included (the first write waits until the sweep is done);
+4. writes the FEED shadow with `ITCH_CTRL` and `FEED_COMMIT`, with a resync if needed;
+5. waits for `commit_busy` = 0 after each commit.
+
+How the host learns about a reset (a platform reset notification, or a reset counter register) is F8's.
+
 ### Clocks and reset
 
 Two domains: `host_clk`/`host_rst` (bus, register block, commit buffers) and `net_clk`/`net_rst` (`cfg_*`,
-`rx_stats`, `mold_stats`). Both resets come from one source through one `reset_sync` per domain and are asserted
-together (`cdc_handshake` contract). The only crossings are four `cdc_handshake` instances: NET config (442 bits,
-host → net), FEED config (156 bits, host → net), snapshot request (1 bit, host → net) and snapshot (1794 bits,
-net → host: 11 + 16 counters, expected `seq`, `synced`, `eos`).
+`rx_stats`, `mold_stats`, `itch_stats`, the symbol command port). Both resets come from one source through one
+`reset_sync` per domain and are asserted together (`cdc_handshake` contract). The only crossings are six
+`cdc_handshake` instances: NET config (442 bits, host → net), FEED config with `ITCH_CTRL` (168 bits, host → net),
+snapshot request (1 bit, host → net), snapshot (2370 bits, net → host: 11 + 16 + 9 counters, expected `seq`,
+`synced`, `eos`), symbol request (48 bits, host → net) and symbol response (32 bits, net → host).
+
+In simulation, `assert_arm` (bound to `hft_csr`) keeps every assertion off until the first reset has been seen
+and released: Verilator keeps each instance's clock input as its own variable, and random power-up values can
+give a rising edge at time 0 while every flop still holds its random state. The hand-written checkers are armed by
+their own first reset; regblock's generated assertions are not.
 
 ### Verification
 
 | What | Where |
 |------|-------|
-| Map: every address against a hand-written table, reason-code formula, access kinds, the K5 rule (and that it bites), C++20 compile of the header with hand-written `offsetof` asserts | `tb/selftest/test_csr_map.py`, `tb/selftest/csr_header_check.cpp` |
-| Register model built from the RDL (not from the generated SV) | `tb/model/csr.py` |
-| Bus: reset values, every register, every `wstrb`, `SLVERR` cases, K6/K7/K8 regressions, random traffic with an 86-bin coverage gate | `tb/unit/test_hft_csr.py` (AXI driver `tb/common/axil.py`) |
+| Map: every address against a hand-written table, reason-code, status-code and class-code formulas, the SYMBOL memory, access kinds, the K5 rule (and that it bites), C++20 compile of the header with hand-written `offsetof` asserts | `tb/selftest/test_csr_map.py`, `tb/selftest/csr_header_check.cpp` |
+| Register model built from the RDL (not from the generated SV), memories included | `tb/model/csr.py` |
+| Bus: reset values, every register, every `wstrb`, `SLVERR` cases, K6/K7/K8 regressions, SYMBOL through a RAM responder (every `wstrb`, one access in flight), resets with traffic in flight (`AxilDriver.reset`), random traffic with a coverage gate | `tb/unit/test_hft_csr.py` (AXI driver `tb/common/axil.py`) |
 | AXI4-Lite assertions (bound to `hft_csr`) and their own tests | `tb/sva/axil_props.sv`, `tb/sv/tb_axil_props.sv` |
 | Counters: every edge against a model, every reason, wrap (8-bit build), carry past 2³² | `tb/unit/test_rx_stats.py` |
 | Feed counters: every edge against a model, every status into its own counter only, wrap (8-bit build), gap sum past 2³² and 2⁶⁴ | `tb/unit/test_mold_stats.py` |
+| ITCH counters: every edge against a model, commit and drop for every status, IPG 0 boundary, wrap (8-bit build), carry past 2³² and wrap at 2⁶⁴ (backdoor write of the counter register), pending counts at 65535; the pending limit assertion | `tb/unit/test_itch_stats.py`, `tb/sva/itch_stats_props.sv` |
 | Commit and snapshot at five clock/jitter profiles: exact latencies, atomicity monitor on every net edge, coalescing, snapshot = counters of its acceptance edge, K5 writes while snapshots land, LO/HI past 2³² | `tb/unit/test_hft_csr_wrap.py` (harness `tb/common/csr_env.py`) |
-| FEED at the same five profiles: commit latency and atomicity (also a shadow written while a commit waits), resync requests merged and never lost (also one made while a commit waits), a held singlepulse gives one resync, reset during a commit, feed state aligned with the counters in every snapshot phase | `tb/unit/test_hft_csr_wrap.py` (`tc_feed_*`, `tc_snapshot_feed_aligned`) |
-| System: `eth_ip_udp_rx` + `moldudp64_rx` + `hft_csr_wrap`, each frame against the F2 model and each payload against the MoldUDP64 model under the configuration it used, 2000 random frames with random commits and snapshots, and 2000 feed frames with resyncs and the accounting identity | `tb/system/test_rx_csr.py` |
+| FEED at the same five profiles: commit latency and atomicity (also a shadow written while a commit waits, `ITCH_CTRL` included), resync requests merged and never lost (also one made while a commit waits), a held singlepulse gives one resync, reset during a commit, feed state aligned with the counters in every snapshot phase | `tb/unit/test_hft_csr_wrap.py` (`tc_feed_*`, `tc_itch_ctrl_feed_commit`, `tc_snapshot_feed_aligned`) |
+| SYMBOL at the same five profiles, against a model of the decoder's command port with backpressure: every access reaches the port once, in order, unchanged; exact latencies; BRESP after the write is in effect; waiting during the sweep; resets while a command waits and in flight (10 each) | `tb/unit/test_hft_csr_wrap.py` (`tc_sym_*`) |
+| System: `eth_ip_udp_rx` + `moldudp64_rx` + `itch_decoder` + `hft_csr_wrap`, each frame against the F2 model, each payload against the MoldUDP64 model and each message against the ITCH model under the configuration it used; 2000 random frames with random commits and snapshots, 2000 feed frames with resyncs and the accounting identity, 2000 ITCH frames with bitmap and `ITCH_CTRL` changes and the ITCH identities | `tb/system/test_rx_csr.py` |
 
 ### Synthesis (`just synth-csr`, OOC place & route)
 
@@ -468,14 +673,15 @@ gates are placed and routed out of context (no board or pins); the table also gi
 
 | Part | net / host clock | Flow | LUT | FF | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|------|-----|----|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 2463 | 8405 | +0.767 (synthesis +1.836) | +0.027 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 2460 | 8405 | +0.154 (synthesis +0.422) | +0.090 | PASS |
-| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 2460 | 8405 | −2.753 | +0.164 | information only |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 3428 | 10699 | +0.566 (synthesis +1.858) | +0.023 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 3426 | 10697 | +0.154 (synthesis +0.422) | +0.090 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 3428 | 10697 | −2.843 | +0.164 | information only |
 
-The FEED block and the wider snapshot about doubled the size (F5 alone: 1329 LUT, 4349 FF; Artix-7 margin
-+0.324 ns). The Artix-7 host read path is the limit; regblock `--rt-read-response` is the next step if it fails.
+F5 alone was 1329 LUT, 4349 FF (Artix-7 margin +0.324 ns); the F3 FEED block made it 2460 / 8405, the F4 ITCH block,
+SYMBOL path and 2370-bit snapshot 3426 / 10697. The Artix-7 host read path is the limit (the SYMBOL read mux did not
+change it); regblock `--rt-read-response` is the next step if it fails.
 
-`report_cdc`: CDC-3 (synchronizers) and CDC-15 (handshake data captured with an enable, constrained by `cdc.tcl`),
-no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
+`report_cdc`: CDC-3 (synchronizers, 12) and CDC-15 (handshake data captured with an enable, constrained by
+`cdc.tcl`, 3060 bits), no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
 user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
 read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.
