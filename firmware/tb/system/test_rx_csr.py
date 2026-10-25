@@ -15,6 +15,14 @@ a packet after it, the last one if several wait). Every message (seq, length, by
 after the length, the packet's SOF timestamp), every packet event (fields and its latency, 3
 cycles after tlast) and feed_expected_seq/synced/eos in every cycle are compared with the model.
 
+Every message then goes on to itch_decoder (audit/12 S8): the ITCH model (model/itch.py) under
+the ITCH_CTRL of its packet's first beat (m_msg_ctx must carry exactly that) and a copy of the
+symbol bitmap that follows the writes itch_decoder's command port takes (a lookup in a write's
+cycle sees the old word). Every result, every event (all m_ev_* fields) and every forwarded packet
+event, 2 cycles after its input, are compared with the model. Every snapshot also satisfies the two
+ITCH accounting identities: the ITCH_<class> counters sum to MOLD_MSGS, and ITCH_OUT +
+ITCH_FILTERED + ITCH_MASKED to the ITCH_<class> sum.
+
 Every snapshot equals the counters at its acceptance edge (common/csr_env.Snap, fed by the
 receiver's stat_* and moldudp64_rx's packet events and feed state). Between two snapshots in sync
 with no resync in between, the accounting identity of the MoldUDP64 counters holds:
@@ -42,6 +50,7 @@ from common.csr_env import (
     MASK64,
     SNAP_NAMES,
     STATS_CTRL,
+    SYMBOL,
     FeedCfg,
     NetCfg,
     Snap,
@@ -52,6 +61,8 @@ from common.csr_env import (
 from common.runner import run_cocotb
 from model import mold
 from model.csr import OKAY
+from model.itch import Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
+from model.itch import expect as itch_expect
 from model.mold import ACCEPTED, HDR_LEN, MAX_MSG, SEQ_MOD, FeedConfig, FeedState, MoldResult, MoldStatus
 from model.net import (
     RxConfig,
@@ -72,6 +83,11 @@ STAGE_A_BEAT = 4  # eth_ip_udp_rx samples cfg_* (except rx_en) with input beat 4
 N_RANDOM = 2000  # frames of tc_rx_csr_random (audit/10 S6); do not lower
 N_FEED = 2000  # frames of tc_feed_random (audit/11 §2.9); do not lower
 PKT_LATENCY = 3  # moldudp64_rx: input tlast -> m_pkt_valid (11 §2.5)
+ITCH_LATENCY = 2  # itch_decoder: message / packet event -> result, event / forwarded event (12 §2.4)
+N_CLASS = len(ItchClass)
+EV_PORTS = ("order_ref", "new_ref", "shares", "price", "match", "side", "stock", "attribution", "printable",
+            "cross_type")  # fmt: skip
+FWD_PORTS = ("status", "seq", "count", "gap", "msgs", "dup_msgs", "oversize", "synced_now")
 
 # Hand-written: DROP_<reason>.LO at 0x0420 + 8 * (reason - 1), and the two totals.
 RX_PKTS_LO, RX_BYTES_LO = 0x0410, 0x0418
@@ -146,6 +162,7 @@ class MoldPkt:
     cfg: FeedConfig  # FEED cfg_* at the first beat
     before: FeedState
     want: MoldResult
+    itch: ItchConfig  # ITCH_CTRL at the first beat (moldudp64_rx's per-packet context)
     msgs: deque = field(default_factory=deque)  # messages still expected
     tlast: int = -1  # cycle of the input tlast
     resync_waited: bool = False
@@ -180,6 +197,13 @@ class System:
         self.resyncs: list[tuple[int, bool, str]] = []  # (net edge, learn, where: first/waited/between)
         self.resync_applied: list[int] = []  # net edge of the cycle in which each resync is applied
         self.feed_cfg_changed_in_pkt = 0
+        # itch_decoder chain
+        self.bm = Bitmap()  # the decoder's bitmap: writes as its command port takes them
+        self.itch_q: deque[tuple[int, Event | None, Result, int, int, str]] = deque()  # (cycle, ...)
+        self.fwd_q: deque[tuple[int, dict[str, int]]] = deque()
+        self.itch_results: list[tuple[str, Result]] = []  # every result, with its packet's name
+        self.itch_events: list[tuple[str, dict[str, int]]] = []  # every event as the DUT gave it
+        self.sym_writes: list[int] = []  # cycles in which the decoder took a bitmap write
         cocotb.start_soon(self._monitor())
 
     async def send(self, frame: bytes, tuser: bool = False, gap: int = 0, name: str = "") -> Sent:
@@ -204,7 +228,8 @@ class System:
 
     async def finish(self, limit: int = 50) -> None:
         for _ in range(limit):
-            if not (self.stat_q or self.pay_q or self.in_flight or self.mold_q or self.cur or self.out_q):
+            if not (self.stat_q or self.pay_q or self.in_flight or self.mold_q or self.cur or self.out_q
+                    or self.itch_q or self.fwd_q):  # fmt: skip
                 return
             await RisingEdge(self.dut.net_clk)
         raise AssertionError(
@@ -218,6 +243,7 @@ class System:
             await ReadOnly()
             self.cycle += 1
             assert not r.net_rst.value, "net reset after start (the chain model does not follow resets)"
+            self._itch_out()
             if d.s_axis_rx_tvalid.value:  # this beat and the cfg_* now are sampled at the next edge
                 if self.in_flight is None:
                     self.in_flight, self.beat = self.queue.popleft(), 0
@@ -252,6 +278,7 @@ class System:
             self._mold_input()  # after the output checks: its timeline entries are for later cycles
             if d.m_axis_udp_tvalid.value:
                 self._payload_beat()
+            self._sym_port()  # after this cycle's lookups (_mold_msg): READ_FIRST
 
     def _stat(self) -> None:
         assert self.stat_q, "stat event with no frame outstanding"
@@ -298,7 +325,8 @@ class System:
             self.cur_cfg = read_feed_cfg(r)
             cfg = to_mold(self.cur_cfg)
             want, self._after = mold.expect(s.want.payload, s.want.aborted, s.want.meta.filter_idx, cfg, self.state)
-            self.cur = MoldPkt(s, int(d.m_udp_sof_ts.value), cfg, self.state, want, deque(want.msgs))
+            itch = ItchConfig(self.cur_cfg.class_en, self.cur_cfg.class_filter)
+            self.cur = MoldPkt(s, int(d.m_udp_sof_ts.value), cfg, self.state, want, itch, deque(want.msgs))
             self.out_q.append(self.cur)
         elif self.cur is not None:
             if resync:
@@ -342,6 +370,10 @@ class System:
         assert n == len(data) and vec[:n] == data, f"{name}: seq {seq}: {vec[:n].hex()}, model {data.hex()}"
         assert not any(vec[n:]), f"{name}: seq {seq}: bytes after the length are not 0"
         assert int(d.m_msg_sof_ts.value) == p.ts, f"{name}: seq {seq}: m_msg_sof_ts is not its packet's"
+        ctx = int(d.m_msg_ctx.value)
+        assert ctx == p.itch.class_filter << N_CLASS | p.itch.class_en, f"{name}: seq {seq}: m_msg_ctx {ctx:#x}"
+        ev, res = itch_expect(data, p.itch, self.bm)  # the lookup in this cycle: before its write
+        self.itch_q.append((self.cycle, ev, res, seq, p.ts, name))
 
     def _mold_pkt(self) -> None:
         d = self.dut
@@ -363,6 +395,51 @@ class System:
         if w.status in ACCEPTED:
             self.accepted_msgs += w.msgs
         self.mold_done.append(p)
+        self.fwd_q.append((self.cycle, {k: int(getattr(d, f"m_pkt_{k}").value) for k in FWD_PORTS}))
+
+    # ---- itch_decoder: the chain model
+    def _itch_out(self) -> None:
+        """Results, events and forwarded packet events due in this cycle (exact latency)."""
+        d = self.dut
+        if d.m_res_valid.value:
+            assert self.itch_q, f"cycle {self.cycle}: ITCH result with no message outstanding"
+            cyc, ev, res, seq, ts, name = self.itch_q.popleft()
+            assert self.cycle - cyc == ITCH_LATENCY, f"{name}: seq {seq}: result {self.cycle - cyc} cycles after the message"
+            got = Result(ItchClass(int(d.m_res_class.value)), Outcome(int(d.m_res_outcome.value)))
+            assert got == res, f"{name}: seq {seq}: result {got}, model {res}"
+            assert bool(d.m_ev_valid.value) == (ev is not None), f"{name}: seq {seq}: m_ev_valid"
+            if ev is not None:
+                event = {k: int(getattr(d, f"m_ev_{k}").value) for k in (*EV_PORTS, "class", "type", "len", "seq",
+                                                                          "sof_ts", "locate", "tracking", "ts", "raw")}  # fmt: skip
+                want = {k: getattr(ev, k) for k in EV_PORTS} | {
+                    "class": ev.cls.value, "type": ev.type, "len": ev.length, "seq": seq, "sof_ts": ts,
+                    "locate": ev.locate, "tracking": ev.tracking, "ts": ev.timestamp,
+                    "raw": int.from_bytes(ev.raw.ljust(MAX_MSG, b"\0"), "little"),
+                }  # fmt: skip
+                diff = {k: (event[k], want[k]) for k in want if event[k] != want[k]}
+                assert not diff, f"{name}: seq {seq}: event (DUT, model) differ: {diff}"
+                self.itch_events.append((name, event))
+            self.itch_results.append((name, got))
+        else:
+            assert not d.m_ev_valid.value, f"cycle {self.cycle}: m_ev_valid without m_res_valid"
+            assert not self.itch_q or self.cycle - self.itch_q[0][0] < ITCH_LATENCY, (
+                f"{self.itch_q[0][5]}: seq {self.itch_q[0][3]}: ITCH result missing")
+        if d.m_fwd_pkt_valid.value:
+            assert self.fwd_q, f"cycle {self.cycle}: forwarded packet event with none outstanding"
+            cyc, want = self.fwd_q.popleft()
+            assert self.cycle - cyc == ITCH_LATENCY, f"forwarded packet event {self.cycle - cyc} cycles late"
+            got = {k: int(getattr(d, f"m_fwd_pkt_{k}").value) for k in FWD_PORTS}
+            assert got == want, f"forwarded packet event {got}, moldudp64_rx's {want}"
+        else:
+            assert not self.fwd_q or self.cycle - self.fwd_q[0][0] < ITCH_LATENCY, "forwarded packet event missing"
+
+    def _sym_port(self) -> None:
+        """A bitmap write the decoder takes in this cycle: the model copy changes after the cycle's
+        lookups."""
+        u = self.dut.u_itch
+        if u.sym_req_valid.value and u.sym_req_ready.value and u.sym_req_wr.value:
+            self.bm.write(int(u.sym_req_addr.value), int(u.sym_req_wdata.value), int(u.sym_req_wstrb.value))
+            self.sym_writes.append(self.cycle)
 
 
 async def start(dut) -> tuple[Wrap, System]:
@@ -417,10 +494,24 @@ async def configure_feed(w: Wrap, cfg: FeedCfg, resync: bool = False) -> None:
 
 
 async def snapshot_checked(w: Wrap) -> list[int]:
-    """Software protocol (read STATS_SEQ, request, wait, read), checked against the model."""
+    """Software protocol (read STATS_SEQ, request, wait, read), checked against the model and the
+    ITCH accounting identities."""
     seq, got = await w.snap.snapshot()
     await w.snap.check(seq, got)
+    check_itch_identities(got)
     return got
+
+
+def check_itch_identities(values: list[int]) -> None:
+    """Both ITCH identities hold in every snapshot (all counters start at 0 with the reset, so a
+    snapshot holds them absolutely, and every pair of snapshots holds them for the difference):
+    the ITCH_<class> counters sum to MOLD_MSGS (the same committed messages), and the outcome
+    counters sum to the class counters (one class and one outcome per result)."""
+    v = named(values)
+    classes = sum(v[f"ITCH_{c.name}"] for c in ItchClass) & MASK64
+    outcomes = sum(v[f"ITCH_{o.name}"] for o in Outcome) & MASK64
+    assert classes == v["MOLD_MSGS"], f"sum of ITCH_<class> {classes}, MOLD_MSGS {v['MOLD_MSGS']}"
+    assert outcomes == classes, f"ITCH_OUT + FILTERED + MASKED {outcomes}, sum of ITCH_<class> {classes}"
 
 
 def named(values: list[int]) -> dict[str, int]:
@@ -431,6 +522,37 @@ def named(values: list[int]) -> dict[str, int]:
 def accounted(v: dict[str, int]) -> int:
     """MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS (mod 2^64)."""
     return (v["MOLD_MSGS"] + v["MOLD_OVERSIZE_MSGS"] + v["MOLD_GAP_MSGS"]) & MASK64
+
+
+class FeedIdentity:
+    """The MoldUDP64 accounting identity between consecutive snapshots (audit/11 S1 notes, rule 3):
+    EXPECTED_SEQ moves by MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS. Checked when the feed is
+    in sync at both snapshots and no resync was applied from FEED_DELAY + 2 net edges before the
+    first acceptance edge on (a waiting one counts at its packet's tlast), so E moved only by
+    accepted packets. It also catches a feed state that is not aligned with the counters."""
+
+    def __init__(self, w: Wrap, sysm: System):
+        self.w, self.sysm = w, sysm
+        self.prev: tuple[int, dict[str, int]] | None = None
+        self.checked = 0
+
+    def check(self, seq: int, values: list[int]) -> None:
+        snap = self.w.snap
+        edge = snap.accepts[seq - 1]
+        v, prev = named(values), self.prev
+        self.prev = (edge, v)
+        if prev is None:
+            return
+        p_edge, p = prev
+        lo = snap.edge_index[p_edge] - FEED_DELAY - 2
+        if not (v["FEED_STATE"] & 1 and p["FEED_STATE"] & 1):
+            return
+        if any(lo <= snap.edge_index[t] and t <= edge for t in self.sysm.resync_applied):
+            return
+        moved = (v["EXPECTED_SEQ"] - p["EXPECTED_SEQ"]) & MASK64
+        counted = (accounted(v) - accounted(p)) & MASK64
+        assert moved == counted, f"snapshot {seq}: EXPECTED_SEQ moved {moved}, counters account for {counted}"
+        self.checked += 1
 
 
 # ---------------------------------------------------------------------------------------------
@@ -615,7 +737,9 @@ async def tc_rx_csr_random(dut):
                     assert await w.drv.write(STATS_CTRL, 1) == OKAY
                 await w.snap.quiet()
                 seq = await w.snap.seq()
-                await w.snap.check(seq, await w.snap.read_counters())
+                values = await w.snap.read_counters()
+                await w.snap.check(seq, values)
+                check_itch_identities(values)
         assert n_commit > 5
 
     await configure(w, configs[0])
@@ -674,7 +798,7 @@ async def tc_feed_random(dut):
         replace(FEED_ON, session=int.from_bytes(b"SESSION002", "big")),
         replace(FEED_ON, enable=0),
     ]
-    identity = {"prev": None, "checked": 0}
+    identity = FeedIdentity(w, sysm)
     # Variants come from a shuffled bag, refilled when empty: each of them (feed off included) is
     # committed once in every 10 FEED configurations, so status_DISABLED does not depend on the seed.
     bag: list[FeedCfg] = []
@@ -685,26 +809,6 @@ async def tc_feed_random(dut):
             rng.shuffle(bag)
         return bag.pop()
 
-    def check_identity(seq: int, values: list[int]) -> None:
-        """Against the previous snapshot: in sync at both and no resync applied from FEED_DELAY + 2
-        net edges before the first acceptance edge on (a waiting one counts at its packet's tlast),
-        so E moved only by accepted packets."""
-        edge = w.snap.accepts[seq - 1]
-        v, prev = named(values), identity["prev"]
-        identity["prev"] = (edge, v)
-        if prev is None:
-            return
-        p_edge, p = prev
-        lo = w.snap.edge_index[p_edge] - FEED_DELAY - 2
-        if not (v["FEED_STATE"] & 1 and p["FEED_STATE"] & 1):
-            return
-        if any(lo <= w.snap.edge_index[t] and t <= edge for t in sysm.resync_applied):
-            return
-        moved = (v["EXPECTED_SEQ"] - p["EXPECTED_SEQ"]) & MASK64
-        counted = (accounted(v) - accounted(p)) & MASK64
-        assert moved == counted, f"snapshot {seq}: EXPECTED_SEQ moved {moved}, counters account for {counted}"
-        identity["checked"] += 1
-
     async def snapshot() -> None:
         for _ in range(rng.randint(1, 3)):
             assert await w.drv.write(STATS_CTRL, 1) == OKAY
@@ -712,7 +816,8 @@ async def tc_feed_random(dut):
         seq = await w.snap.seq()
         values = await w.snap.read_counters()
         await w.snap.check(seq, values)
-        check_identity(seq, values)
+        identity.check(seq, values)
+        check_itch_identities(values)
         if sysm.cur is not None or sysm.out_q:
             cov.hit("snapshot_while_traffic")
 
@@ -806,16 +911,207 @@ async def tc_feed_random(dut):
             cov.hit(f"resync_{where}")
     if sysm.feed_cfg_changed_in_pkt:
         cov.hit("feed_cfg_change_in_packet")
-    if identity["checked"] >= N_IDENTITY:
+    if identity.checked >= N_IDENTITY:
         cov.hit("identity_checked")
     dut._log.info(f"{len(sysm.done)} frames, {len(sysm.mold_done)} MoldUDP64 packets, "
                   f"{len(sysm.accepted_msgs)} accepted messages, {len(sysm.resyncs)} resyncs, "
-                  f"{len(w.snap.accepts)} snapshots, {identity['checked']} identity checks")  # fmt: skip
+                  f"{len(w.snap.accepts)} snapshots, {identity.checked} identity checks")  # fmt: skip
+    cov.check(Path.cwd())  # the run directory
+
+
+def bit(c: ItchClass) -> int:
+    return 1 << c.value
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_itch_bring_up(dut):
+    """02 §3.4 scenario 1, F4 part (audit/12 §2.10). The feed with ITCH_CTRL: every class output,
+    ORDER and TRADE through the symbol bitmap. The day starts with two Stock Directory messages and
+    a System Event; software learns stock -> locate from the R events (their raw vector, as the
+    host does) and subscribes to AAPL only. Then mixed types: AAPL orders out, MSFT orders and
+    trades filtered, a MSFT halt (ADMIN, not filtered), an ITCH 4.1 'T' (UNKNOWN), a 35-byte A
+    (MALFORMED, not filtered), an order with locate 0 (never filtered); a packet with an FCS error
+    (ABORT: its result is not counted); then ADMIN masked by a FEED commit. Every result and
+    every counter is hand-counted, with both identities."""
+    w, sysm = await start(dut)
+    C, O = ItchClass, Outcome
+    await configure(w, NET_FEED)
+    cfg = replace(FEED_ON, class_en=(1 << N_CLASS) - 1, class_filter=bit(C.ORDER) | bit(C.TRADE))
+    await configure_feed(w, cfg)
+
+    async def packet(seq: int, msgs: list[bytes], tuser: bool = False) -> None:
+        await sysm.send(feed_frame(mold.pack(SESSION, seq, msgs), 0), tuser, gap=2)
+        await sysm.finish()
+
+    def add(locate: int, ref: int, stock: str) -> bytes:
+        return encode("A", locate=locate, tracking=1, timestamp=34_200_000_000_000 + ref, order_ref=ref, side="B",
+                      shares=100, stock=stock.ljust(8), price=1_850_000)  # fmt: skip
+
+    await packet(100, [
+        encode("R", locate=5, tracking=1, timestamp=1, stock="AAPL    ", market_category="Q", round_lot_size=100),
+        encode("R", locate=70, tracking=1, timestamp=2, stock="MSFT    ", market_category="Q", round_lot_size=100),
+        encode("S", timestamp=3, event_code="O"),
+    ])  # fmt: skip
+    directory = {}
+    for _, ev in sysm.itch_events:
+        raw = ev["raw"].to_bytes(MAX_MSG, "little")
+        if raw[0] == ord("R"):
+            directory[raw[11:19].decode().strip()] = ev["locate"]
+    assert directory == {"AAPL": 5, "MSFT": 70}, f"stock directory learned from the events: {directory}"
+    aapl = directory["AAPL"]
+    word, mask = aapl >> 5, 1 << (aapl & 31)
+    assert await w.drv.write(SYMBOL.addr + 4 * word, mask) == OKAY  # waits if the sweep still runs
+    assert await w.drv.read(SYMBOL.addr + 4 * word) == (mask, OKAY)
+
+    await packet(103, [
+        add(5, 1, "AAPL"),
+        add(70, 2, "MSFT"),
+        encode("E", locate=5, tracking=1, timestamp=10, order_ref=1, executed_shares=40, match=77),
+        encode("P", locate=70, tracking=1, timestamp=11, side="B", shares=10, stock="MSFT    ", price=4_100_100,
+               match=78),
+        encode("H", locate=70, tracking=1, timestamp=12, stock="MSFT    ", trading_state="H", reason="T1  "),
+        b"T" + (70).to_bytes(2, "big") + bytes(9),  # ITCH 4.1 seconds message
+        add(5, 3, "AAPL")[:35],  # one byte short
+        add(0, 4, "ZZZZ"),
+    ])  # fmt: skip
+    await packet(111, [add(5, 5, "AAPL")], tuser=True)  # FCS error: ABORT
+    await configure_feed(w, replace(cfg, class_en=cfg.class_en & ~bit(C.ADMIN)))
+    await packet(111, [encode("S", timestamp=20, event_code="C"), add(5, 6, "AAPL")])
+
+    statuses = [S(p.want.status) for p in sysm.mold_done]
+    assert statuses == [S.OK, S.OK, S.ABORT, S.OK], statuses
+    want = [
+        (C.ADMIN, O.OUT), (C.ADMIN, O.OUT), (C.ADMIN, O.OUT),
+        (C.ORDER, O.OUT), (C.ORDER, O.FILTERED), (C.ORDER, O.OUT), (C.TRADE, O.FILTERED), (C.ADMIN, O.OUT),
+        (C.UNKNOWN, O.OUT), (C.MALFORMED, O.OUT), (C.ORDER, O.OUT),
+        (C.ORDER, O.OUT),  # the aborted packet's message: out, but not counted
+        (C.ADMIN, O.MASKED), (C.ORDER, O.OUT),
+    ]  # fmt: skip
+    assert [(r.cls, r.outcome) for _, r in sysm.itch_results] == want
+    v = named(await snapshot_checked(w))
+    hand = {"ORDER": 5, "TRADE": 1, "ADMIN": 5, "AUCTION": 0, "UNKNOWN": 1, "MALFORMED": 1,
+            "OUT": 10, "FILTERED": 2, "MASKED": 1}  # fmt: skip
+    for n, k in hand.items():
+        assert v[f"ITCH_{n}"] == k, f"ITCH_{n} = {v[f'ITCH_{n}']}, hand-counted {k}"
+    assert (v["MOLD_MSGS"], v["MOLD_OK"], v["MOLD_ABORT"]) == (13, 3, 1)
+    assert sum(hand[c.name] for c in C) == 13 == hand["OUT"] + hand["FILTERED"] + hand["MASKED"]
+    w.feed.check_done()
+
+
+ITCH_BINS = [
+    *(f"itch_{c.name}_{o.name}" for c in ItchClass for o in Outcome),
+    "sym_write_in_traffic", "sym_read", "itch_cfg_commit", "resync", "snapshot_while_traffic", "identities",
+    "feed_identity_checked",
+]  # fmt: skip
+N_ITCH = 2000  # frames of tc_itch_random (audit/12 §2.10); do not lower
+N_ITCH_SNAPSHOTS = 5  # snapshots tc_itch_random must take at least (identities in each)
+# ITCH_CTRL (class_en, class_filter) of the FEED commits, from a shuffled bag like tc_feed_random:
+# all classes out and filtered, out unfiltered, all masked, half masked / half filtered.
+ITCH_VARIANTS = [(0x3F, 0x3F), (0x3F, 0x00), (0x00, 0x00), (0x15, 0x3F), (0x2A, 0x3F), (0x3F, 0x15), (0x3F, 0x2A)]
+
+
+@cocotb.test(timeout_time=3000, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_itch_random(dut):
+    """N_ITCH frames of random_feed packets whose messages are real ITCH 5.0 from the model's
+    generator (every category: 23 types, short and long ones, unknown types, edge locates, field
+    extremes), while software commits FEED configurations with new ITCH_CTRL values, writes the
+    symbol bitmap (random words and byte strobes, the generator's subscribed locates among them)
+    and reads it back, resyncs and takes snapshots. The chain model checks every message, result,
+    event and packet event (F2 -> F3 -> F4); every snapshot is exact and holds both ITCH
+    identities, and consecutive ones the MoldUDP64 identity (FeedIdentity); coverage gate: every
+    class with every outcome."""
+    w, sysm = await start(dut)
+    rng = random.Random(random.getrandbits(32))
+    cov = Coverage("rx_csr.tc_itch_random", ITCH_BINS)
+    r = dut.u_wrap
+    sw_bm = Bitmap()  # software's copy of the bitmap (the generator draws subscribed locates from it)
+    bag: list[tuple[int, int]] = []
+    current = {"itch": ITCH_VARIANTS[0]}
+    snapshots = {"n": 0}
+    identity = FeedIdentity(w, sysm)
+
+    def feed(itch: tuple[int, int], **kw) -> FeedCfg:
+        return replace(FEED_ON, class_en=itch[0], class_filter=itch[1], **kw)
+
+    async def snapshot() -> None:
+        assert await w.drv.write(STATS_CTRL, 1) == OKAY
+        await w.snap.quiet()
+        seq = await w.snap.seq()
+        values = await w.snap.read_counters()
+        await w.snap.check(seq, values)
+        identity.check(seq, values)
+        check_itch_identities(values)
+        snapshots["n"] += 1
+        if sysm.cur is not None or sysm.out_q or sysm.itch_q:
+            cov.hit("snapshot_while_traffic")
+
+    done = {"traffic": False}
+
+    async def software():
+        while not done["traffic"]:
+            for _ in range(rng.randint(100, 800)):
+                await RisingEdge(r.host_clk)
+            x = rng.random()
+            if x < 0.25:
+                await snapshot()
+            elif x < 0.5:
+                if not bag:
+                    bag.extend(ITCH_VARIANTS)
+                    rng.shuffle(bag)
+                current["itch"] = bag.pop()
+                await configure_feed(w, feed(current["itch"]))
+                cov.hit("itch_cfg_commit")
+            elif x < 0.8:
+                for _ in range(rng.randint(1, 4)):
+                    word = rng.choice([0, 1, SYMBOL.entries - 1, rng.randrange(SYMBOL.entries)])
+                    data, strb = rng.getrandbits(32), rng.choice([0xF, 0xF, rng.getrandbits(4)])
+                    assert await w.drv.write(SYMBOL.addr + 4 * word, data, strb) == OKAY
+                    sw_bm.write(word, data, strb)
+                    if sysm.cur is not None or sysm.out_q:
+                        cov.hit("sym_write_in_traffic")
+            elif x < 0.95:
+                word = rng.randrange(SYMBOL.entries) if rng.random() < 0.5 else rng.choice([0, 1, 2047])
+                assert await w.drv.read(SYMBOL.addr + 4 * word) == (sw_bm.read(word), OKAY), f"SYMBOL word {word}"
+                cov.hit("sym_read")
+            else:
+                learn = rng.random() < 0.5
+                e = (sysm.state.expected + rng.randint(-30, 30)) % SEQ_MOD
+                await configure_feed(w, feed(current["itch"], resync_learn=int(learn), resync_seq=e), resync=True)
+                cov.hit("resync")
+
+    await configure(w, NET_FEED)
+    await configure_feed(w, feed(current["itch"]))
+    # Initial subscriptions (the first write waits for the sweep after reset): edge words and a few
+    # random ones, half of their bits set.
+    for word in [0, 1, SYMBOL.entries - 1, *(rng.randrange(SYMBOL.entries) for _ in range(5))]:
+        data = rng.getrandbits(32) & 0x5555_5555 | 0x2
+        assert await w.drv.write(SYMBOL.addr + 4 * word, data) == OKAY
+        sw_bm.write(word, data, 0xF)
+    task = cocotb.start_soon(software())
+    stream = itch_stream(rng, ItchConfig(*current["itch"]), sw_bm)
+    pkts = mold.random_feed(rng, N_ITCH, FeedConfig(True, True, SESSION, 0x03), msg_source=lambda: next(stream).msg)
+    for p in pkts:
+        await sysm.send(feed_frame(p.payload, p.filter_idx), p.abort, gap=rng.choice([0, 0, 1, 3]))
+    await sysm.finish()
+    done["traffic"] = True
+    await task
+    await w.feed.wait_idle()
+    w.feed.check_done()
+    await snapshot()
+    for _, res in sysm.itch_results:
+        cov.hit(f"itch_{res.cls.name}_{res.outcome.name}")
+    if snapshots["n"] >= N_ITCH_SNAPSHOTS:
+        cov.hit("identities")
+    if identity.checked >= N_IDENTITY:
+        cov.hit("feed_identity_checked")
+    dut._log.info(f"{len(sysm.done)} frames, {len(sysm.mold_done)} MoldUDP64 packets, {len(sysm.itch_results)} "
+                  f"ITCH results, {len(sysm.itch_events)} events, {len(sysm.sym_writes)} bitmap writes, "
+                  f"{snapshots['n']} snapshots, {identity.checked} feed identity checks")  # fmt: skip
     cov.check(Path.cwd())  # the run directory
 
 
 # The long tests run as their own pytest entries.
-LONG_TESTS = ("tc_rx_csr_random", "tc_feed_random")
+LONG_TESTS = ("tc_rx_csr_random", "tc_feed_random", "tc_itch_random")
 
 
 def directed_tests() -> list[str]:
@@ -827,7 +1123,8 @@ def directed_tests() -> list[str]:
     "group, jit, ratio",
     [("directed", 0, "net2host"), ("directed", 0, "host2net"),
      ("tc_rx_csr_random", 0, "net2host"), ("tc_rx_csr_random", 1, "jitter"),
-     ("tc_feed_random", 0, "net2host"), ("tc_feed_random", 1, "jitter")],
+     ("tc_feed_random", 0, "net2host"), ("tc_feed_random", 1, "jitter"),
+     ("tc_itch_random", 0, "net2host"), ("tc_itch_random", 1, "jitter")],
 )  # fmt: skip
 def test_rx_csr(group, jit, ratio):
     assert ratio in PROFILES
