@@ -3,7 +3,7 @@
 // bus decode, read mux and counter paths are register to register and inside the timing gate.
 // Every output is a port, so synthesis keeps (and the gate checks) all of the logic.
 // Not used in simulation.
-// Clock domain : host_clk (s_axil_*), net_clk (cfg_*, stat_*, mpkt_*, feed_*)
+// Clock domain : host_clk (s_axil_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*)
 module hft_csr_wrap_ooc
   import hft_pkg::*;
 #(
@@ -54,15 +54,30 @@ module hft_csr_wrap_ooc
     output logic                 cfg_resync_learn,
     output logic [         63:0] cfg_resync_seq,
 
-    input logic                mpkt_valid,
-    input mold_status_e        mpkt_status,
-    input logic         [63:0] mpkt_gap,
-    input logic         [15:0] mpkt_msgs,
-    input logic         [15:0] mpkt_dup_msgs,
-    input logic         [15:0] mpkt_oversize,
-    input logic         [63:0] feed_expected_seq,
-    input logic                feed_synced,
-    input logic                feed_eos
+    output logic [ITCH_N_CLASS-1:0] cfg_class_en,
+    output logic [ITCH_N_CLASS-1:0] cfg_class_filter,
+
+    input logic                 mpkt_valid,
+    input mold_status_e         mpkt_status,
+    input logic          [63:0] mpkt_gap,
+    input logic          [15:0] mpkt_msgs,
+    input logic          [15:0] mpkt_dup_msgs,
+    input logic          [15:0] mpkt_oversize,
+    input logic                 mres_valid,
+    input itch_class_e          mres_class,
+    input itch_outcome_e        mres_outcome,
+    input logic          [63:0] feed_expected_seq,
+    input logic                 feed_synced,
+    input logic                 feed_eos,
+
+    output logic        sym_req_valid,
+    input  logic        sym_req_ready,
+    output logic        sym_req_wr,
+    output logic [10:0] sym_req_addr,
+    output logic [31:0] sym_req_wdata,
+    output logic [ 3:0] sym_req_wstrb,
+    input  logic        sym_rsp_valid,
+    input  logic [31:0] sym_rsp_rdata
 );
   logic host_rst_q, awvalid_q, wvalid_q, bready_q, arvalid_q, rready_q;
   logic [15:0] awaddr_q, araddr_q;
@@ -76,6 +91,10 @@ module hft_csr_wrap_ooc
   mold_status_e mpkt_status_q;
   logic [63:0] mpkt_gap_q, feed_expected_seq_q;
   logic [15:0] mpkt_msgs_q, mpkt_dup_msgs_q, mpkt_oversize_q;
+  logic mres_valid_q, sym_req_ready_q, sym_rsp_valid_q;
+  itch_class_e          mres_class_q;
+  itch_outcome_e        mres_outcome_q;
+  logic          [31:0] sym_rsp_rdata_q;
 
   always_ff @(posedge host_clk) begin
     host_rst_q <= host_rst;
@@ -106,6 +125,12 @@ module hft_csr_wrap_ooc
     feed_expected_seq_q <= feed_expected_seq;
     feed_synced_q       <= feed_synced;
     feed_eos_q          <= feed_eos;
+    mres_valid_q        <= mres_valid;
+    mres_class_q        <= mres_class;
+    mres_outcome_q      <= mres_outcome;
+    sym_req_ready_q     <= sym_req_ready;
+    sym_rsp_valid_q     <= sym_rsp_valid;
+    sym_rsp_rdata_q     <= sym_rsp_rdata;
   end
 
   hft_csr_wrap u_wrap (
@@ -148,14 +173,27 @@ module hft_csr_wrap_ooc
       .cfg_resync       (cfg_resync),
       .cfg_resync_learn (cfg_resync_learn),
       .cfg_resync_seq   (cfg_resync_seq),
+      .cfg_class_en     (cfg_class_en),
+      .cfg_class_filter (cfg_class_filter),
       .mpkt_valid       (mpkt_valid_q),
       .mpkt_status      (mpkt_status_q),
       .mpkt_gap         (mpkt_gap_q),
       .mpkt_msgs        (mpkt_msgs_q),
       .mpkt_dup_msgs    (mpkt_dup_msgs_q),
       .mpkt_oversize    (mpkt_oversize_q),
+      .mres_valid       (mres_valid_q),
+      .mres_class       (mres_class_q),
+      .mres_outcome     (mres_outcome_q),
       .feed_expected_seq(feed_expected_seq_q),
       .feed_synced      (feed_synced_q),
-      .feed_eos         (feed_eos_q)
+      .feed_eos         (feed_eos_q),
+      .sym_req_valid    (sym_req_valid),
+      .sym_req_ready    (sym_req_ready_q),
+      .sym_req_wr       (sym_req_wr),
+      .sym_req_addr     (sym_req_addr),
+      .sym_req_wdata    (sym_req_wdata),
+      .sym_req_wstrb    (sym_req_wstrb),
+      .sym_rsp_valid    (sym_rsp_valid_q),
+      .sym_rsp_rdata    (sym_rsp_rdata_q)
   );
 endmodule

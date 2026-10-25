@@ -9,6 +9,10 @@ effect for a rejected access.
 
 Values the hardware drives (hw=w fields, counters) are not known to the model: the test sets
 them in CsrModel.hw before it checks a read.
+
+Memories (external `mem`, e.g. SYMBOL) are word arrays with byte strobes, 0 at reset: the model
+keeps their contents like a register's storage (the test of the generated block answers them with
+a RAM; behind hft_csr_wrap the bitmap is cleared after reset).
 """
 
 from dataclasses import dataclass, field
@@ -16,7 +20,7 @@ from functools import cache
 from pathlib import Path
 
 from systemrdl import RDLCompiler
-from systemrdl.node import FieldNode, RegNode
+from systemrdl.node import FieldNode, MemNode, RegNode
 
 RDL = Path(__file__).resolve().parents[2] / "rdl" / "hft_csr.rdl"
 OKAY, SLVERR = 0, 2  # AXI4-Lite xRESP
@@ -65,6 +69,27 @@ class Reg:
         return self.path.split(".")[0]
 
 
+@dataclass(frozen=True)
+class Mem:
+    path: str  # e.g. "SYMBOL"
+    addr: int
+    entries: int
+    width: int
+    sw_read: bool
+    sw_write: bool
+    desc: str | None
+
+    @property
+    def size(self) -> int:
+        return self.entries * self.width // 8
+
+    def word(self, address: int) -> int | None:
+        """Word index of a byte address inside the memory, else None."""
+        if self.addr <= address < self.addr + self.size:
+            return (address - self.addr) // (self.width // 8)
+        return None
+
+
 def _field(node: FieldNode) -> Field:
     hw_write = node.is_hw_writable or any(node.get_property(p) for p in ("counter", "hwset", "hwclr"))
     reset = node.get_property("reset")
@@ -100,9 +125,39 @@ def load_map(rdl: Path = RDL) -> tuple[Reg, ...]:
     return tuple(sorted(regs, key=lambda r: r.addr))
 
 
+def load_mems(rdl: Path = RDL) -> tuple[Mem, ...]:
+    """Every memory of the RDL file, in address order."""
+    rdlc = RDLCompiler()
+    rdlc.compile_file(str(rdl))
+    top = rdlc.elaborate().top
+    mems = [
+        Mem(
+            path=node.get_path().split(".", 1)[1],
+            addr=node.absolute_address,
+            entries=node.get_property("mementries"),
+            width=node.get_property("memwidth"),
+            sw_read=node.is_sw_readable,
+            sw_write=node.is_sw_writable,
+            desc=node.get_property("desc"),
+        )
+        for node in top.descendants()
+        if isinstance(node, MemNode)
+    ]
+    return tuple(sorted(mems, key=lambda m: m.addr))
+
+
 @cache
 def csr_map() -> tuple[Reg, ...]:
     return load_map()
+
+
+@cache
+def csr_mems() -> tuple[Mem, ...]:
+    return load_mems()
+
+
+def mem(path: str) -> Mem:
+    return {m.path: m for m in csr_mems()}[path]
 
 
 def regs_by_path() -> dict[str, Reg]:
@@ -131,18 +186,36 @@ class CsrModel:
 
     regs: tuple[Reg, ...] = field(default_factory=csr_map)
     hw: dict[str, int] = field(default_factory=dict)
+    mems: tuple[Mem, ...] = field(default_factory=csr_mems)
 
     def __post_init__(self) -> None:
         self.by_addr = {r.addr: r for r in self.regs}
         self.state = {
             (r.path, f.name): f.reset or 0 for r in self.regs for f in r.fields if f.storage
         }  # fmt: skip
+        self.mem_state: dict[tuple[str, int], int] = {}  # (memory path, word) -> value; missing: 0
+
+    def mem_at(self, address: int) -> tuple[Mem, int] | None:
+        for m in self.mems:
+            w = m.word(address)
+            if w is not None:
+                return m, w
+        return None
 
     def reset(self) -> None:
         self.__post_init__()
 
     def write(self, address: int, data: int, strb: int = 0xF) -> tuple[int, set[str]]:
         """BRESP and the singlepulse fields that fire ("<reg path>.<field name>")."""
+        hit = self.mem_at(address)
+        if hit is not None:
+            m, w = hit
+            if not m.sw_write:
+                return SLVERR, set()
+            bits = wstrb_mask(strb)
+            old = self.mem_state.get((m.path, w), 0)
+            self.mem_state[m.path, w] = (old & ~bits) | (data & bits)
+            return OKAY, set()
         reg = self.by_addr.get(address & ~3)
         if reg is None or not reg.writable:
             return SLVERR, set()
@@ -162,6 +235,10 @@ class CsrModel:
 
     def read(self, address: int) -> tuple[int, int]:
         """(RDATA, RRESP). A rejected read returns 0 as data."""
+        hit = self.mem_at(address)
+        if hit is not None:
+            m, w = hit
+            return (self.mem_state.get((m.path, w), 0), OKAY) if m.sw_read else (0, SLVERR)
         reg = self.by_addr.get(address & ~3)
         if reg is None or not reg.readable:
             return 0, SLVERR

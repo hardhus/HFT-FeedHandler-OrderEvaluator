@@ -28,9 +28,9 @@ addrmap hft_csr {
         reg {
             name = "Register map version";
             field {
-                desc = "Major.minor of this map: 0x0005_0001 is the F5 map with the F3 FEED block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
+                desc = "Major.minor of this map: 0x0005_0002 is the F5 map with the F3 FEED block and the F4 ITCH block and SYMBOL bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
                 sw = r; hw = na;
-            } version[31:0] = 32'h0005_0001;
+            } version[31:0] = 32'h0005_0002;
         } VERSION @ 0x4;
 
         reg {
@@ -282,4 +282,39 @@ addrmap hft_csr {
         counter64 DROP_FILTER    @ 0x58;
         counter64 DROP_LEN       @ 0x60;
     } STATS @ 0x0400;
+
+    regfile {
+        name = "ITCH 5.0 decoder";
+        desc = "itch_decoder configuration and counters. ITCH_CTRL is a shadow that FEED_COMMIT carries with the FEED block (one atomic commit; moldudp64_rx takes it at the first beat of each packet and the decoder applies it to every message of that packet). The ITCH_* counters (net clock domain, 64 bit, wrap; cleared only by reset) count committed messages only: those of OK, HEARTBEAT and EOS packets, like MOLD_MSGS. They are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS and MOLD_* counters. ITCH_<class> is at 0x0640 + 8 * class, class = itch_class_e in hft_pkg.sv. Between two snapshots: the sum of ITCH_<class> moves by MOLD_MSGS, and ITCH_OUT + ITCH_FILTERED + ITCH_MASKED by the sum of ITCH_<class>.";
+
+        reg {
+            name = "ITCH control";
+            field {
+                desc = "Bit c: messages of class c (itch_class_e) are output; 0 = counted as MASKED. 0 after reset: no message is output until software has committed a configuration.";
+                sw = rw; hw = r;
+            } class_en[5:0] = 6'h0;
+            field {
+                desc = "Bit c: messages of class c go through the SYMBOL bitmap; a message whose stock locate is not 0 and whose bitmap bit is 0 is counted as FILTERED. Locate 0 (market-wide messages) and messages shorter than the 11-byte header always pass.";
+                sw = rw; hw = r;
+            } class_filter[13:8] = 6'h0;
+        } ITCH_CTRL @ 0x00;
+
+        counter64 ITCH_ORDER     @ 0x40;  // messages per class (itch_class_e)
+        counter64 ITCH_TRADE     @ 0x48;
+        counter64 ITCH_ADMIN     @ 0x50;
+        counter64 ITCH_AUCTION   @ 0x58;
+        counter64 ITCH_UNKNOWN   @ 0x60;
+        counter64 ITCH_MALFORMED @ 0x68;
+        counter64 ITCH_OUT       @ 0x70;  // messages output
+        counter64 ITCH_FILTERED  @ 0x78;  // dropped by the SYMBOL bitmap
+        counter64 ITCH_MASKED    @ 0x80;  // dropped by ITCH_CTRL.class_en
+    } ITCH @ 0x0600;
+
+    external mem {
+        name = "Symbol bitmap";
+        desc = "Stock-locate subscription bitmap of itch_decoder: bit i of word w is stock locate 32 * w + i (1 = subscribed). Written only by software; the hardware never writes it. After a reset the hardware clears every word (2048 net clock cycles, about 13 us); an access in that time waits until the clearing is done, so the bitmap reads 0 after reset. A write's response (BRESP) comes once it is in effect: every message looked up after it sees the new value. Software keeps its own copy and rewrites all 2048 words after every reset (see the software contract after reset).";
+        mementries = 2048;
+        memwidth = 32;
+        sw = rw;
+    } SYMBOL @ 0x8000;
 };

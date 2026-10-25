@@ -15,14 +15,20 @@ configurations, in order; cfg_resync exactly in the landing cycle of a transfer 
 resync request, every request carried by exactly one transfer (requests that meet merge, none is
 lost, none appears from nowhere).
 
-Counters: a generator drives stat_* and mpkt_* on net_clk and moves feed_*; a monitor records the edge that samples each
-event. A snapshot taken on acceptance edge E must equal the sum of the events sampled before E,
-exactly (the event sampled on E belongs to the next snapshot), for the rx_stats and the mold_stats
-counters, and the feed state must be the one sampled FEED_DELAY = 2 net edges before E (it then
-belongs to the same packet events as the counters). The acceptance and landing edges are
-observed on the snapshot handshake inside the wrapper (grey box). The bus side is the generated block
-(tested in test_hft_csr.py); axil_props is bound to it here too. The harness (Wrap, Snap, NetCfg)
-is in common/csr_env.py, shared with the system test tb/system/test_rx_csr.py.
+Counters: a generator drives stat_*, mpkt_* and mres_* on net_clk and moves feed_*; a monitor
+records the edge that samples each event. A snapshot taken on acceptance edge E must equal the sum
+of the events sampled before E, exactly (the event sampled on E belongs to the next snapshot), for
+the rx_stats, mold_stats and itch_stats counters (ITCH: committed results only), and the feed state
+must be the one sampled FEED_DELAY = 4 net edges before E (it then belongs to the same packet
+events as the counters). The acceptance and landing edges are observed on the snapshot handshake
+inside the wrapper (grey box). The bus side is the generated block (tested in test_hft_csr.py);
+axil_props is bound to it here too. The harness (Wrap, Snap, Sym, NetCfg, FeedCfg) is in
+common/csr_env.py, shared with the system test tb/system/test_rx_csr.py.
+
+ITCH_CTRL is part of the FEED configuration (FeedCfg.class_en/class_filter), so every FEED test
+also checks that it moves with FEED_COMMIT, whole. SYMBOL: a model of itch_decoder's command port
+(csr_env.Sym) answers with random backpressure; every access must reach the port once, in order and
+unchanged, and its ack must come after the command was taken (BRESP = in effect).
 """
 
 import os
@@ -36,18 +42,22 @@ from cocotb.utils import get_sim_time
 from common.clocks import PROFILES, profile, start_clock
 from common.csr_env import (
     FEED_COMMIT,
+    ITCH_CTRL,
     MASK64,
     N_CNT,
     SNAP_NAMES,
     SCRATCH,
     STATS_CTRL,
+    SYMBOL,
     FeedCfg,
     NetCfg,
     Snap,
+    Sym,
     Wrap,
 )
 from common.runner import run_cocotb
-from model.csr import OKAY, CsrModel, addr
+from model.csr import OKAY, CsrModel, addr, wstrb_mask
+from model.itch import ItchClass, Outcome
 from model.mold import MoldStatus
 from model.net import RxReason
 
@@ -85,7 +95,8 @@ async def start(dut) -> Wrap:
     dut.stat_reason.value = 0
     dut.stat_bytes.value = 0
     for name in ("mpkt_valid", "mpkt_status", "mpkt_gap", "mpkt_msgs", "mpkt_dup_msgs", "mpkt_oversize",
-                 "feed_expected_seq", "feed_synced", "feed_eos"):  # fmt: skip
+                 "mres_valid", "mres_class", "mres_outcome", "feed_expected_seq", "feed_synced", "feed_eos",
+                 "sym_req_ready", "sym_rsp_valid", "sym_rsp_rdata"):  # fmt: skip
         getattr(dut, name).value = 0
     dut.host_rst.value = 1
     dut.net_rst.value = 1
@@ -94,6 +105,7 @@ async def start(dut) -> Wrap:
     await reset(dut)
     w = Wrap(dut)
     w.snap = Snap(w)
+    w.sym = Sym(w)
     return w
 
 
@@ -263,7 +275,8 @@ async def tc_snapshot_latency(dut):
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_snapshot_consistent(dut):
     """Random traffic (sparse to one event per cycle) and 40 snapshots: each equals, exactly, the
-    counters of one net cycle (every event sampled before the acceptance edge), all eleven."""
+    counters of one net cycle (every event sampled before the acceptance edge): rx_stats, mold_stats
+    and itch_stats (committed results only)."""
     w = await start(dut)
     for _ in range(40):
         w.snap.p_valid = w.rng.choice([0.05, 0.5, 1.0])
@@ -272,6 +285,8 @@ async def tc_snapshot_consistent(dut):
         seq, got = await w.snap.snapshot()
         await w.snap.check(seq, got)
     assert {r for _, r, _ in w.snap.events} == set(RxReason), "every counter moved"
+    results = {res for _, res, _ in w.snap.itch_events if res}
+    assert {c for c, _ in results} == set(ItchClass) and {o for _, o in results} == set(Outcome)
 
 
 @cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
@@ -289,14 +304,15 @@ async def tc_snapshot_boundary(dut):
 
 @cocotb.test(timeout_time=50, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_snapshot_feed_aligned(dut):
-    """Regression (audit/11 S8 notes): the feed state in a snapshot belongs to the same packet
-    events as the mold counters. Packet events as moldudp64_rx gives them: feed_* show a packet's
-    update 1 cycle before its mpkt_valid (OK with messages, a gap or oversize messages; E moves by
-    all of them). From a synced start E0 with all counters 0, every snapshot must satisfy the
-    accounting identity EXPECTED_SEQ - E0 = MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS
-    (mod 2^64). Snapshots are taken until one was accepted on each edge from 1 before to 2 after
-    the edge that samples a feed update (the window in which a snapshot without the delay took a
-    state one packet ahead of the counters)."""
+    """Regression (audit/11 S8 notes, audit/12 §2.7): the feed state in a snapshot belongs to
+    the same packet events as the mold counters. Packet events as itch_decoder forwards them:
+    feed_* show a packet's update 1 cycle before moldudp64_rx's packet event, which reaches mpkt_valid
+    2 cycles later (OK with messages, a gap or oversize messages; E moves by all of them). From a
+    synced start E0 with all counters 0, every snapshot must satisfy the accounting identity
+    EXPECTED_SEQ - E0 = MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS (mod 2^64). Snapshots are
+    taken until one was accepted on each edge from 1 before to FEED_DELAY after the edge that
+    samples a feed update (the window in which a shorter delay takes a state one packet ahead of
+    the counters)."""
     w = await start(dut)
     w.snap.drive = False
     idx = {n: i for i, n in enumerate(SNAP_NAMES)}
@@ -310,7 +326,7 @@ async def tc_snapshot_feed_aligned(dut):
     async def packets():
         e = e0
         while True:
-            for _ in range(w.rng.randint(3, 7)):  # updates at least 4 edges apart
+            for _ in range(w.rng.randint(3, 7)):  # updates at least 7 edges apart
                 await RisingEdge(dut.net_clk)
             msgs, over = w.rng.randint(0, 40), w.rng.choice([0, 0, 1, 3])
             gap = w.rng.choice([0, 0, 1, 1000, 1 << 40])
@@ -318,6 +334,8 @@ async def tc_snapshot_feed_aligned(dut):
             dut.feed_expected_seq.value = e
             await RisingEdge(dut.net_clk)
             updates.append(get_sim_time())
+            for _ in range(2):  # moldudp64_rx's packet event, then itch_decoder's 2 cycles
+                await RisingEdge(dut.net_clk)
             dut.mpkt_valid.value = 1
             dut.mpkt_status.value = int(MoldStatus.OK)
             dut.mpkt_gap.value = gap
@@ -333,18 +351,18 @@ async def tc_snapshot_feed_aligned(dut):
         await w.snap.check(seq, got)
         edge = w.snap.edge_index[w.snap.accepts[seq - 1]]
         for u in updates:
-            if -1 <= edge - w.snap.edge_index[u] <= 2:
+            if -1 <= edge - w.snap.edge_index[u] <= 4:
                 phases.add(edge - w.snap.edge_index[u])
         e = got[idx["FEED.EXPECTED_SEQ"]]
         moved = sum(got[idx[f"FEED.MOLD_{n}"]] for n in ("MSGS", "OVERSIZE_MSGS", "GAP_MSGS"))
         assert (e - e0) & MASK64 == moved & MASK64, (
             f"snapshot {seq}: EXPECTED_SEQ - E0 = {(e - e0) & MASK64}, counters account for {moved & MASK64}")
         assert got[idx["FEED.FEED_STATE"]] == 1, "synced"
-        if phases == {-1, 0, 1, 2}:
+        if phases == set(range(-1, 5)):
             break
         for _ in range(w.rng.randint(0, 3)):
             await RisingEdge(dut.net_clk)
-    assert phases == {-1, 0, 1, 2}, f"snapshot phases around a feed update: {sorted(phases)}"
+    assert phases == set(range(-1, 5)), f"snapshot phases around a feed update: {sorted(phases)}"
 
 
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
@@ -437,16 +455,17 @@ async def tc_hi_lo_read(dut):
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_feed_reset_defaults(dut):
-    """After reset: cfg_feed_en, cfg_session_check and cfg_resync = 0 on every net edge (the Feed
-    monitor checks it until the first transfer), FEED_STATUS.commit_busy = 0, and FEED writes
-    without a commit change nothing in the net domain."""
+    """After reset: cfg_feed_en, cfg_session_check, cfg_resync and cfg_class_en = 0 on every net
+    edge (the Feed monitor checks it until the first transfer), FEED_STATUS.commit_busy = 0, and
+    FEED writes (ITCH_CTRL included) without a commit change nothing in the net domain."""
     w = await start(dut)
     assert await w.feed.busy() == 0
-    await w.feed.write_cfg(replace(FeedCfg.random(w.rng), enable=1, session_check=1))
+    await w.feed.write_cfg(replace(FeedCfg.random(w.rng), enable=1, session_check=1, class_en=0x3F))
     for _ in range(50):
         await RisingEdge(dut.net_clk)
         await ReadOnly()
         assert dut.cfg_feed_en.value == 0, "feed_en reached moldudp64_rx without a commit"
+        assert dut.cfg_class_en.value == 0, "class_en reached the decoder without a commit"
     assert not w.feed.seen and not w.feed.expected
 
 
@@ -669,6 +688,244 @@ async def tc_feed_reset_during_commit(dut):
         await w.feed.commit()
         await w.feed.wait_idle()
         assert await w.feed.applied() == cfg
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_itch_ctrl_feed_commit(dut):
+    """ITCH_CTRL is a FEED shadow register: written alone it reads back but changes nothing at net;
+    FEED_COMMIT carries it together with the rest of the FEED block (the Feed monitor checks every
+    net edge that cfg_class_* belong to the same committed configuration as the other FEED cfg_*).
+    20 rounds that change only ITCH_CTRL, only the other FEED registers, or both."""
+    w = await start(dut)
+    cfg = FeedCfg.random(w.rng)
+    for k in range(20):
+        if k % 3 != 1:
+            cfg = replace(cfg, class_en=w.rng.getrandbits(6), class_filter=w.rng.getrandbits(6))
+        if k % 3 != 0:
+            cfg = replace(FeedCfg.random(w.rng), class_en=cfg.class_en, class_filter=cfg.class_filter)
+        before = await w.feed.applied() if k else None
+        await w.feed.write_cfg(cfg)
+        value = cfg.class_en | cfg.class_filter << 8
+        assert await w.drv.read(ITCH_CTRL) == (value, OKAY), "ITCH_CTRL readback"
+        for _ in range(30):
+            await RisingEdge(dut.net_clk)
+        if before is not None:
+            assert await w.feed.applied() == before, "a FEED write without a commit reached net"
+        await w.feed.commit()
+        await w.feed.wait_idle()
+        got = await w.feed.applied()
+        assert got == cfg and (got.class_en, got.class_filter) == (cfg.class_en, cfg.class_filter)
+    w.feed.check_done()
+
+
+def sym_addr(word: int) -> int:
+    return SYMBOL.addr + 4 * word
+
+
+async def sweep_free(w: Wrap) -> None:
+    """Nothing pending in the symbol path (grey box)."""
+    r = w.root
+    for _ in range(200):
+        await ReadOnly()
+        if not (r.sym_pending_q.value or r.sym_cmd_q.value or r.sym_rsp_pending_q.value):
+            if r.u_sym_req_cdc.src_ready.value:
+                await RisingEdge(r.host_clk)
+                return
+        await RisingEdge(r.host_clk)
+    raise AssertionError("the symbol path never became idle")
+
+
+@cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_read_write(dut):
+    """Every WSTRB on the first, the last and random bitmap words, read back; random backpressure
+    at the port; then SYMBOL accesses mixed with SCRATCH writes and ID reads in flight. Every access
+    reaches the port once, in order, with its word address, data and byte strobes; the port's
+    RAM ends as software wrote it."""
+    w = await start(dut)
+    sym = w.sym
+    sym.p_ready = 0.4
+    words = [0, SYMBOL.entries - 1] + [w.rng.randrange(SYMBOL.entries) for _ in range(6)]
+    want: dict[int, int] = {}
+    for strb in range(16):
+        for word in words:
+            data = w.rng.getrandbits(32)
+            assert await w.drv.write(sym_addr(word), data, strb) == OKAY
+            bits = wstrb_mask(strb)
+            want[word] = (want.get(word, 0) & ~bits) | (data & bits)
+        for word in words:
+            assert await w.drv.read(sym_addr(word)) == (want[word], OKAY), f"word {word}"
+    model = CsrModel()
+    for _ in range(100):
+        pend = []
+        for word in w.rng.sample(words, w.rng.randint(1, 4)):  # disjoint words: no write/read race
+            if w.rng.random() < 0.5:
+                data, strb = w.rng.getrandbits(32), w.rng.getrandbits(4)
+                bits = wstrb_mask(strb)
+                want[word] = (want.get(word, 0) & ~bits) | (data & bits)
+                pend.append((w.drv.write_nowait(sym_addr(word), data, strb), (0, OKAY)))
+            else:
+                pend.append((w.drv.read_nowait(sym_addr(word)), (want[word], OKAY)))
+            # A FEED write and an ID read in flight with it (disjoint registers: the order between
+            # the write and read channels is not defined).
+            d = w.rng.getrandbits(32)
+            pend.append((w.drv.write_nowait(SCRATCH, d), (0, OKAY)))
+            pend.append((w.drv.read_nowait(addr("GLOBAL.ID")), model.read(addr("GLOBAL.ID"))))
+        for q, exp in pend:
+            got = await q.wait()
+            assert got == exp if q.kind == "r" else got[1] == exp[1], f"{q.kind} {q.addr:#06x}: {got}"
+    await sweep_free(w)
+    sym.check_order()
+    assert {k: sym.ram.get(k, 0) for k in want} == want, "the port's RAM differs from what software wrote"
+    assert sym.waits > 0, "no backpressure at the port"
+    assert {c.wstrb for _, c in sym.cmds if c.wr} == set(range(16)), "every byte strobe value"
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_latency(dut):
+    """Handshakes free, port always ready: request -> request handshake acceptance exactly 2 host
+    edges; acceptance -> command at the port STAGES+2 net edges (+1 with jitter); response ->
+    response handshake acceptance 2 net edges; acceptance -> ack STAGES+1 host edges (+1 with
+    jitter). 20 accesses (writes and reads) at random phases."""
+    w = await start(dut)
+    sym = w.sym
+    host, to_net, rsp, back = set(), set(), set(), set()
+    for k in range(20):
+        word = w.rng.randrange(SYMBOL.entries)
+        if k % 2:
+            assert (await w.drv.read(sym_addr(word)))[1] == OKAY
+        else:
+            assert await w.drv.write(sym_addr(word), w.rng.getrandbits(32)) == OKAY
+        await sweep_free(w)
+        req, acc = sym.host_reqs[-1][0], sym.host_accepts[-1]
+        start_, rsp_t, rsp_acc, ack = sym.cmd_starts[-1], sym.rsps[-1], sym.rsp_accepts[-1], sym.acks[-1][0]
+        host.add(sum(req < t <= acc for t in w.host_edges))
+        to_net.add(sum(acc < t <= start_ for t in w.net_edges))
+        rsp.add(sum(rsp_t < t <= rsp_acc for t in w.net_edges))
+        back.add(sum(rsp_acc < t <= ack for t in w.host_edges))
+        for _ in range(w.rng.randint(0, 7)):
+            await RisingEdge(dut.host_clk)
+    sym.check_order()
+    assert len(sym.host_accepts) == len(sym.rsp_accepts) == 20
+    assert host == {2}, f"host edges request -> acceptance: {sorted(host)}"
+    assert rsp == {2}, f"net edges response -> acceptance: {sorted(rsp)}"
+    j = {0, 1} if jitter() else {0}
+    assert to_net <= {STAGES + 2 + d for d in j}, f"net edges acceptance -> command: {sorted(to_net)}"
+    assert back <= {STAGES + 1 + d for d in j}, f"host edges acceptance -> ack: {sorted(back)}"
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_bresp_after_effect(dut):
+    """BRESP means the write is in the bitmap: when a SYMBOL write's B arrives, the port has
+    already taken the command (its accepting edge is before the ack) and its RAM holds the new
+    word; a read right after returns it. 60 writes with random backpressure."""
+    w = await start(dut)
+    sym = w.sym
+    sym.p_ready = 0.3
+    want: dict[int, int] = {}
+    for _ in range(60):
+        word, data, strb = w.rng.randrange(SYMBOL.entries), w.rng.getrandbits(32), w.rng.choice([0xF, w.rng.getrandbits(4)])
+        bits = wstrb_mask(strb)
+        want[word] = (want.get(word, 0) & ~bits) | (data & bits)
+        n = len(sym.cmds)
+        assert await w.drv.write(sym_addr(word), data, strb) == OKAY
+        b_time = w.drv.hs_time["b"][-1]
+        assert len(sym.cmds) == n + 1, "B before the command reached the port"
+        assert sym.cmds[-1][0] < sym.acks[-1][0] <= b_time, "the ack came before the port took the write"
+        assert sym.ram.get(word, 0) == want[word], "B before the write was in the RAM"
+        assert await w.drv.read(sym_addr(word)) == (want[word], OKAY)
+    sym.check_order()
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_wait_sweep(dut):
+    """While itch_decoder is not ready (its 2048-cycle bitmap sweep after reset), a SYMBOL access
+    waits at the port and the bus with it: a SCRATCH write and read queued behind it get no
+    response either (one external access in flight). When ready rises, the SYMBOL read answers 0,
+    then the others, in order; the command did not change while it waited."""
+    w = await start(dut)
+    sym = w.sym
+    sym.hold = True
+    word = w.rng.randrange(SYMBOL.entries)
+    first = w.drv.read_nowait(sym_addr(word))
+    while not sym.host_reqs:  # regblock has taken it: everything after it waits
+        await RisingEdge(dut.host_clk)
+    behind = [w.drv.write_nowait(SCRATCH, 0x5A5A_1234), w.drv.read_nowait(SCRATCH)]
+    for _ in range(2048):
+        await RisingEdge(dut.net_clk)
+    assert first.result is None and all(q.result is None for q in behind), "an access finished during the hold"
+    assert sym.waits > 2000 and not sym.cmds
+    sym.hold = False
+    assert await first.wait() == (0, OKAY)
+    assert (await behind[0].wait())[1] == OKAY and await behind[1].wait() == (0x5A5A_1234, OKAY)
+    assert w.drv.hs_time["r"][0] < w.drv.hs_time["b"][0], "the SYMBOL read answered after the access behind it"
+    await sweep_free(w)
+    sym.check_order()
+
+
+async def sym_reset_and_recover(w: Wrap, dut) -> None:
+    """Both resets with the bus driver told (it drops the lost request); then for 4 * STAGES + 30
+    net edges no command is valid and no ack comes, the symbol path is idle (no stale transfer
+    lands), and a fresh write and read of a SYMBOL word work and reach the port once each."""
+    sym = w.sym
+    acks = len(sym.acks)
+    w.drv.reset(dut.host_rst)
+    await reset(dut)
+    sym.hold = False
+    for _ in range(4 * STAGES + 30):
+        await RisingEdge(dut.net_clk)
+        await ReadOnly()
+        assert not dut.sym_req_valid.value, "a SYMBOL command from before the reset"
+    assert not (dut.sym_pending_q.value or dut.sym_cmd_q.value or dut.sym_rsp_pending_q.value)
+    assert len(sym.acks) == acks, "an ack from before the reset"
+    await RisingEdge(dut.host_clk)
+    n = len(sym.host_reqs), len(sym.cmds), len(sym.rsps), len(sym.acks)
+    word, data = w.rng.randrange(SYMBOL.entries), w.rng.getrandbits(32)
+    assert await w.drv.write(sym_addr(word), data) == OKAY
+    assert await w.drv.read(sym_addr(word)) == (data, OKAY)
+    await sweep_free(w)
+    reqs = [c for _, c in sym.host_reqs[n[0]:]]
+    assert [c for _, c in sym.cmds[n[1]:]] == reqs and len(reqs) == 2, "after the reset: two accesses, two commands"
+    assert len(sym.rsps) - n[2] == 2 and len(sym.acks) - n[3] == 2
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_reset_waiting(dut):
+    """Both resets while a SYMBOL write waits at the port (not ready), at a random point of the
+    wait, 10 times: no command from before the reset is ever taken, and the path works again
+    (sym_reset_and_recover)."""
+    w = await start(dut)
+    sym = w.sym
+    for _ in range(10):
+        sym.hold = True
+        taken = len(sym.cmds)
+        starts = len(sym.cmd_starts)
+        w.drv.write_nowait(sym_addr(w.rng.randrange(SYMBOL.entries)), w.rng.getrandbits(32))
+        while len(sym.cmd_starts) == starts:
+            await RisingEdge(dut.net_clk)
+        for _ in range(w.rng.randint(0, 20)):
+            await RisingEdge(dut.net_clk)
+        assert len(sym.cmds) == taken, "the port took a command while not ready"
+        await sym_reset_and_recover(w, dut)
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_sym_reset_in_flight(dut):
+    """Both resets at 10 points spread over a SYMBOL read's round trip (request handshake, command,
+    response handshake, ack; port always ready): no ack and no command from before the
+    reset come afterwards, and the path works again (sym_reset_and_recover)."""
+    w = await start(dut)
+    sym = w.sym
+    phases = set()
+    for k in range(10):  # reset points spread over the round trip, 0 .. 4 * STAGES + 8 host edges
+        reqs, cmds = len(sym.host_reqs), len(sym.cmds)
+        w.drv.read_nowait(sym_addr(w.rng.randrange(SYMBOL.entries)))
+        while len(sym.host_reqs) == reqs:
+            await RisingEdge(dut.host_clk)
+        for _ in range(k * (4 * STAGES + 8) // 9):
+            await RisingEdge(dut.host_clk)
+        phases.add("before the port" if len(sym.cmds) == cmds else "taken by the port")
+        await sym_reset_and_recover(w, dut)
+    assert phases == {"before the port", "taken by the port"}, f"reset phases: {sorted(phases)}"
 
 
 # The long test runs as its own pytest entry, at one profile (it checks the counter width, not CDC).

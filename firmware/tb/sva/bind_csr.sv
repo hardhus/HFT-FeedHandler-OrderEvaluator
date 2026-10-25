@@ -26,3 +26,9 @@ bind hft_csr axil_props #(
     .rdata  (s_axil_rdata),
     .rresp  (s_axil_rresp)
 );
+
+// Generated assertions (regblock) stay off until the block's first reset is released (assert_arm).
+bind hft_csr assert_arm u_assert_arm (
+    .clk(clk),
+    .rst(rst)
+);

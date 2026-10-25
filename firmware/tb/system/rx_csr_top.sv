@@ -1,13 +1,19 @@
-// rx_csr_top: simulation-only system top: eth_ip_udp_rx and moldudp64_rx configured and counted
-// through the host CSR block (hft_csr_wrap), with one asynchronous reset source and one reset_sync
-// per clock domain.
+// rx_csr_top: simulation-only system top: eth_ip_udp_rx, moldudp64_rx and itch_decoder configured
+// and counted through the host CSR block (hft_csr_wrap), with one asynchronous reset source and one
+// reset_sync per clock domain.
 // Clock domain : host_clk (s_axil_*), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*, m_udp_*, m_msg_*,
-//                m_pkt_*)
-// Latency      : those of hft_csr_wrap, eth_ip_udp_rx and moldudp64_rx
+//                m_pkt_*, m_ev_*, m_res_*)
+// Latency      : those of hft_csr_wrap, eth_ip_udp_rx, moldudp64_rx and itch_decoder
+// ITCH         : moldudp64_rx carries the ITCH config per packet: cfg_msg_ctx = {cfg_class_filter,
+//                cfg_class_en}. The counter banks in hft_csr_wrap count itch_decoder's forwarded
+//                packet events and results; m_pkt_* are moldudp64_rx's own,
+//                m_fwd_pkt_* the forwarded ones.
 // Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
 module rx_csr_top
   import hft_pkg::*;
-(
+#(
+    localparam int unsigned CTX_W = 2 * ITCH_N_CLASS  // {class_filter, class_en}
+) (
     input logic host_clk,
     input logic net_clk,
     input logic rst_in,    // async, active-high, one source for both domains
@@ -52,13 +58,12 @@ module rx_csr_top
     output logic [15:0] m_udp_len,
     output logic [ 2:0] m_udp_filter_idx,
 
-    // m_msg_ctx: cfg_msg_ctx is 0 until the ITCH config comes (F4 S8)
     output logic                      m_msg_valid,
     output logic [8*MOLD_MAX_MSG-1:0] m_msg_data,
     output logic [MOLD_MSG_LEN_W-1:0] m_msg_len,
     output logic [              63:0] m_msg_seq,
     output logic [              63:0] m_msg_sof_ts,
-    output logic                      m_msg_ctx,
+    output logic [         CTX_W-1:0] m_msg_ctx,
 
     output logic                m_pkt_valid,
     output mold_status_e        m_pkt_status,
@@ -68,7 +73,43 @@ module rx_csr_top
     output logic         [15:0] m_pkt_msgs,
     output logic         [15:0] m_pkt_dup_msgs,
     output logic         [15:0] m_pkt_oversize,
-    output logic                m_pkt_synced_now
+    output logic                m_pkt_synced_now,
+
+    // itch_decoder events and results
+    output logic                               m_ev_valid,
+    output itch_class_e                        m_ev_class,
+    output logic          [               7:0] m_ev_type,
+    output logic          [MOLD_MSG_LEN_W-1:0] m_ev_len,
+    output logic          [              63:0] m_ev_seq,
+    output logic          [              63:0] m_ev_sof_ts,
+    output logic          [              15:0] m_ev_locate,
+    output logic          [              15:0] m_ev_tracking,
+    output logic          [              47:0] m_ev_ts,
+    output logic          [              63:0] m_ev_order_ref,
+    output logic          [              63:0] m_ev_new_ref,
+    output logic          [              63:0] m_ev_shares,
+    output logic          [              31:0] m_ev_price,
+    output logic          [              63:0] m_ev_match,
+    output logic          [               7:0] m_ev_side,
+    output logic          [              63:0] m_ev_stock,
+    output logic          [              31:0] m_ev_attribution,
+    output logic          [               7:0] m_ev_printable,
+    output logic          [               7:0] m_ev_cross_type,
+    output logic          [8*MOLD_MAX_MSG-1:0] m_ev_raw,
+    output logic                               m_res_valid,
+    output itch_class_e                        m_res_class,
+    output itch_outcome_e                      m_res_outcome,
+
+    // itch_decoder's forwarded packet events (what the counter banks count)
+    output logic                m_fwd_pkt_valid,
+    output mold_status_e        m_fwd_pkt_status,
+    output logic         [63:0] m_fwd_pkt_seq,
+    output logic         [15:0] m_fwd_pkt_count,
+    output logic         [63:0] m_fwd_pkt_gap,
+    output logic         [15:0] m_fwd_pkt_msgs,
+    output logic         [15:0] m_fwd_pkt_dup_msgs,
+    output logic         [15:0] m_fwd_pkt_oversize,
+    output logic                m_fwd_pkt_synced_now
 );
   localparam int unsigned N_FILTERS = 8;
 
@@ -87,6 +128,11 @@ module rx_csr_top
   logic [         63:0] cfg_resync_seq;
   logic [         63:0] feed_expected_seq;
   logic feed_synced, feed_eos;
+  logic [ITCH_N_CLASS-1:0] cfg_class_en, cfg_class_filter;
+  logic sym_req_valid, sym_req_ready, sym_req_wr, sym_rsp_valid;
+  logic [10:0] sym_req_addr;
+  logic [31:0] sym_req_wdata, sym_rsp_rdata;
+  logic [3:0] sym_req_wstrb;
 
   reset_sync u_host_rst (
       .clk    (host_clk),
@@ -140,15 +186,28 @@ module rx_csr_top
       .cfg_resync       (cfg_resync),
       .cfg_resync_learn (cfg_resync_learn),
       .cfg_resync_seq   (cfg_resync_seq),
-      .mpkt_valid       (m_pkt_valid),
-      .mpkt_status      (m_pkt_status),
-      .mpkt_gap         (m_pkt_gap),
-      .mpkt_msgs        (m_pkt_msgs),
-      .mpkt_dup_msgs    (m_pkt_dup_msgs),
-      .mpkt_oversize    (m_pkt_oversize),
+      .cfg_class_en     (cfg_class_en),
+      .cfg_class_filter (cfg_class_filter),
+      .mpkt_valid       (m_fwd_pkt_valid),
+      .mpkt_status      (m_fwd_pkt_status),
+      .mpkt_gap         (m_fwd_pkt_gap),
+      .mpkt_msgs        (m_fwd_pkt_msgs),
+      .mpkt_dup_msgs    (m_fwd_pkt_dup_msgs),
+      .mpkt_oversize    (m_fwd_pkt_oversize),
+      .mres_valid       (m_res_valid),
+      .mres_class       (m_res_class),
+      .mres_outcome     (m_res_outcome),
       .feed_expected_seq(feed_expected_seq),
       .feed_synced      (feed_synced),
-      .feed_eos         (feed_eos)
+      .feed_eos         (feed_eos),
+      .sym_req_valid    (sym_req_valid),
+      .sym_req_ready    (sym_req_ready),
+      .sym_req_wr       (sym_req_wr),
+      .sym_req_addr     (sym_req_addr),
+      .sym_req_wdata    (sym_req_wdata),
+      .sym_req_wstrb    (sym_req_wstrb),
+      .sym_rsp_valid    (sym_rsp_valid),
+      .sym_rsp_rdata    (sym_rsp_rdata)
   );
 
   eth_ip_udp_rx #(
@@ -186,7 +245,8 @@ module rx_csr_top
   );
 
   moldudp64_rx #(
-      .N_FILTERS(N_FILTERS)
+      .N_FILTERS(N_FILTERS),
+      .CTX_W    (CTX_W)
   ) u_mold (
       .clk              (net_clk),
       .rst              (net_rst),
@@ -205,7 +265,7 @@ module rx_csr_top
       .cfg_resync       (cfg_resync),
       .cfg_resync_learn (cfg_resync_learn),
       .cfg_resync_seq   (cfg_resync_seq),
-      .cfg_msg_ctx      (1'b0),
+      .cfg_msg_ctx      ({cfg_class_filter, cfg_class_en}),
       .m_msg_valid      (m_msg_valid),
       .m_msg_data       (m_msg_data),
       .m_msg_len        (m_msg_len),
@@ -224,5 +284,66 @@ module rx_csr_top
       .feed_expected_seq(feed_expected_seq),
       .feed_synced      (feed_synced),
       .feed_eos         (feed_eos)
+  );
+
+  itch_decoder u_itch (
+      .clk               (net_clk),
+      .rst               (net_rst),
+      .s_msg_valid       (m_msg_valid),
+      .s_msg_data        (m_msg_data),
+      .s_msg_len         (m_msg_len),
+      .s_msg_seq         (m_msg_seq),
+      .s_msg_sof_ts      (m_msg_sof_ts),
+      .s_msg_class_en    (m_msg_ctx[ITCH_N_CLASS-1:0]),
+      .s_msg_class_filter(m_msg_ctx[CTX_W-1:ITCH_N_CLASS]),
+      .s_pkt_valid       (m_pkt_valid),
+      .s_pkt_status      (m_pkt_status),
+      .s_pkt_seq         (m_pkt_seq),
+      .s_pkt_count       (m_pkt_count),
+      .s_pkt_gap         (m_pkt_gap),
+      .s_pkt_msgs        (m_pkt_msgs),
+      .s_pkt_dup_msgs    (m_pkt_dup_msgs),
+      .s_pkt_oversize    (m_pkt_oversize),
+      .s_pkt_synced_now  (m_pkt_synced_now),
+      .sym_req_valid     (sym_req_valid),
+      .sym_req_ready     (sym_req_ready),
+      .sym_req_wr        (sym_req_wr),
+      .sym_req_addr      (sym_req_addr),
+      .sym_req_wdata     (sym_req_wdata),
+      .sym_req_wstrb     (sym_req_wstrb),
+      .sym_rsp_valid     (sym_rsp_valid),
+      .sym_rsp_rdata     (sym_rsp_rdata),
+      .m_ev_valid        (m_ev_valid),
+      .m_ev_class        (m_ev_class),
+      .m_ev_type         (m_ev_type),
+      .m_ev_len          (m_ev_len),
+      .m_ev_seq          (m_ev_seq),
+      .m_ev_sof_ts       (m_ev_sof_ts),
+      .m_ev_locate       (m_ev_locate),
+      .m_ev_tracking     (m_ev_tracking),
+      .m_ev_ts           (m_ev_ts),
+      .m_ev_order_ref    (m_ev_order_ref),
+      .m_ev_new_ref      (m_ev_new_ref),
+      .m_ev_shares       (m_ev_shares),
+      .m_ev_price        (m_ev_price),
+      .m_ev_match        (m_ev_match),
+      .m_ev_side         (m_ev_side),
+      .m_ev_stock        (m_ev_stock),
+      .m_ev_attribution  (m_ev_attribution),
+      .m_ev_printable    (m_ev_printable),
+      .m_ev_cross_type   (m_ev_cross_type),
+      .m_ev_raw          (m_ev_raw),
+      .m_res_valid       (m_res_valid),
+      .m_res_class       (m_res_class),
+      .m_res_outcome     (m_res_outcome),
+      .m_pkt_valid       (m_fwd_pkt_valid),
+      .m_pkt_status      (m_fwd_pkt_status),
+      .m_pkt_seq         (m_fwd_pkt_seq),
+      .m_pkt_count       (m_fwd_pkt_count),
+      .m_pkt_gap         (m_fwd_pkt_gap),
+      .m_pkt_msgs        (m_fwd_pkt_msgs),
+      .m_pkt_dup_msgs    (m_fwd_pkt_dup_msgs),
+      .m_pkt_oversize    (m_fwd_pkt_oversize),
+      .m_pkt_synced_now  (m_fwd_pkt_synced_now)
   );
 endmodule

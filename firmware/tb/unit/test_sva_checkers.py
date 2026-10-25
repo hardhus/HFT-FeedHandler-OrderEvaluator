@@ -172,7 +172,10 @@ AXIL_VIOLATIONS = {
     "a_b_count": (6, "BVALID without an accepted write that has no response yet"),
     "a_r_count": (7, "RVALID without an accepted read that has no response yet"),
 }
+ARM_TB = ["firmware/tb/sva/assert_arm.sv", "firmware/tb/sv/tb_assert_arm.sv"]
+ARM_VIOLATIONS = {"a_after_arm": (1, "assertion fired while bad is high")}
 CHECKERS = {
+    "arm": ("tb_assert_arm", ARM_TB, ARM_VIOLATIONS),
     "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),

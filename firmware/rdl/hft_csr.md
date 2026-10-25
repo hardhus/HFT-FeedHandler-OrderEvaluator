@@ -9,16 +9,18 @@ Don't override. Generated from: hft_csr
 
 - Absolute Address: 0x0
 - Base Offset: 0x0
-- Size: 0x468
+- Size: 0xA000
 
 <p>Host register map. 32-bit registers, 64 KiB window, SLVERR on unmapped addresses and illegal accesses.</p>
 
-|Offset|Identifier|      Name     |
-|------|----------|---------------|
-| 0x000|  GLOBAL  |     Global    |
-| 0x100|    NET   |Network receive|
-| 0x200|   FEED   | MoldUDP64 feed|
-| 0x400|   STATS  |   Statistics  |
+|Offset|Identifier|      Name      |
+|------|----------|----------------|
+|0x0000|  GLOBAL  |     Global     |
+|0x0100|    NET   | Network receive|
+|0x0200|   FEED   | MoldUDP64 feed |
+|0x0400|   STATS  |   Statistics   |
+|0x0600|   ITCH   |ITCH 5.0 decoder|
+|0x8000|  SYMBOL  |  Symbol bitmap |
 
 ## GLOBAL register file
 
@@ -56,11 +58,11 @@ Don't override. Generated from: hft_csr
 
 |Bits|Identifier|Access| Reset |Name|
 |----|----------|------|-------|----|
-|31:0|  version |   r  |0x50001|  — |
+|31:0|  version |   r  |0x50002|  — |
 
 #### version field
 
-<p>Major.minor of this map: 0x0005_0001 is the F5 map with the F3 FEED block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
+<p>Major.minor of this map: 0x0005_0002 is the F5 map with the F3 FEED block and the F4 ITCH block and SYMBOL bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
 
 ### SCRATCH register
 
@@ -1898,3 +1900,405 @@ Don't override. Generated from: hft_csr
 #### value field
 
 <p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH register file
+
+- Absolute Address: 0x600
+- Base Offset: 0x600
+- Size: 0x88
+
+<p>itch_decoder configuration and counters. ITCH_CTRL is a shadow that FEED_COMMIT carries with the FEED block (one atomic commit; moldudp64_rx takes it at the first beat of each packet and the decoder applies it to every message of that packet). The ITCH_* counters (net clock domain, 64 bit, wrap; cleared only by reset) count committed messages only: those of OK, HEARTBEAT and EOS packets, like MOLD_MSGS. They are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS and MOLD_* counters. ITCH_<class> is at 0x0640 + 8 * class, class = itch_class_e in hft_pkg.sv. Between two snapshots: the sum of ITCH_<class> moves by MOLD_MSGS, and ITCH_OUT + ITCH_FILTERED + ITCH_MASKED by the sum of ITCH_<class>.</p>
+
+|Offset|  Identifier  |     Name     |
+|------|--------------|--------------|
+| 0x00 |   ITCH_CTRL  | ITCH control |
+| 0x40 |  ITCH_ORDER  |64-bit counter|
+| 0x48 |  ITCH_TRADE  |64-bit counter|
+| 0x50 |  ITCH_ADMIN  |64-bit counter|
+| 0x58 | ITCH_AUCTION |64-bit counter|
+| 0x60 | ITCH_UNKNOWN |64-bit counter|
+| 0x68 |ITCH_MALFORMED|64-bit counter|
+| 0x70 |   ITCH_OUT   |64-bit counter|
+| 0x78 | ITCH_FILTERED|64-bit counter|
+| 0x80 |  ITCH_MASKED |64-bit counter|
+
+### ITCH_CTRL register
+
+- Absolute Address: 0x600
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits| Identifier |Access|Reset|Name|
+|----|------------|------|-----|----|
+| 5:0|  class_en  |  rw  | 0x0 |  — |
+|13:8|class_filter|  rw  | 0x0 |  — |
+
+#### class_en field
+
+<p>Bit c: messages of class c (itch_class_e) are output; 0 = counted as MASKED. 0 after reset: no message is output until software has committed a configuration.</p>
+
+#### class_filter field
+
+<p>Bit c: messages of class c go through the SYMBOL bitmap; a message whose stock locate is not 0 and whose bitmap bit is 0 is counted as FILTERED. Locate 0 (market-wide messages) and messages shorter than the 11-byte header always pass.</p>
+
+## ITCH_ORDER register file
+
+- Absolute Address: 0x640
+- Base Offset: 0x40
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x640
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x644
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_TRADE register file
+
+- Absolute Address: 0x648
+- Base Offset: 0x48
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x648
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x64C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_ADMIN register file
+
+- Absolute Address: 0x650
+- Base Offset: 0x50
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x650
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x654
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_AUCTION register file
+
+- Absolute Address: 0x658
+- Base Offset: 0x58
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x658
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x65C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_UNKNOWN register file
+
+- Absolute Address: 0x660
+- Base Offset: 0x60
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x660
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x664
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_MALFORMED register file
+
+- Absolute Address: 0x668
+- Base Offset: 0x68
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x668
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x66C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_OUT register file
+
+- Absolute Address: 0x670
+- Base Offset: 0x70
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x670
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x674
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_FILTERED register file
+
+- Absolute Address: 0x678
+- Base Offset: 0x78
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x678
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x67C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ITCH_MASKED register file
+
+- Absolute Address: 0x680
+- Base Offset: 0x80
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x680
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x684
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## SYMBOL memory
+
+- Absolute Address: 0x8000
+- Base Offset: 0x8000
+- Size: 0x2000
+
+<p>Stock-locate subscription bitmap of itch_decoder: bit i of word w is stock locate 32 * w + i (1 = subscribed). Written only by software; the hardware never writes it. After a reset the hardware clears every word (2048 net clock cycles, about 13 us); an access in that time waits until the clearing is done, so the bitmap reads 0 after reset. A write's response (BRESP) comes once it is in effect: every message looked up after it sees the new value. Software keeps its own copy and rewrites all 2048 words after every reset (see the software contract after reset).</p>
+
+No supported members.
+

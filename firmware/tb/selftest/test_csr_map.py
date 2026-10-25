@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from model.csr import OKAY, SLVERR, CsrModel, csr_map, k5_violations, load_map, regs_by_path
+from model.csr import OKAY, SLVERR, CsrModel, csr_map, csr_mems, k5_violations, load_map, mem, regs_by_path
 
 FW = Path(__file__).resolve().parents[2]
 REPO = FW.parent
@@ -26,8 +26,11 @@ MOLD_STATUSES = (
 )  # fmt: skip
 # FEED counters after the per-status ones, with their addresses.
 MOLD_EXTRA = {"MSGS": 0x0298, "DUP_MSGS": 0x02A0, "OVERSIZE_MSGS": 0x02A8, "GAP_EVENTS": 0x02B0, "GAP_MSGS": 0x02B8}
+ITCH_CLASSES = ("ORDER", "TRADE", "ADMIN", "AUCTION", "UNKNOWN", "MALFORMED")
+# ITCH counters after the per-class ones, with their addresses.
+ITCH_EXTRA = {"OUT": 0x0670, "FILTERED": 0x0678, "MASKED": 0x0680}
 
-# Every register of the map (F5 + F3 FEED block): path -> address.
+# Every register of the map (F5 + F3 FEED block + F4 ITCH block): path -> address.
 EXPECTED = {
     "GLOBAL.ID": 0x0000,
     "GLOBAL.VERSION": 0x0004,
@@ -106,11 +109,33 @@ EXPECTED = {
     "STATS.DROP_FILTER.HI": 0x045C,
     "STATS.DROP_LEN.LO": 0x0460,
     "STATS.DROP_LEN.HI": 0x0464,
+    "ITCH.ITCH_CTRL": 0x0600,
+    "ITCH.ITCH_ORDER.LO": 0x0640,
+    "ITCH.ITCH_ORDER.HI": 0x0644,
+    "ITCH.ITCH_TRADE.LO": 0x0648,
+    "ITCH.ITCH_TRADE.HI": 0x064C,
+    "ITCH.ITCH_ADMIN.LO": 0x0650,
+    "ITCH.ITCH_ADMIN.HI": 0x0654,
+    "ITCH.ITCH_AUCTION.LO": 0x0658,
+    "ITCH.ITCH_AUCTION.HI": 0x065C,
+    "ITCH.ITCH_UNKNOWN.LO": 0x0660,
+    "ITCH.ITCH_UNKNOWN.HI": 0x0664,
+    "ITCH.ITCH_MALFORMED.LO": 0x0668,
+    "ITCH.ITCH_MALFORMED.HI": 0x066C,
+    "ITCH.ITCH_OUT.LO": 0x0670,
+    "ITCH.ITCH_OUT.HI": 0x0674,
+    "ITCH.ITCH_FILTERED.LO": 0x0678,
+    "ITCH.ITCH_FILTERED.HI": 0x067C,
+    "ITCH.ITCH_MASKED.LO": 0x0680,
+    "ITCH.ITCH_MASKED.HI": 0x0684,
 }
+# Every memory of the map: path -> (address, entries, width).
+EXPECTED_MEMS = {"SYMBOL": (0x8000, 2048, 32)}
 
 # Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved
-# (RING 0x0300, RISK 0x0500, STRATEGY 0x1000, TX 0x2000, SYMBOL 0x8000).
-BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "STATS": (0x0400, 0x0500)}
+# (RING 0x0300, RISK 0x0500, STRATEGY 0x1000, TX 0x2000) except the SYMBOL memory at 0x8000.
+BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "STATS": (0x0400, 0x0500),
+          "ITCH": (0x0600, 0x0700)}  # fmt: skip
 
 
 def test_every_register_at_its_address():
@@ -121,7 +146,7 @@ def test_every_register_at_its_address():
 def test_constants():
     regs = regs_by_path()
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
-    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0001  # F5 map + F3 FEED block (minor)
+    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0002  # + F3 FEED, F4 ITCH and SYMBOL (minor)
 
 
 def test_drop_counters_follow_reason_codes():
@@ -154,6 +179,39 @@ def test_mold_counters_follow_status_codes():
     assert len(mold) == len(MOLD_STATUSES) + len(MOLD_EXTRA)
 
 
+def test_itch_counters_follow_class_codes():
+    """ITCH_<class> exists for every itch_class_e code of hft_pkg.sv, at 0x0640 + 8 * code; the
+    outcome counters follow at ITCH_N_CLASS + itch_outcome_e code (the index in itch_stats)."""
+    pkg = HFT_PKG.read_text()
+    classes = {m[1]: int(m[2]) for m in re.finditer(r"\bITCH_(\w+)\s*=\s*3'd(\d+)", pkg)}
+    assert set(classes) == set(ITCH_CLASSES), "class codes and ITCH_* counters differ"
+    outcomes = {m[1]: int(m[2]) for m in re.finditer(r"\bITCH_RES_(\w+)\s*=\s*2'd(\d+)", pkg)}
+    assert set(outcomes) == set(ITCH_EXTRA), "outcome codes and ITCH_* counters differ"
+    regs = regs_by_path()
+    for name, code in classes.items():
+        assert regs[f"ITCH.ITCH_{name}.LO"].addr == 0x0640 + 8 * code, name
+    for name, code in outcomes.items():
+        assert regs[f"ITCH.ITCH_{name}.LO"].addr == 0x0640 + 8 * (len(classes) + code) == ITCH_EXTRA[name], name
+    itch = [p for p in regs if p.startswith("ITCH.ITCH_") and p.endswith(".LO")]
+    assert len(itch) == len(ITCH_CLASSES) + len(ITCH_EXTRA)
+
+
+def test_symbol_memory():
+    """SYMBOL: 2048 x 32 bit, read/write, aligned to its size, no register inside it; the model
+    answers it like a RAM with byte strobes (0 at reset)."""
+    got = {m.path: (m.addr, m.entries, m.width) for m in csr_mems()}
+    assert got == EXPECTED_MEMS
+    sym = mem("SYMBOL")
+    assert sym.size == 0x2000 and sym.addr % sym.size == 0 and sym.sw_read and sym.sw_write and sym.desc
+    assert not [r for r in csr_map() if sym.word(r.addr) is not None]
+    m = CsrModel()
+    assert m.read(0x8000) == (0, OKAY) and m.read(0x9FFC) == (0, OKAY)
+    assert m.write(0x8004, 0xAABB_CCDD, strb=0b0101) == (OKAY, set())
+    assert m.read(0x8004) == (0x00BB_00DD, OKAY)
+    assert m.read(0x8006) == (0x00BB_00DD, OKAY), "unaligned: the word"
+    assert m.read(0xA000) == (0, SLVERR), "past the end"
+
+
 def test_layout_rules():
     """32-bit registers, 4-byte aligned, no overlap, only inside the F5 blocks, a desc on every field."""
     regs = csr_map()
@@ -175,7 +233,7 @@ def test_access_kinds():
         return {(True, True): "RW", (True, False): "RO", (False, True): "WO"}[r.readable, r.writable]
 
     ro = {"GLOBAL.ID", "GLOBAL.VERSION", "NET.NET_STATUS", "STATS.STATS_SEQ", "FEED.FEED_STATUS", "FEED.FEED_STATE"}
-    ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.")) and p.endswith((".LO", ".HI"))}
+    ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.", "ITCH.")) and p.endswith((".LO", ".HI"))}
     ro -= {"FEED.RESYNC_SEQ_LO", "FEED.RESYNC_SEQ_HI"}  # software writes the resync value
     wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL", "FEED.FEED_COMMIT"}
     assert {p: kind(p) for p in EXPECTED} == {p: "RO" if p in ro else "WO" if p in wo else "RW" for p in EXPECTED}
@@ -189,6 +247,8 @@ def test_access_kinds():
     assert {f.name: f.lsb for f in regs["FEED.FEED_COMMIT"].fields} == {"commit": 0, "resync": 1}
     assert {f.name: f.lsb for f in regs["FEED.FEED_STATE"].fields} == {"synced": 0, "eos": 1}
     assert regs["FEED.SESSION_2"].fields[0].lsb == 16, "session bytes 8..9 in [31:16]"
+    itch = {f.name: (f.lsb, f.width, f.reset) for f in regs["ITCH.ITCH_CTRL"].fields}
+    assert itch == {"class_en": (0, 6, 0), "class_filter": (8, 6, 0)}, "class_en must reset to 0 (nothing output)"
 
 
 def test_no_field_written_by_both_sw_and_hw():
@@ -241,3 +301,7 @@ def test_header_check_covers_the_anchors():
     text = HEADER_CHECK.read_text()
     for path, address in EXPECTED.items():
         assert f"OFS({path}, 0x{address:04X})" in text, f"csr_header_check.cpp lacks {path}"
+    for path, (address, entries, width) in EXPECTED_MEMS.items():
+        last = address + (entries - 1) * width // 8
+        for anchor in (f"OFS({path}.mem, 0x{address:04X})", f"OFS({path}.mem[{entries - 1}], 0x{last:04X})"):
+            assert anchor in text, f"csr_header_check.cpp lacks {anchor}"

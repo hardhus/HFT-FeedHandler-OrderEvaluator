@@ -1,8 +1,9 @@
 """Test environment of hft_csr_wrap, shared by its unit test (tb/unit/test_hft_csr_wrap.py, the
 wrapper is the DUT) and the system test (tb/system/test_rx_csr.py, the wrapper is u_wrap next to
-eth_ip_udp_rx): NET and FEED configurations and their commit, the cfg_* monitors, the resync
-requests, and the snapshot of the rx_stats and mold_stats counters and the feed state with its
-model (audit/10 §2.3, §2.4; audit/11 §2.7).
+eth_ip_udp_rx): NET and FEED configurations (FEED with ITCH_CTRL) and their commit, the cfg_*
+monitors, the resync requests, the snapshot of the rx_stats, mold_stats and itch_stats counters
+and the feed state with its model, and the SYMBOL accesses at the wrapper's sym_* port (audit/10
+§2.3, §2.4; audit/11 §2.7; audit/12 §2.7).
 
 `root` is the hft_csr_wrap instance; the bus is driven at the DUT's s_axil_* ports. The monitors
 read signals inside the wrapper (grey box): the handshakes' acceptance and landing edges.
@@ -16,7 +17,8 @@ from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 
 from common.axil import AxilDriver
-from model.csr import OKAY, addr
+from model.csr import OKAY, addr, mem
+from model.itch import ItchClass, Outcome
 from model.mold import ACCEPTED, MoldStatus
 from model.net import RxReason
 
@@ -36,19 +38,27 @@ RESYNC_SEQ_LO = addr("FEED.RESYNC_SEQ_LO")
 RESYNC_SEQ_HI = addr("FEED.RESYNC_SEQ_HI")
 FEED_COMMIT = addr("FEED.FEED_COMMIT")
 FEED_STATUS = addr("FEED.FEED_STATUS")
+ITCH_CTRL = addr("ITCH.ITCH_CTRL")
+SYMBOL = mem("SYMBOL")
 # Snapshot values, in register order: rx_stats (RX_PKTS, RX_BYTES, DROP_<reason> by reason code),
-# then mold_stats (MOLD_<status> by status code, then the message and gap counters), then the feed
-# state (EXPECTED_SEQ, FEED_STATE).
+# then mold_stats (MOLD_<status> by status code, then the message and gap counters), then
+# itch_stats (ITCH_<class> by class code, then one per outcome), then the feed state
+# (EXPECTED_SEQ, FEED_STATE).
 COUNTERS = ["RX_PKTS", "RX_BYTES"] + [f"DROP_{r.name}" for r in list(RxReason)[1:]]
 MOLD_COUNTERS = [f"MOLD_{s.name}" for s in MoldStatus]
 MOLD_COUNTERS += [f"MOLD_{n}" for n in ("MSGS", "DUP_MSGS", "OVERSIZE_MSGS", "GAP_EVENTS", "GAP_MSGS")]
+ITCH_COUNTERS = [f"ITCH_{c.name}" for c in ItchClass] + [f"ITCH_{o.name}" for o in Outcome]
 SNAP_NAMES = [f"STATS.{n}" for n in COUNTERS] + [f"FEED.{n}" for n in MOLD_COUNTERS]
+SNAP_NAMES += [f"ITCH.{n}" for n in ITCH_COUNTERS]
 SNAP_NAMES += ["FEED.EXPECTED_SEQ", "FEED.FEED_STATE"]
 N_CNT = len(SNAP_NAMES)
 MASK64 = (1 << 64) - 1
 # hft_csr_wrap delays feed_* by this many net cycles before the snapshot, so that the feed state
-# belongs to the same packet events as the mold_stats counters (audit/11 S8 notes).
-FEED_DELAY = 2
+# belongs to the same packet events as the counters (audit/11 S8 notes): moldudp64_rx's update 1
+# cycle before its packet event, itch_decoder forwards the event 2 cycles later, the counter
+# banks count it 1 cycle after that (audit/12 §2.7).
+FEED_DELAY = 4
+N_CLASS = len(ItchClass)
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,8 @@ class FeedCfg:
     filter_mask: int = 0
     session: int = 0  # 10 bytes, byte 0 = [79:72]
     resync_seq: int = 0
+    class_en: int = 0  # ITCH_CTRL, carried by FEED_COMMIT
+    class_filter: int = 0
 
     @staticmethod
     def random(rng: random.Random) -> "FeedCfg":
@@ -115,6 +127,8 @@ class FeedCfg:
             filter_mask=rng.getrandbits(8),
             session=rng.getrandbits(80),
             resync_seq=rng.getrandbits(64),
+            class_en=rng.getrandbits(N_CLASS),
+            class_filter=rng.getrandbits(N_CLASS),
         )
 
     @staticmethod
@@ -128,10 +142,12 @@ class FeedCfg:
             filter_mask=r(FEED_CTRL) >> 8 & 0xFF,
             session=r(SESSION[0]) << 48 | r(SESSION[1]) << 16 | r(SESSION[2]) >> 16,
             resync_seq=r(RESYNC_SEQ_HI) << 32 | r(RESYNC_SEQ_LO),
+            class_en=r(ITCH_CTRL) & 0x3F,
+            class_filter=r(ITCH_CTRL) >> 8 & 0x3F,
         )
 
     def writes(self) -> list[tuple[int, int]]:
-        """(address, data) of every FEED shadow register."""
+        """(address, data) of every FEED shadow register, ITCH_CTRL included."""
         ctrl = self.enable | self.session_check << 1 | self.resync_learn << 2 | self.filter_mask << 8
         return [
             (FEED_CTRL, ctrl),
@@ -140,6 +156,7 @@ class FeedCfg:
             (SESSION[2], (self.session & 0xFFFF) << 16),
             (RESYNC_SEQ_LO, self.resync_seq & 0xFFFF_FFFF),
             (RESYNC_SEQ_HI, self.resync_seq >> 32),
+            (ITCH_CTRL, self.class_en | self.class_filter << 8),
         ]
 
 
@@ -151,6 +168,8 @@ def read_feed_cfg(root) -> FeedCfg:
         filter_mask=int(root.cfg_filter_mask.value),
         session=int(root.cfg_session.value),
         resync_seq=int(root.cfg_resync_seq.value),
+        class_en=int(root.cfg_class_en.value),
+        class_filter=int(root.cfg_class_filter.value),
     )
 
 
@@ -274,7 +293,7 @@ class Feed:
     more cycle by regblock is one request). Each handshake acceptance takes the resync requests seen
     in the cycles since the previous acceptance (a request in the acceptance cycle goes with the
     next transfer); expected[k] is whether transfer k must resync.
-    Net: before the first transfer cfg_feed_en, cfg_session_check and cfg_resync are 0. From the
+    Net: before the first transfer cfg_feed_en, cfg_session_check, cfg_resync and cfg_class_en are 0. From the
     cycle it lands, the FEED cfg_* are one committed configuration, whole, in commit order; and
     cfg_resync is 1 exactly in the landing cycle of a transfer that must resync."""
 
@@ -343,8 +362,8 @@ class Feed:
             resync = bool(root.cfg_resync.value)
             loaded = loaded or landing
             if not loaded:
-                assert not (root.cfg_feed_en.value or root.cfg_session_check.value or resync), (
-                    "cfg_feed_en, cfg_session_check or cfg_resync = 1 before any FEED commit was applied")
+                assert not (root.cfg_feed_en.value or root.cfg_session_check.value or resync or root.cfg_class_en.value), (
+                    "cfg_feed_en, cfg_session_check, cfg_resync or cfg_class_en set before any FEED commit was applied")
                 continue
             if landing:
                 self.land_times.append(edge)
@@ -409,16 +428,20 @@ class Feed:
 
 
 class Snap:
-    """Counter side: stat_* and mpkt_* event logs and the feed_* state at every net edge (from the
-    wrapper's inputs), an optional generator of them (unit test only), snapshot handshake monitors
-    and the software snapshot protocol. A snapshot taken on acceptance edge E holds the counters of
-    every event sampled before E and the feed state sampled FEED_DELAY net edges before E."""
+    """Counter side: stat_*, mpkt_* and mres_* event logs and the feed_* state at every net edge
+    (from the wrapper's inputs), an optional generator of them (unit test only), snapshot handshake
+    monitors and the software snapshot protocol. A snapshot taken on acceptance edge E holds the
+    counters of every event sampled before E and the feed state sampled FEED_DELAY net edges before
+    E. ITCH counters: a result waits for its packet event, which adds it for OK, HEARTBEAT and EOS
+    and drops it otherwise; a result on the edge of a packet event belongs to the next packet."""
 
     def __init__(self, w: Wrap, drive: bool = True):
         self.w, self.dut = w, w.root
         self.events: list[tuple[int, int, int]] = []  # (sampling net edge time, reason, bytes)
         # (sampling net edge time, status, gap, msgs, dup_msgs, oversize)
         self.mold_events: list[tuple[int, int, int, int, int, int]] = []
+        # (sampling net edge time, (class, outcome) or None, packet status or None)
+        self.itch_events: list[tuple[int, tuple[int, int] | None, int | None]] = []
         self.feed_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (E, synced, eos) it sampled
         self.edges: list[int] = []  # every net edge, in order
         self.edge_index: dict[int, int] = {}  # net edge -> its index in edges
@@ -454,6 +477,10 @@ class Snap:
             dut.mpkt_gap.value = rng.choice([0, MASK64, rng.getrandbits(64)])
             for name in ("mpkt_msgs", "mpkt_dup_msgs", "mpkt_oversize"):
                 getattr(dut, name).value = rng.choice([0, 0xFFFF, rng.getrandbits(16)])
+            # Message results of any class and outcome (itch_stats counts them as given).
+            dut.mres_valid.value = int(rng.random() < self.p_valid)
+            dut.mres_class.value = int(rng.choice(list(ItchClass)))
+            dut.mres_outcome.value = int(rng.choice(list(Outcome)))
             if rng.random() < 0.1:
                 dut.feed_expected_seq.value = rng.getrandbits(64)
                 dut.feed_synced.value = rng.getrandbits(1)
@@ -472,7 +499,9 @@ class Snap:
                 self.req_valid.append(edge)
             self.pending_cycles["net"] += int(dut.snap_net_pending_q.value)
             accept = bool(cdc.src_valid.value and cdc.src_ready.value)
-            stat = mpkt = None
+            stat = mpkt = res = None
+            if dut.mres_valid.value and not dut.net_rst.value:
+                res = (int(dut.mres_class.value), int(dut.mres_outcome.value))
             if dut.stat_valid.value and not dut.net_rst.value:
                 stat = (int(dut.stat_reason.value), int(dut.stat_bytes.value))
             if dut.mpkt_valid.value and not dut.net_rst.value:
@@ -490,6 +519,8 @@ class Snap:
                 self.events.append((edge, *stat))
             if mpkt:
                 self.mold_events.append((edge, *mpkt))
+            if mpkt or res:
+                self.itch_events.append((edge, res, mpkt[0] if mpkt else None))
 
     async def _host_monitor(self) -> None:
         dut = self.dut
@@ -532,10 +563,24 @@ class Snap:
             m[n_status + 2] += over
             m[n_status + 3] += int(gap != 0)
             m[n_status + 4] += gap
+        n_itch = len(ITCH_COUNTERS)
+        it, pend = [0] * n_itch, [0] * n_itch
+        for t, res, status in self.itch_events:
+            if t >= edge:
+                break
+            inc = [0] * n_itch
+            if res:
+                inc[res[0]] = inc[N_CLASS + res[1]] = 1
+            if status is None:
+                pend = [a + b for a, b in zip(pend, inc, strict=True)]
+                continue
+            if MoldStatus(status) in ACCEPTED:
+                it = [a + b for a, b in zip(it, pend, strict=True)]
+            pend = inc  # this edge's result starts the next packet
         i = self.edge_index[edge] - FEED_DELAY
         assert i >= 0, "snapshot before the feed delay registers were loaded"
         e, synced, eos = self.feed_at[self.edges[i]]
-        return [v & MASK64 for v in c + m] + [e, synced | eos << 1]
+        return [v & MASK64 for v in c + m + it] + [e, synced | eos << 1]
 
     async def read_counters(self) -> list[int]:
         """Every snapshot register, in SNAP_NAMES order (64-bit values from LO and HI)."""
@@ -590,3 +635,138 @@ class Snap:
         want = self.model_at(self.accepts[seq - 1])
         diff = {n: (g, x) for n, g, x in zip(SNAP_NAMES, got, want) if g != x}
         assert got == want, f"snapshot {seq}: (read, model) differ: {diff}"
+
+
+@dataclass(frozen=True)
+class SymCmd:
+    wr: int
+    addr: int  # word address
+    wdata: int  # 0 for a read (the port ignores it)
+    wstrb: int
+
+    @staticmethod
+    def of(wr: int, addr: int, wdata: int, wstrb: int) -> "SymCmd":
+        return SymCmd(wr, addr, wdata, wstrb) if wr else SymCmd(0, addr, 0, 0)
+
+
+class Sym:
+    """SYMBOL side, grey box at the wrapper: the host requests regblock makes (hwif_out.SYMBOL),
+    the commands at the sym_* port with the edge that accepts them, the responses, the acks back
+    in regblock, and the handshake acceptances in between (for the latency checks).
+
+    drive=True (unit test): a model of itch_decoder's command port answers: sym_req_ready low while
+    `hold` is set, else high with probability p_ready; an accepted write changes the model RAM at
+    its accepting edge (byte strobes); a response 1 cycle after acceptance, with the word for a
+    read (random data for a write). In the system test the real itch_decoder answers."""
+
+    def __init__(self, w: Wrap, drive: bool = True):
+        self.w, self.root, self.drive = w, w.root, drive
+        self.ram: dict[int, int] = {}  # the model RAM (drive=True), word -> value
+        self.hold = False
+        self.p_ready = 1.0
+        self.host_reqs: list[tuple[int, SymCmd]] = []  # (host edge after which req is high, request)
+        self.host_accepts: list[int] = []  # host edges that accept a request (u_sym_req_cdc)
+        self.acks: list[tuple[int, bool]] = []  # (host edge after which the ack is high, is_write)
+        self.cmd_starts: list[int] = []  # net edges after which a new command is valid
+        self.cmds: list[tuple[int, SymCmd]] = []  # (net edge that accepts it, command)
+        self.rsps: list[int] = []  # net edges after which sym_rsp_valid is high
+        self.rsp_accepts: list[int] = []  # net edges that accept a response (u_sym_rsp_cdc)
+        self.waits = 0  # net cycles with a command valid and not ready
+        cocotb.start_soon(self._host_monitor())
+        cocotb.start_soon(self._net_monitor())
+        if drive:
+            r = self.root
+            r.sym_req_ready.value = 0
+            r.sym_rsp_valid.value = 0
+            r.sym_rsp_rdata.value = 0
+            cocotb.start_soon(self._responder())
+
+    async def _host_monitor(self) -> None:
+        r = self.root
+        out, inp, cdc = r.hwif_out.SYMBOL, r.hwif_in.SYMBOL, r.u_sym_req_cdc
+        accept = False
+        while True:
+            await RisingEdge(r.host_clk)
+            edge = get_sim_time()
+            if accept:
+                self.host_accepts.append(edge)
+            await ReadOnly()
+            if r.host_rst.value:
+                accept = False
+                continue
+            if out.req.value:
+                biten = int(out.wr_biten.value)
+                strb = sum(1 << b for b in range(4) if biten >> (8 * b) & 0xFF)
+                is_wr = int(out.req_is_wr.value)
+                cmd = SymCmd.of(is_wr, int(out.addr.value) >> 2, int(out.wr_data.value), strb)
+                self.host_reqs.append((edge, cmd))
+            if inp.rd_ack.value or inp.wr_ack.value:
+                assert not (inp.rd_ack.value and inp.wr_ack.value), "rd_ack and wr_ack together"
+                self.acks.append((edge, bool(inp.wr_ack.value)))
+            accept = bool(cdc.src_valid.value and cdc.src_ready.value)
+
+    async def _net_monitor(self) -> None:
+        """Samples each net cycle, then records what the next edge does with it."""
+        r = self.root
+        cdc = r.u_sym_rsp_cdc
+        await RisingEdge(r.net_clk)
+        edge = get_sim_time()  # the edge that started this cycle
+        waiting: SymCmd | None = None  # a command valid and not taken in the cycle before
+        in_reset = False  # rst was high in the cycle before (synchronous reset has acted)
+        while True:
+            await ReadOnly()
+            valid = bool(r.sym_req_valid.value) and not r.net_rst.value
+            if r.net_rst.value:
+                assert not (in_reset and r.sym_req_valid.value), "a SYMBOL command after a reset edge"
+                waiting = None
+            in_reset = bool(r.net_rst.value)
+            cmd = SymCmd.of(int(r.sym_req_wr.value), int(r.sym_req_addr.value), int(r.sym_req_wdata.value),
+                            int(r.sym_req_wstrb.value))  # fmt: skip
+            if valid and waiting is None:
+                self.cmd_starts.append(edge)
+            if waiting is not None:
+                assert valid and cmd == waiting, "a waiting SYMBOL command changed or vanished"
+            if r.sym_rsp_valid.value and not r.net_rst.value:
+                self.rsps.append(edge)
+            take = valid and bool(r.sym_req_ready.value)
+            accept_rsp = bool(cdc.src_valid.value and cdc.src_ready.value)
+            self.waits += int(valid and not take)
+            await RisingEdge(r.net_clk)
+            edge = get_sim_time()
+            if take:
+                self.cmds.append((edge, cmd))
+            if accept_rsp:
+                self.rsp_accepts.append(edge)
+            waiting = cmd if valid and not take else None
+
+    async def _responder(self) -> None:
+        r, rng = self.root, self.w.rng
+        while True:
+            ready = not self.hold and not r.net_rst.value and rng.random() < self.p_ready
+            r.sym_req_ready.value = int(ready)
+            await ReadOnly()
+            take = ready and bool(r.sym_req_valid.value)
+            cmd = None
+            if take:
+                cmd = SymCmd.of(int(r.sym_req_wr.value), int(r.sym_req_addr.value), int(r.sym_req_wdata.value),
+                                int(r.sym_req_wstrb.value))  # fmt: skip
+            await RisingEdge(r.net_clk)
+            r.sym_rsp_valid.value = int(take)
+            r.sym_rsp_rdata.value = rng.getrandbits(32)
+            if cmd is not None:
+                old = self.ram.get(cmd.addr, 0)
+                if cmd.wr:
+                    bits = sum(0xFF << (8 * b) for b in range(4) if cmd.wstrb >> b & 1)
+                    self.ram[cmd.addr] = (old & ~bits) | (cmd.wdata & bits)
+                else:
+                    r.sym_rsp_rdata.value = old
+
+    def check_order(self) -> None:
+        """Call when idle: every host request reached the port once, in order and unchanged, got
+        one response and one ack of its kind."""
+        reqs = [c for _, c in self.host_reqs]
+        cmds = [c for _, c in self.cmds]
+        assert cmds == reqs, f"{len(reqs)} SYMBOL requests, {len(cmds)} commands (or they differ)"
+        assert len(self.rsps) == len(cmds) and len(self.acks) == len(cmds), (
+            f"{len(cmds)} commands, {len(self.rsps)} responses, {len(self.acks)} acks")
+        assert [k for _, k in self.acks] == [bool(c.wr) for c in cmds], "ack kind differs from the request"

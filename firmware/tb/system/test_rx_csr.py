@@ -444,7 +444,7 @@ async def tc_bring_up(dut):
     committed, so every payload packet reaches moldudp64_rx as MOLD_DISABLED."""
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0001, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0002, OKAY)
     frames = []
     for i in range(5):  # before any commit: receiver off
         frames.append((await sysm.send(udp_frame(bytes(range(20 + i))), gap=2)).frame)

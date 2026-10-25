@@ -5,7 +5,7 @@ package hft_csr_pkg;
 
     localparam HFT_CSR_DATA_WIDTH = 32;
     localparam HFT_CSR_MIN_ADDR_WIDTH = 16;
-    localparam HFT_CSR_SIZE = 'h468;
+    localparam HFT_CSR_SIZE = 'ha000;
 
     typedef struct {
         logic next;
@@ -107,9 +107,29 @@ package hft_csr_pkg;
     } hft_csr__STATS__in_t;
 
     typedef struct {
+        hft_csr__counter64__in_t ITCH_ORDER;
+        hft_csr__counter64__in_t ITCH_TRADE;
+        hft_csr__counter64__in_t ITCH_ADMIN;
+        hft_csr__counter64__in_t ITCH_AUCTION;
+        hft_csr__counter64__in_t ITCH_UNKNOWN;
+        hft_csr__counter64__in_t ITCH_MALFORMED;
+        hft_csr__counter64__in_t ITCH_OUT;
+        hft_csr__counter64__in_t ITCH_FILTERED;
+        hft_csr__counter64__in_t ITCH_MASKED;
+    } hft_csr__ITCH__in_t;
+
+    typedef struct {
+        logic rd_ack;
+        logic [31:0] rd_data;
+        logic wr_ack;
+    } hft_csr__SYMBOL__external__in_t;
+
+    typedef struct {
         hft_csr__NET__in_t NET;
         hft_csr__FEED__in_t FEED;
         hft_csr__STATS__in_t STATS;
+        hft_csr__ITCH__in_t ITCH;
+        hft_csr__SYMBOL__external__in_t SYMBOL;
     } hft_csr__in_t;
 
     typedef struct {
@@ -282,8 +302,35 @@ package hft_csr_pkg;
     } hft_csr__STATS__out_t;
 
     typedef struct {
+        logic [5:0] value;
+    } hft_csr__ITCH__ITCH_CTRL__class_en__out_t;
+
+    typedef struct {
+        logic [5:0] value;
+    } hft_csr__ITCH__ITCH_CTRL__class_filter__out_t;
+
+    typedef struct {
+        hft_csr__ITCH__ITCH_CTRL__class_en__out_t class_en;
+        hft_csr__ITCH__ITCH_CTRL__class_filter__out_t class_filter;
+    } hft_csr__ITCH__ITCH_CTRL__out_t;
+
+    typedef struct {
+        hft_csr__ITCH__ITCH_CTRL__out_t ITCH_CTRL;
+    } hft_csr__ITCH__out_t;
+
+    typedef struct {
+        logic req;
+        logic [12:0] addr;
+        logic req_is_wr;
+        logic [31:0] wr_data;
+        logic [31:0] wr_biten;
+    } hft_csr__SYMBOL__external__out_t;
+
+    typedef struct {
         hft_csr__NET__out_t NET;
         hft_csr__FEED__out_t FEED;
         hft_csr__STATS__out_t STATS;
+        hft_csr__ITCH__out_t ITCH;
+        hft_csr__SYMBOL__external__out_t SYMBOL;
     } hft_csr__out_t;
 endpackage

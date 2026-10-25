@@ -20,7 +20,7 @@ extern "C" {
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bm 0xffffffff
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bp 0
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bw 32
-#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50001
+#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50002
 
 // reg - hft_csr::GLOBAL::SCRATCH
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bm 0xffffffff
@@ -249,6 +249,36 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t DROP_LEN;
 } hft_csr__STATS_t;
 
+// reg - hft_csr::ITCH::ITCH_CTRL
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bm 0x3f
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bp 0
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bw 6
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_reset 0x0
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bm 0x3f00
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bp 8
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bw 6
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_reset 0x0
+
+// regfile - hft_csr::ITCH
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t ITCH_CTRL;
+    uint8_t RESERVED_4_3f[0x3c];
+    hft_csr__counter64_t ITCH_ORDER;
+    hft_csr__counter64_t ITCH_TRADE;
+    hft_csr__counter64_t ITCH_ADMIN;
+    hft_csr__counter64_t ITCH_AUCTION;
+    hft_csr__counter64_t ITCH_UNKNOWN;
+    hft_csr__counter64_t ITCH_MALFORMED;
+    hft_csr__counter64_t ITCH_OUT;
+    hft_csr__counter64_t ITCH_FILTERED;
+    hft_csr__counter64_t ITCH_MASKED;
+} hft_csr__ITCH_t;
+
+// mem - hft_csr::SYMBOL
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t mem[2048];
+} hft_csr__SYMBOL_t;
+
 // addrmap - hft_csr
 typedef struct __attribute__ ((__packed__)) {
     hft_csr__GLOBAL_t GLOBAL;
@@ -258,10 +288,14 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__FEED_t FEED;
     uint8_t RESERVED_2c0_3ff[0x140];
     hft_csr__STATS_t STATS;
+    uint8_t RESERVED_468_5ff[0x198];
+    hft_csr__ITCH_t ITCH;
+    uint8_t RESERVED_688_7fff[0x7978];
+    hft_csr__SYMBOL_t SYMBOL;
 } hft_csr_t;
 
 
-static_assert(sizeof(hft_csr_t) == 0x468, "Packing error");
+static_assert(sizeof(hft_csr_t) == 0xa000, "Packing error");
 
 #ifdef __cplusplus
 }

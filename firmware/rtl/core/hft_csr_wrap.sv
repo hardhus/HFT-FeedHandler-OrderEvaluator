@@ -1,6 +1,6 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
-// Clock domain : host_clk (s_axil_*, hft_csr), net_clk (cfg_*, stat_*, mpkt_*, feed_*, rx_stats,
-//                mold_stats)
+// Clock domain : host_clk (s_axil_*, hft_csr), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*,
+//                sym_*, rx_stats, mold_stats, itch_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
 //                commit buffer and requests one cdc_handshake transfer; the receiver's cfg_* then
 //                change together in one net_clk cycle (eth_ip_udp_rx samples them per frame).
@@ -29,14 +29,25 @@
 //                net, cfg_resync is a 1-cycle pulse in the cycle the transfer lands. The resync
 //                request is the rising edge of its singlepulse field: a pulse held one more cycle by
 //                regblock must not make a second transfer resync again (a resync is not idempotent).
-//                FEED_STATUS.commit_busy as NET_STATUS. The snapshot also takes the mold_stats
-//                counters and the feed state in the same net_clk cycle. feed_* go through
-//                FEED_DELAY = 2 registers first, so that the state belongs to the same packet
-//                events as the counters: moldudp64_rx shows a packet's feed update 1 cycle before
-//                its mpkt_valid, and mold_stats counts the event 1 cycle after it.
+//                FEED_STATUS.commit_busy as NET_STATUS. ITCH_CTRL is part of the FEED transfer
+//                (cfg_class_en, cfg_class_filter change with the other FEED cfg_*). The snapshot
+//                also takes the mold_stats and itch_stats counters and the feed state in the same
+//                net_clk cycle. Both counter banks count the packet events itch_decoder forwards
+//                (mpkt_*, with its results mres_*). feed_* go through FEED_DELAY = 4 registers
+//                first, so that the state belongs to the same packet events as the counters:
+//                moldudp64_rx shows a packet's feed update 1 cycle before its own packet event,
+//                itch_decoder forwards that event 2 cycles later, and the banks count it 1 cycle
+//                after that.
+// Symbols      : SYMBOL (regblock external mem) accesses go to itch_decoder's command port: the
+//                request (write flag, word address, data, byte strobes) over one cdc_handshake,
+//                the response (read data) back over another. rd_ack/wr_ack come when the response
+//                lands, so BRESP means the write is in the bitmap. regblock keeps one access in
+//                flight. During the bitmap sweep after reset the command waits at net
+//                (sym_req_ready = 0), and so does the bus.
 // Reset        : host_rst and net_rst asserted together (one source, one reset_sync per domain,
-//                cdc_handshake contract). After reset cfg_rx_en, cfg_feed_en, cfg_session_check and
-//                cfg_resync are 0; the other cfg_* are undefined until the first commit of their
+//                cdc_handshake contract). After reset cfg_rx_en, cfg_feed_en, cfg_session_check,
+//                cfg_resync and cfg_class_en are 0; the other cfg_* are undefined until the first
+//                commit of their
 //                block (the receiver drops every frame while rx_en = 0, the feed counts every packet
 //                as DISABLED while feed_en = 0).
 module hft_csr_wrap
@@ -91,16 +102,35 @@ module hft_csr_wrap
     output logic                 cfg_resync_learn,
     output logic [         63:0] cfg_resync_seq,
 
-    // moldudp64_rx packet event and feed state (a packet's update 1 cycle before its event)
-    input logic                mpkt_valid,
-    input mold_status_e        mpkt_status,
-    input logic         [63:0] mpkt_gap,
-    input logic         [15:0] mpkt_msgs,
-    input logic         [15:0] mpkt_dup_msgs,
-    input logic         [15:0] mpkt_oversize,
-    input logic         [63:0] feed_expected_seq,
-    input logic                feed_synced,
-    input logic                feed_eos
+    // itch_decoder configuration (through moldudp64_rx's per-packet context)
+    output logic [ITCH_N_CLASS-1:0] cfg_class_en,
+    output logic [ITCH_N_CLASS-1:0] cfg_class_filter,
+
+    // Packet events as itch_decoder forwards them, and its message results
+    input logic                 mpkt_valid,
+    input mold_status_e         mpkt_status,
+    input logic          [63:0] mpkt_gap,
+    input logic          [15:0] mpkt_msgs,
+    input logic          [15:0] mpkt_dup_msgs,
+    input logic          [15:0] mpkt_oversize,
+    input logic                 mres_valid,
+    input itch_class_e          mres_class,
+    input itch_outcome_e        mres_outcome,
+
+    // moldudp64_rx feed state (a packet's update 1 cycle before moldudp64_rx's packet event)
+    input logic [63:0] feed_expected_seq,
+    input logic        feed_synced,
+    input logic        feed_eos,
+
+    // itch_decoder symbol bitmap command port
+    output logic        sym_req_valid,
+    input  logic        sym_req_ready,
+    output logic        sym_req_wr,
+    output logic [10:0] sym_req_addr,
+    output logic [31:0] sym_req_wdata,
+    output logic [ 3:0] sym_req_wstrb,
+    input  logic        sym_rsp_valid,
+    input  logic [31:0] sym_rsp_rdata
 );
   // One NET configuration as it crosses the clock domains.
   typedef struct packed {
@@ -112,15 +142,26 @@ module hft_csr_wrap
     logic [N_FILTERS-1:0]       filter_en;
   } net_cfg_t;
 
-  // One FEED configuration, and with a resync request as it crosses the clock domains.
+  // One FEED configuration (with ITCH_CTRL), and with a resync request as it crosses the clock
+  // domains.
   typedef struct packed {
-    logic                 enable;
-    logic                 session_check;
-    logic                 resync_learn;
-    logic [N_FILTERS-1:0] filter_mask;
-    logic [79:0]          session;
-    logic [63:0]          resync_seq;
+    logic                    enable;
+    logic                    session_check;
+    logic                    resync_learn;
+    logic [N_FILTERS-1:0]    filter_mask;
+    logic [79:0]             session;
+    logic [63:0]             resync_seq;
+    logic [ITCH_N_CLASS-1:0] class_en;
+    logic [ITCH_N_CLASS-1:0] class_filter;
   } feed_set_t;
+
+  // One SYMBOL access as it crosses to net.
+  typedef struct packed {
+    logic        wr;
+    logic [10:0] addr;   // word address
+    logic [31:0] wdata;
+    logic [3:0]  wstrb;
+  } sym_req_t;
 
   typedef struct packed {
     feed_set_t set;
@@ -216,6 +257,8 @@ module hft_csr_wrap
     feed_shadow.resync_seq = {
       hwif_out.FEED.RESYNC_SEQ_HI.seq.value, hwif_out.FEED.RESYNC_SEQ_LO.seq.value
     };
+    feed_shadow.class_en = hwif_out.ITCH.ITCH_CTRL.class_en.value;
+    feed_shadow.class_filter = hwif_out.ITCH.ITCH_CTRL.class_filter.value;
   end
 
   assign feed_commit = hwif_out.FEED.FEED_COMMIT.commit.value;  // level-sensitive, like NET_COMMIT
@@ -257,6 +300,7 @@ module hft_csr_wrap
   typedef struct packed {
     logic [RX_N_CNT-1:0][CNT_W-1:0]   rx;
     logic [MOLD_N_CNT-1:0][CNT_W-1:0] mold;
+    logic [ITCH_N_CNT-1:0][CNT_W-1:0] itch;
     logic [63:0]                      expected_seq;
     logic                             synced;
     logic                             eos;
@@ -266,6 +310,7 @@ module hft_csr_wrap
   logic snap_req_valid, snap_req_word, snap_landed, snap_loaded_q;
   logic [  RX_N_CNT-1:0][CNT_W-1:0] cnt;
   logic [MOLD_N_CNT-1:0][CNT_W-1:0] mold_cnt;
+  logic [ITCH_N_CNT-1:0][CNT_W-1:0] itch_cnt;
   snap_t snap_src, snap_dst, snap_cnt;
 
   // Level-sensitive like NET_COMMIT (regblock may hold the pulse one more cycle).
@@ -322,8 +367,21 @@ module hft_csr_wrap
       .cnt         (mold_cnt)
   );
 
-  // Feed state delayed to the cycle in which mold_stats holds the packet event that made it.
-  localparam int unsigned FEED_DELAY = 2;
+  itch_stats #(
+      .CNT_W(CNT_W)
+  ) u_itch_stats (
+      .clk        (net_clk),
+      .rst        (net_rst),
+      .res_valid  (mres_valid),
+      .res_class  (mres_class),
+      .res_outcome(mres_outcome),
+      .pkt_valid  (mpkt_valid),
+      .pkt_status (mpkt_status),
+      .cnt        (itch_cnt)
+  );
+
+  // Feed state delayed to the cycle in which the counter banks hold the packet event that made it.
+  localparam int unsigned FEED_DELAY = 4;
   logic [FEED_DELAY-1:0][63:0] feed_seq_q;
   logic [FEED_DELAY-1:0] feed_synced_q, feed_eos_q;
 
@@ -335,6 +393,7 @@ module hft_csr_wrap
 
   assign snap_src.rx           = cnt;
   assign snap_src.mold         = mold_cnt;
+  assign snap_src.itch         = itch_cnt;
   assign snap_src.expected_seq = feed_seq_q[FEED_DELAY-1];
   assign snap_src.synced       = feed_synced_q[FEED_DELAY-1];
   assign snap_src.eos          = feed_eos_q[FEED_DELAY-1];
@@ -430,6 +489,25 @@ module hft_csr_wrap
   assign hwif_in.FEED.MOLD_GAP_EVENTS.HI.value.next = snap_cnt.mold[MOLD_CNT_GAP_EVENTS][63:32];
   assign hwif_in.FEED.MOLD_GAP_MSGS.LO.value.next = snap_cnt.mold[MOLD_CNT_GAP_MSGS][31:0];
   assign hwif_in.FEED.MOLD_GAP_MSGS.HI.value.next = snap_cnt.mold[MOLD_CNT_GAP_MSGS][63:32];
+  // ITCH: ITCH_<class> at index class, then one counter per outcome.
+  assign hwif_in.ITCH.ITCH_ORDER.LO.value.next = snap_cnt.itch[ITCH_ORDER][31:0];
+  assign hwif_in.ITCH.ITCH_ORDER.HI.value.next = snap_cnt.itch[ITCH_ORDER][63:32];
+  assign hwif_in.ITCH.ITCH_TRADE.LO.value.next = snap_cnt.itch[ITCH_TRADE][31:0];
+  assign hwif_in.ITCH.ITCH_TRADE.HI.value.next = snap_cnt.itch[ITCH_TRADE][63:32];
+  assign hwif_in.ITCH.ITCH_ADMIN.LO.value.next = snap_cnt.itch[ITCH_ADMIN][31:0];
+  assign hwif_in.ITCH.ITCH_ADMIN.HI.value.next = snap_cnt.itch[ITCH_ADMIN][63:32];
+  assign hwif_in.ITCH.ITCH_AUCTION.LO.value.next = snap_cnt.itch[ITCH_AUCTION][31:0];
+  assign hwif_in.ITCH.ITCH_AUCTION.HI.value.next = snap_cnt.itch[ITCH_AUCTION][63:32];
+  assign hwif_in.ITCH.ITCH_UNKNOWN.LO.value.next = snap_cnt.itch[ITCH_UNKNOWN][31:0];
+  assign hwif_in.ITCH.ITCH_UNKNOWN.HI.value.next = snap_cnt.itch[ITCH_UNKNOWN][63:32];
+  assign hwif_in.ITCH.ITCH_MALFORMED.LO.value.next = snap_cnt.itch[ITCH_MALFORMED][31:0];
+  assign hwif_in.ITCH.ITCH_MALFORMED.HI.value.next = snap_cnt.itch[ITCH_MALFORMED][63:32];
+  assign hwif_in.ITCH.ITCH_OUT.LO.value.next = snap_cnt.itch[ITCH_CNT_OUT][31:0];
+  assign hwif_in.ITCH.ITCH_OUT.HI.value.next = snap_cnt.itch[ITCH_CNT_OUT][63:32];
+  assign hwif_in.ITCH.ITCH_FILTERED.LO.value.next = snap_cnt.itch[ITCH_CNT_FILTERED][31:0];
+  assign hwif_in.ITCH.ITCH_FILTERED.HI.value.next = snap_cnt.itch[ITCH_CNT_FILTERED][63:32];
+  assign hwif_in.ITCH.ITCH_MASKED.LO.value.next = snap_cnt.itch[ITCH_CNT_MASKED][31:0];
+  assign hwif_in.ITCH.ITCH_MASKED.HI.value.next = snap_cnt.itch[ITCH_CNT_MASKED][63:32];
   assign hwif_in.FEED.EXPECTED_SEQ.LO.value.next = snap_cnt.expected_seq[31:0];
   assign hwif_in.FEED.EXPECTED_SEQ.HI.value.next = snap_cnt.expected_seq[63:32];
   assign hwif_in.FEED.FEED_STATE.synced.next = snap_cnt.synced;
@@ -501,11 +579,112 @@ module hft_csr_wrap
     end
   end
 
-  assign cfg_feed_en       = feed_dst.set.enable && (feed_loaded_q || feed_dst_valid);
+  assign cfg_feed_en = feed_dst.set.enable && (feed_loaded_q || feed_dst_valid);
   assign cfg_session_check = feed_dst.set.session_check && (feed_loaded_q || feed_dst_valid);
-  assign cfg_session       = feed_dst.set.session;
-  assign cfg_filter_mask   = feed_dst.set.filter_mask;
-  assign cfg_resync        = feed_dst_valid && feed_dst.resync;
-  assign cfg_resync_learn  = feed_dst.set.resync_learn;
-  assign cfg_resync_seq    = feed_dst.set.resync_seq;
+  assign cfg_session = feed_dst.set.session;
+  assign cfg_filter_mask = feed_dst.set.filter_mask;
+  assign cfg_resync = feed_dst_valid && feed_dst.resync;
+  assign cfg_resync_learn = feed_dst.set.resync_learn;
+  assign cfg_resync_seq = feed_dst.set.resync_seq;
+  assign cfg_class_en = feed_dst.set.class_en & {ITCH_N_CLASS{feed_loaded_q || feed_dst_valid}};
+  assign cfg_class_filter = feed_dst.set.class_filter;
+
+  // ---- symbol bitmap access: host -> net request, net -> host response ----
+  sym_req_t sym_req, sym_req_q, sym_dst;
+  logic sym_pending_q, sym_req_src_ready, sym_dst_valid, sym_cmd_q;
+  logic sym_rsp_pending_q, sym_rsp_src_ready, sym_rsp_landed;
+  logic [31:0] sym_rsp_q, sym_rsp_dst;
+
+  always_comb begin
+    sym_req.wr    = hwif_out.SYMBOL.req_is_wr;
+    sym_req.addr  = hwif_out.SYMBOL.addr[12:2];
+    sym_req.wdata = hwif_out.SYMBOL.wr_data;
+    for (int b = 0; b < 4; b++) begin
+      sym_req.wstrb[b] = |hwif_out.SYMBOL.wr_biten[8*b+:8];  // AXI strobes: whole bytes
+    end
+  end
+
+  // regblock sends one access at a time and waits for its ack: the request register is free when
+  // a new one comes. Pending until the handshake takes it.
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      sym_pending_q <= 1'b0;
+    end else begin
+      sym_pending_q <= hwif_out.SYMBOL.req || (sym_pending_q && !sym_req_src_ready);
+    end
+  end
+
+  // Datapath: no reset (only sent after a request has loaded it).
+  always_ff @(posedge host_clk) begin
+    if (hwif_out.SYMBOL.req) begin
+      sym_req_q <= sym_req;
+    end
+  end
+
+  cdc_handshake #(
+      .WIDTH ($bits(sym_req_t)),
+      .STAGES(STAGES)
+  ) u_sym_req_cdc (
+      .src_clk  (host_clk),
+      .src_rst  (host_rst),
+      .src_data (sym_req_q),
+      .src_valid(sym_pending_q),
+      .src_ready(sym_req_src_ready),
+      .dst_clk  (net_clk),
+      .dst_rst  (net_rst),
+      .dst_data (sym_dst),
+      .dst_valid(sym_dst_valid)
+  );
+
+  // The command waits at net while itch_decoder is not ready (the bitmap sweep after reset).
+  // sym_dst is the handshake's destination register: it holds until the next transfer.
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      sym_cmd_q <= 1'b0;
+    end else begin
+      sym_cmd_q <= sym_dst_valid || (sym_cmd_q && !sym_req_ready);
+    end
+  end
+
+  assign sym_req_valid = sym_cmd_q;
+  assign sym_req_wr    = sym_dst.wr;
+  assign sym_req_addr  = sym_dst.addr;
+  assign sym_req_wdata = sym_dst.wdata;
+  assign sym_req_wstrb = sym_dst.wstrb;
+
+  // The response handshake can still be finishing the previous round trip when the next response
+  // comes: pending until it takes it.
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      sym_rsp_pending_q <= 1'b0;
+    end else begin
+      sym_rsp_pending_q <= sym_rsp_valid || (sym_rsp_pending_q && !sym_rsp_src_ready);
+    end
+  end
+
+  always_ff @(posedge net_clk) begin
+    if (sym_rsp_valid) begin
+      sym_rsp_q <= sym_rsp_rdata;
+    end
+  end
+
+  cdc_handshake #(
+      .WIDTH (32),
+      .STAGES(STAGES)
+  ) u_sym_rsp_cdc (
+      .src_clk  (net_clk),
+      .src_rst  (net_rst),
+      .src_data (sym_rsp_q),
+      .src_valid(sym_rsp_pending_q),
+      .src_ready(sym_rsp_src_ready),
+      .dst_clk  (host_clk),
+      .dst_rst  (host_rst),
+      .dst_data (sym_rsp_dst),
+      .dst_valid(sym_rsp_landed)
+  );
+
+  // The ack of the access in flight: its kind is the request register's (held until the next).
+  assign hwif_in.SYMBOL.rd_ack  = sym_rsp_landed && !sym_req_q.wr;
+  assign hwif_in.SYMBOL.wr_ack  = sym_rsp_landed && sym_req_q.wr;
+  assign hwif_in.SYMBOL.rd_data = sym_rsp_dst;
 endmodule

@@ -228,6 +228,7 @@ module hft_csr (
     end
 
     logic cpuif_req_masked;
+    logic external_pending;
 
     // Read latency > write latency. May need to delay next write that follows a read
     logic [0:0] cpuif_req_stall_sr;
@@ -240,8 +241,8 @@ module hft_csr (
             cpuif_req_stall_sr <= (cpuif_req_stall_sr >> 'd1);
         end
     end
-    assign cpuif_req_stall_rd = '0;
-    assign cpuif_req_stall_wr = cpuif_req_stall_sr[0];
+    assign cpuif_req_stall_rd = external_pending;
+    assign cpuif_req_stall_wr = cpuif_req_stall_sr[0] | external_pending;
     assign cpuif_req_masked = cpuif_req
                             & !(!cpuif_req_is_wr & cpuif_req_stall_rd)
                             & !(cpuif_req_is_wr & cpuif_req_stall_wr);
@@ -393,9 +394,51 @@ module hft_csr (
                 logic HI;
             } DROP_LEN;
         } STATS;
+        struct {
+            logic ITCH_CTRL;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_ORDER;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_TRADE;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_ADMIN;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_AUCTION;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_UNKNOWN;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_MALFORMED;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_OUT;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_FILTERED;
+            struct {
+                logic LO;
+                logic HI;
+            } ITCH_MASKED;
+        } ITCH;
+        logic SYMBOL;
     } decoded_reg_strb_t;
     decoded_reg_strb_t decoded_reg_strb;
     logic decoded_err;
+    logic decoded_req_is_external;
+
     logic [15:0] decoded_addr;
     logic decoded_req;
     logic decoded_req_is_wr;
@@ -405,6 +448,8 @@ module hft_csr (
     always_comb begin
         automatic logic is_valid_addr;
         automatic logic is_valid_rw;
+        automatic logic is_external;
+        is_external = '0;
         is_valid_addr = '0;
         is_valid_rw = '0;
         decoded_reg_strb.GLOBAL.ID = cpuif_req_masked & (cpuif_addr == 16'h0) & !cpuif_req_is_wr;
@@ -640,7 +685,85 @@ module hft_csr (
         decoded_reg_strb.STATS.DROP_LEN.HI = cpuif_req_masked & (cpuif_addr == 16'h464) & !cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h464);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h464) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_CTRL = cpuif_req_masked & (cpuif_addr == 16'h600);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h600);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h600);
+        decoded_reg_strb.ITCH.ITCH_ORDER.LO = cpuif_req_masked & (cpuif_addr == 16'h640) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h640);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h640) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_ORDER.HI = cpuif_req_masked & (cpuif_addr == 16'h644) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h644);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h644) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_TRADE.LO = cpuif_req_masked & (cpuif_addr == 16'h648) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h648);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h648) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_TRADE.HI = cpuif_req_masked & (cpuif_addr == 16'h64c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h64c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h64c) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_ADMIN.LO = cpuif_req_masked & (cpuif_addr == 16'h650) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h650);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h650) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_ADMIN.HI = cpuif_req_masked & (cpuif_addr == 16'h654) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h654);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h654) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_AUCTION.LO = cpuif_req_masked & (cpuif_addr == 16'h658) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h658);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h658) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_AUCTION.HI = cpuif_req_masked & (cpuif_addr == 16'h65c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h65c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h65c) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_UNKNOWN.LO = cpuif_req_masked & (cpuif_addr == 16'h660) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h660);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h660) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_UNKNOWN.HI = cpuif_req_masked & (cpuif_addr == 16'h664) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h664);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h664) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_MALFORMED.LO = cpuif_req_masked & (cpuif_addr == 16'h668) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h668);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h668) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_MALFORMED.HI = cpuif_req_masked & (cpuif_addr == 16'h66c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h66c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h66c) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_OUT.LO = cpuif_req_masked & (cpuif_addr == 16'h670) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h670);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h670) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_OUT.HI = cpuif_req_masked & (cpuif_addr == 16'h674) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h674);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h674) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_FILTERED.LO = cpuif_req_masked & (cpuif_addr == 16'h678) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h678);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h678) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_FILTERED.HI = cpuif_req_masked & (cpuif_addr == 16'h67c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h67c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h67c) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_MASKED.LO = cpuif_req_masked & (cpuif_addr == 16'h680) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h680);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h680) & !cpuif_req_is_wr;
+        decoded_reg_strb.ITCH.ITCH_MASKED.HI = cpuif_req_masked & (cpuif_addr == 16'h684) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h684);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h684) & !cpuif_req_is_wr;
+        decoded_reg_strb.SYMBOL = cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
+        is_external |= cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
         decoded_err = (~is_valid_addr | (is_valid_addr & ~is_valid_rw)) & decoded_req;
+        decoded_req_is_external = is_external;
+    end
+    logic external_wr_ack;
+    logic external_rd_ack;
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            external_pending <= '0;
+        end else begin
+            if(decoded_req_is_external & ~external_wr_ack & ~external_rd_ack) external_pending <= '1;
+            else if(external_wr_ack | external_rd_ack) external_pending <= '0;
+            `ifndef SYNTHESIS
+                assert_bad_ext_wr_ack: assert(!external_wr_ack || (external_pending | decoded_req_is_external))
+                    else $error("An external wr_ack strobe was asserted when no external request was active");
+                assert_bad_ext_rd_ack: assert(!external_rd_ack || (external_pending | decoded_req_is_external))
+                    else $error("An external rd_ack strobe was asserted when no external request was active");
+            `endif
+        end
     end
 
     // Pass down signals to next stage
@@ -786,6 +909,18 @@ module hft_csr (
                 } seq;
             } STATS_SEQ;
         } STATS;
+        struct {
+            struct {
+                struct {
+                    logic [5:0] next;
+                    logic load_next;
+                } class_en;
+                struct {
+                    logic [5:0] next;
+                    logic load_next;
+                } class_filter;
+            } ITCH_CTRL;
+        } ITCH;
     } field_combo_t;
     field_combo_t field_combo;
 
@@ -898,6 +1033,16 @@ module hft_csr (
                 } seq;
             } STATS_SEQ;
         } STATS;
+        struct {
+            struct {
+                struct {
+                    logic [5:0] value;
+                } class_en;
+                struct {
+                    logic [5:0] value;
+                } class_filter;
+            } ITCH_CTRL;
+        } ITCH;
     } field_storage_t;
     field_storage_t field_storage;
 
@@ -1424,20 +1569,103 @@ module hft_csr (
             end
         end
     end
+    // Field: hft_csr.ITCH.ITCH_CTRL.class_en
+    always_comb begin
+        automatic logic [5:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.ITCH.ITCH_CTRL.class_en.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.ITCH.ITCH_CTRL.class_en.value & ~decoded_wr_biten[5:0]) | (decoded_wr_data[5:0] & decoded_wr_biten[5:0]);
+            load_next_c = '1;
+        end
+        field_combo.ITCH.ITCH_CTRL.class_en.next = next_c;
+        field_combo.ITCH.ITCH_CTRL.class_en.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.ITCH.ITCH_CTRL.class_en.value <= 6'h0;
+        end else begin
+            if(field_combo.ITCH.ITCH_CTRL.class_en.load_next) begin
+                field_storage.ITCH.ITCH_CTRL.class_en.value <= field_combo.ITCH.ITCH_CTRL.class_en.next;
+            end
+        end
+    end
+    assign hwif_out.ITCH.ITCH_CTRL.class_en.value = field_storage.ITCH.ITCH_CTRL.class_en.value;
+    // Field: hft_csr.ITCH.ITCH_CTRL.class_filter
+    always_comb begin
+        automatic logic [5:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.ITCH.ITCH_CTRL.class_filter.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.ITCH.ITCH_CTRL.class_filter.value & ~decoded_wr_biten[13:8]) | (decoded_wr_data[13:8] & decoded_wr_biten[13:8]);
+            load_next_c = '1;
+        end
+        field_combo.ITCH.ITCH_CTRL.class_filter.next = next_c;
+        field_combo.ITCH.ITCH_CTRL.class_filter.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.ITCH.ITCH_CTRL.class_filter.value <= 6'h0;
+        end else begin
+            if(field_combo.ITCH.ITCH_CTRL.class_filter.load_next) begin
+                field_storage.ITCH.ITCH_CTRL.class_filter.value <= field_combo.ITCH.ITCH_CTRL.class_filter.next;
+            end
+        end
+    end
+    assign hwif_out.ITCH.ITCH_CTRL.class_filter.value = field_storage.ITCH.ITCH_CTRL.class_filter.value;
+    // External region: hft_csr.SYMBOL
+    assign hwif_out.SYMBOL.req = decoded_reg_strb.SYMBOL;
+    assign hwif_out.SYMBOL.addr = decoded_addr[12:0];
+    assign hwif_out.SYMBOL.req_is_wr = decoded_req_is_wr;
+    assign hwif_out.SYMBOL.wr_data = decoded_wr_data;
+    assign hwif_out.SYMBOL.wr_biten = decoded_wr_biten;
 
     //--------------------------------------------------------------------------
     // Write response
     //--------------------------------------------------------------------------
-    assign cpuif_wr_ack = decoded_req & decoded_req_is_wr;
+    always_comb begin
+        automatic logic wr_ack;
+        wr_ack = '0;
+        wr_ack |= hwif_in.SYMBOL.wr_ack;
+        external_wr_ack = wr_ack;
+    end
+    assign cpuif_wr_ack = external_wr_ack | (decoded_req & decoded_req_is_wr & ~decoded_req_is_external);
     // Writes are always granted with no error response
     assign cpuif_wr_err = decoded_err;
 
     //--------------------------------------------------------------------------
     // Readback
     //--------------------------------------------------------------------------
+    logic readback_external_rd_ack_c;
+    always_comb begin
+        automatic logic rd_ack;
+        rd_ack = '0;
+        rd_ack |= hwif_in.SYMBOL.rd_ack;
+        readback_external_rd_ack_c = rd_ack;
+    end
+
+    logic readback_external_rd_ack;
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            readback_external_rd_ack <= '0;
+        end else begin
+            readback_external_rd_ack <= readback_external_rd_ack_c;
+        end
+    end
 
     logic [15:0] rd_mux_addr;
-    assign rd_mux_addr = decoded_addr;
+    logic [15:0] pending_rd_addr;
+    // Hold read mux address to guarantee it is stable throughout any external accesses
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            pending_rd_addr <= '0;
+        end else begin
+            if(decoded_req) pending_rd_addr <= decoded_addr;
+        end
+    end
+    assign rd_mux_addr = decoded_req ? decoded_addr : pending_rd_addr;
 
     logic readback_err;
     logic readback_done;
@@ -1458,7 +1686,7 @@ module hft_csr (
             readback_data_var[ad_hi(16'h0)][31:0] = 32'h48465431;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h4)) begin
-            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50001;
+            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50002;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h8)) begin
             readback_data_var[ad_hi(16'h8)][31:0] = field_storage.GLOBAL.SCRATCH.value.value;
@@ -1684,6 +1912,64 @@ module hft_csr (
         if(ad_low(rd_mux_addr) == ad_low(16'h464)) begin
             readback_data_var[ad_hi(16'h464)][31:0] = hwif_in.STATS.DROP_LEN.HI.value.next;
         end
+        if(ad_low(rd_mux_addr) == ad_low(16'h600)) begin
+            readback_data_var[ad_hi(16'h600)][5:0] = field_storage.ITCH.ITCH_CTRL.class_en.value;
+            readback_data_var[ad_hi(16'h600)][13:8] = field_storage.ITCH.ITCH_CTRL.class_filter.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h640)) begin
+            readback_data_var[ad_hi(16'h640)][31:0] = hwif_in.ITCH.ITCH_ORDER.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h644)) begin
+            readback_data_var[ad_hi(16'h644)][31:0] = hwif_in.ITCH.ITCH_ORDER.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h648)) begin
+            readback_data_var[ad_hi(16'h648)][31:0] = hwif_in.ITCH.ITCH_TRADE.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h64c)) begin
+            readback_data_var[ad_hi(16'h64c)][31:0] = hwif_in.ITCH.ITCH_TRADE.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h650)) begin
+            readback_data_var[ad_hi(16'h650)][31:0] = hwif_in.ITCH.ITCH_ADMIN.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h654)) begin
+            readback_data_var[ad_hi(16'h654)][31:0] = hwif_in.ITCH.ITCH_ADMIN.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h658)) begin
+            readback_data_var[ad_hi(16'h658)][31:0] = hwif_in.ITCH.ITCH_AUCTION.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h65c)) begin
+            readback_data_var[ad_hi(16'h65c)][31:0] = hwif_in.ITCH.ITCH_AUCTION.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h660)) begin
+            readback_data_var[ad_hi(16'h660)][31:0] = hwif_in.ITCH.ITCH_UNKNOWN.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h664)) begin
+            readback_data_var[ad_hi(16'h664)][31:0] = hwif_in.ITCH.ITCH_UNKNOWN.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h668)) begin
+            readback_data_var[ad_hi(16'h668)][31:0] = hwif_in.ITCH.ITCH_MALFORMED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h66c)) begin
+            readback_data_var[ad_hi(16'h66c)][31:0] = hwif_in.ITCH.ITCH_MALFORMED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h670)) begin
+            readback_data_var[ad_hi(16'h670)][31:0] = hwif_in.ITCH.ITCH_OUT.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h674)) begin
+            readback_data_var[ad_hi(16'h674)][31:0] = hwif_in.ITCH.ITCH_OUT.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h678)) begin
+            readback_data_var[ad_hi(16'h678)][31:0] = hwif_in.ITCH.ITCH_FILTERED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h67c)) begin
+            readback_data_var[ad_hi(16'h67c)][31:0] = hwif_in.ITCH.ITCH_FILTERED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h680)) begin
+            readback_data_var[ad_hi(16'h680)][31:0] = hwif_in.ITCH.ITCH_MASKED.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h684)) begin
+            readback_data_var[ad_hi(16'h684)][31:0] = hwif_in.ITCH.ITCH_MASKED.HI.value.next;
+        end
         readback_data_rt_c = readback_data_var;
     end
 
@@ -1700,21 +1986,53 @@ module hft_csr (
         end else begin
             readback_data_rt <= readback_data_rt_c;
             readback_err_rt <= decoded_err;
-            readback_done_rt <= decoded_req & ~decoded_req_is_wr;
+            readback_done_rt <= decoded_req & ~decoded_req_is_wr & ~decoded_req_is_external;
             readback_addr_rt <= rd_mux_addr;
         end
     end
 
 
+    logic [31:0] readback_ext_block_data_rt_c;
+    logic readback_is_ext_block_c;
+    always_comb begin
+        automatic logic [31:0] readback_data_var;
+        automatic logic is_external_block_var;
+        readback_data_var = '0;
+        is_external_block_var = '0;
+        if((rd_mux_addr >= 16'h8000) && (rd_mux_addr <= 16'h8000 + 16'h1fff)) begin
+            readback_data_var = hwif_in.SYMBOL.rd_data;
+            is_external_block_var = 1'b1;
+        end
+        readback_ext_block_data_rt_c = readback_data_var;
+        readback_is_ext_block_c = is_external_block_var;
+    end
+
+    logic [31:0] readback_ext_block_data_rt;
+    logic readback_is_ext_block;
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            readback_ext_block_data_rt <= '0;
+            readback_is_ext_block <= '0;
+        end else begin
+            readback_ext_block_data_rt <= readback_ext_block_data_rt_c;
+            readback_is_ext_block <= readback_is_ext_block_c;
+        end
+    end
+
 
     // readback stage 2
     always_comb begin
-        readback_data = readback_data_rt[readback_addr_rt[15:9]];
+        if(readback_is_ext_block) begin
+            readback_data = readback_ext_block_data_rt;
+        end else begin
+            readback_data = readback_data_rt[readback_addr_rt[15:9]];
+        end
         readback_done = readback_done_rt;
         readback_err = readback_err_rt;
     end
 
-    assign cpuif_rd_ack = readback_done;
+    assign external_rd_ack = readback_external_rd_ack;
+    assign cpuif_rd_ack = readback_done | readback_external_rd_ack;
     assign cpuif_rd_data = readback_data;
     assign cpuif_rd_err = readback_err;
 endmodule

@@ -8,6 +8,14 @@ is decided in ReadOnly of the same cycle (VALID and READY both 1 before the edge
 read-after-edge race. Responses come back in request order (AXI4-Lite has no IDs) and resolve the
 Pending objects of the requests. The driver has no self-test of its own: axil_props (SVA) and the
 register-model scoreboard of the tests check it together with the DUT.
+
+reset(rst): the test calls it when it asserts the subordinate's reset. Requests not yet answered
+are dropped (Pending.dropped, never done), queued ones discarded, a transfer being presented is
+withdrawn, and the bookkeeping forgets them. Until rst has been seen high and then low on clock
+edges the driver presents nothing and counts no handshake (a transfer on the edge that resets the
+subordinate is void). After that, a response with no request fails ("response without a
+request"), so a stale answer after a reset is caught. test_hft_csr.tc_reset_mid_traffic checks the
+driver's recovery.
 """
 
 import random
@@ -30,6 +38,7 @@ class Pending:
     strb: int = 0xF
     result: tuple[int, int] | None = None  # (rdata or 0, xRESP)
     done: Event = field(default_factory=Event)
+    dropped: bool = False  # the subordinate was reset before it answered (see AxilDriver.reset)
 
     async def wait(self) -> tuple[int, int]:
         await self.done.wait()
@@ -57,6 +66,9 @@ class AxilDriver:
         self.hs_time: dict[str, list[int]] = {ch: [] for ch in ("aw", "w", "b", "ar", "r")}
         self.stalled = {"b": 0, "r": 0}  # cycles with VALID and not READY
         self.max_outstanding = {"w": 0, "r": 0}
+        self.epoch = 0  # incremented by reset(): transfers of an older epoch are withdrawn
+        self.quiet = False  # between reset() and the release of the subordinate's reset
+        self.lost = {"w": 0, "r": 0}  # accepted requests that a reset left without a response
         for ch in ("aw", "w", "ar"):
             self.sig(f"{ch}valid").value = 0
             self._garbage(ch)
@@ -96,6 +108,39 @@ class AxilDriver:
         while self.b_wait or self.r_wait:
             await RisingEdge(self.clk)
 
+    def reset(self, rst) -> None:
+        """The subordinate is being reset (call it when `rst` is driven high): drop every request
+        without a response, discard the queued ones, withdraw the one being presented, and stay
+        quiet until `rst` has been high and then low on clock edges."""
+        self.epoch += 1
+        self.quiet = True
+        cocotb.start_soon(self._wait_release(rst, self.epoch))
+        for q in (self.aw_q, self.w_q, self.ar_q):
+            q.clear()
+        for pend in (*self.b_wait, *self.r_wait):
+            pend.dropped = True
+        # A write with only one of its AW/W handshakes is gone: keep the two lists paired.
+        n = min(len(self.hs_time["aw"]), len(self.hs_time["w"]))
+        del self.hs_time["aw"][n:], self.hs_time["w"][n:]
+        self.lost["w"] = n - len(self.hs_time["b"])
+        self.lost["r"] = len(self.hs_time["ar"]) - len(self.hs_time["r"])
+        self.b_wait.clear()
+        self.r_wait.clear()
+
+    async def _wait_release(self, rst, epoch: int) -> None:
+        seen = False
+        while True:
+            await RisingEdge(self.clk)
+            await ReadOnly()
+            if epoch != self.epoch:  # a newer reset() took over
+                return
+            seen = seen or bool(rst.value)
+            if seen and not rst.value:
+                break
+        await RisingEdge(self.clk)
+        if epoch == self.epoch:
+            self.quiet = False
+
     def write_orders(self) -> list[str]:
         """For each completed write: which of its AW and W handshakes came first."""
         out = []
@@ -120,14 +165,17 @@ class AxilDriver:
         valid, ready = self.sig(f"{ch}valid"), self.sig(f"{ch}ready")
         await RisingEdge(self.clk)
         while True:
-            if not queue:
+            if not queue or self.quiet:
                 self._garbage(ch)
                 await RisingEdge(self.clk)
                 continue
             delay, values = queue.popleft()
+            epoch = self.epoch
             for _ in range(delay):
                 self._garbage(ch)
                 await RisingEdge(self.clk)
+            if epoch != self.epoch:  # reset while it waited: dropped
+                continue
             for name, value in values.items():
                 self.sig(name).value = value
             valid.value = 1
@@ -135,11 +183,12 @@ class AxilDriver:
                 await ReadOnly()
                 accepted = bool(ready.value)
                 await RisingEdge(self.clk)
-                if accepted:
+                if accepted or epoch != self.epoch:
                     break
-            self.hs_time[ch].append(get_sim_time())
             valid.value = 0
             self._garbage(ch)  # the subordinate must have stored the payload (K6/K8)
+            if epoch == self.epoch:
+                self.hs_time[ch].append(get_sim_time())
 
     async def _response(self, ch: str, waiting: deque, ready_p: Callable[[], float], names: tuple[str, ...]) -> None:
         valid, ready = self.sig(f"{ch}valid"), self.sig(f"{ch}ready")
@@ -149,14 +198,17 @@ class AxilDriver:
             await ReadOnly()
             v, r = bool(valid.value), bool(ready.value)
             values = tuple(int(self.sig(n).value) for n in names)
+            epoch = self.epoch
             await RisingEdge(self.clk)
+            if epoch != self.epoch or self.quiet:  # around a reset: void
+                continue
             req = "aw" if ch == "b" else "ar"
-            done = len(self.hs_time[ch])
+            kind = "w" if ch == "b" else "r"
+            done = len(self.hs_time[ch]) + self.lost[kind]
             if ch == "b":
                 accepted = min(len(self.hs_time["aw"]), len(self.hs_time["w"]))
             else:
                 accepted = len(self.hs_time[req])
-            kind = "w" if ch == "b" else "r"
             self.max_outstanding[kind] = max(self.max_outstanding[kind], accepted - done)
             if v and not r:
                 self.stalled[ch] += 1
