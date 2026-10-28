@@ -122,12 +122,20 @@ test *ARGS:
 test-one NAME *ARGS:
     uv run pytest -k '{{ NAME }}' {{ ARGS }}
 
-# Real-data checks (audit/12 S11): download the manifest's Nasdaq ranges into build/itch-real
-# (firmware/tb/data/itch_real.toml, SHA-256 checked; the data never enters the repo) and run them
+# Real-data model check (audit/12 S11): download the manifest's Nasdaq ranges into build/itch-real
+# (firmware/tb/data/itch_real.toml, SHA-256 checked; the data never enters the repo) and check the
+# ITCH and Mold models on them (a few minutes)
 [positional-arguments]
 [unix]
 itch-real *ARGS:
-    uv run pytest -n auto --dist loadgroup -m real --junitxml=build/itch-real-results.xml "$@"
+    uv run pytest -n auto --dist loadgroup -m real --junitxml=build/itch-real-results.xml firmware/tb/real "$@"
+
+# Real data through the RTL: itch_decoder on every message of each range (about 75 min per source)
+# and the system test on its windows
+[positional-arguments]
+[unix]
+itch-real-rtl *ARGS:
+    uv run pytest -n auto --dist loadgroup -m real --junitxml=build/itch-real-rtl-results.xml firmware/tb/unit firmware/tb/system "$@"
 
 # Re-run one test with FST tracing; prints the wave file paths.
 [unix]
@@ -202,10 +210,15 @@ test *ARGS:
 test-one NAME *ARGS:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just test-one '{{ NAME }}' {{ ARGS }}"
 
-# Real-data checks in WSL
+# Real-data model check in WSL
 [windows]
 itch-real *ARGS:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just itch-real {{ ARGS }}"
+
+# Real data through the RTL in WSL
+[windows]
+itch-real-rtl *ARGS:
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just itch-real-rtl {{ ARGS }}"
 
 # Re-run one test with FST tracing in WSL
 [windows]
