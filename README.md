@@ -109,6 +109,36 @@ for the RTL rules.
   - The driver's rule after a reset (restore every register and the whole bitmap) is written down in the core
     README.
   - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
+  - Checked on real Nasdaq data as well (next section).
+
+## Real-data check
+
+The chain is also checked on real Nasdaq TotalView-ITCH 5.0 data: the start of two trading days from Nasdaq's
+public sample files ([emi.nasdaq.com/ITCH](https://emi.nasdaq.com/ITCH/)). Nasdaq publishes them without a license
+to redistribute, so the data is not in this repository. [`firmware/tb/data/itch_real.toml`](firmware/tb/data/itch_real.toml)
+holds only where to get it (URL and byte range of the compressed file), the SHA-256 of that range and the expected
+results. `just itch-real` downloads the ranges straight from Nasdaq into `build/itch-real/`, checks the hashes and
+runs the checks, so anyone gets the same bytes and the same results. CI does the same in every run; the data is
+never cached or uploaded.
+
+| Source (first 128 MiB) | Messages | Until | Types | Model | `itch_decoder` | System test |
+|---|---|---|---|---|---|---|
+| 2019-12-30 | 10 403 622 | 09:32:30 | 17 | pass | every message, pass | 2100 packets (79 816 messages) at the 09:30 open, pass |
+| 2025-12-08 | 10 916 110 | 07:10:27 | 13 | pass | every message, pass | 2100 packets (95 301 messages) at the 04:00 pre-market open, pass |
+
+- **Model** (`just itch-real`, every push): every message is a known type of its specification length; timestamps
+  never go back; every locate was announced once by a Stock Directory message and every stock field matches it;
+  every order reference of an execute, cancel, delete or replace names a live order, and executed or cancelled
+  shares never exceed what is left. The order checks go through the same normalized fields the RTL is compared
+  against. The messages, packed into MoldUDP64 packets, come out of the Mold model unchanged. The counts per type
+  are pinned in the manifest.
+- **RTL** (`just itch-real-rtl`, the manual `itch-real-rtl` workflow, once per phase): `itch_decoder` takes every
+  message of each range at line rate in its real packets, with the symbol filter on and the host subscribing to
+  symbols as their Stock Directory messages pass; every result and event is checked against the model. The system
+  test sends windows of each range through the receiver, `moldudp64_rx` and `itch_decoder` and checks every
+  counter in the snapshot.
+- Not seen in these ranges: broken trade (B), LULD (J), retail interest (N), DLCR (O), MWCB decline (W) and
+  operational halt (h). The synthetic tests cover them.
 
 The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
 phases.

@@ -62,6 +62,8 @@ just test-one reset_sync  # tests matching a name (pytest -k)
 just test-one net_model   # golden-model self-tests only (no simulator, seconds)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths
 just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.log
+just itch-real            # real Nasdaq data: the model check (downloads into build/itch-real, a few minutes)
+just itch-real-rtl        # real Nasdaq data through itch_decoder and the system test (see below)
 ```
 
 `just lint` covers:
@@ -152,6 +154,7 @@ Build outputs go to `build/`:
 | `coverage.py` | `Coverage(name, required_bins)`: `hit(bin)` (an unknown bin fails at once), `check(out_dir)` writes `coverage.json` and fails if a required bin is empty |
 | `axil.py` | `AxilDriver`: AXI4-Lite manager for what cocotbext-axi does not do (W before AW, garbage after each handshake, random `bready`/`rready`, many requests in flight) |
 | `csr_env.py` | `hft_csr_wrap` harness shared by its unit test and the system test: NET and FEED configurations and commits, the `cfg_*` atomicity monitors, resync requests (none lost, merged per transfer), the counter snapshot and its model (feed state included) |
+| `itch_real.py` | Real Nasdaq data: `load()` the manifest, `fetch(src)` the range into `build/itch-real/` (SHA-256 checked, one download per source even with parallel workers), `messages(path)` and `packets(path)` (the MoldUDP64 packing every real-data test uses) |
 
 ### Generated CSR code (F5)
 
@@ -196,6 +199,36 @@ so an unintended shift fails), then `just fmt lint test`.
   entries, back-to-back pairs, gaps) and fails if a required bin stays empty. The MoldUDP64 and ITCH
   `tc_random_golden`, `tc_rx_csr_random`, `tc_feed_random` and `tc_itch_random` have their own gates. The counts are written to
   `coverage.json` in the test's run directory. Bins are not removed to make a test pass.
+
+### Real Nasdaq data (`firmware/tb/data/itch_real.toml`)
+
+The real-data tests (marker `real`) read the start of real trading days from Nasdaq's public TotalView-ITCH 5.0
+samples. The files carry no license to redistribute them, so the data never enters the repository, a CI cache or an
+artifact. The manifest names, per source, the URL, a byte range of the compressed file, the SHA-256 of that range,
+the expected results (`expect`) and the windows of the system test (`system`). `fetch()` downloads the range with an
+HTTP Range request and checks the hash; the file stays in `build/itch-real/` while its hash matches. A hash that does
+not match after a fresh download means the file on the server changed, and the test fails.
+
+- `just test` deselects the marker (`-m 'not real'` in `pyproject.toml`), so it never needs the network.
+- `just itch-real` (`firmware/tb/real/`): the ITCH and Mold models on every message, with order-book consistency
+  checks. About 2.5 minutes on WSL with the data downloaded; CI job `itch-real` on every push (about 2 minutes).
+- `just itch-real-rtl` (`tc_real_itch` of `test_itch_decoder` and `test_rx_csr`): `itch_decoder` on every message
+  of each range at line rate, and the system test on the `system` windows (the whole range would take hours
+  there). On the GitHub runners the four run in parallel: `itch_decoder` takes 25 (arm64) to 42 (x64) minutes per
+  source and the system windows 4 to 9 minutes, so a whole run takes 26 to 43 minutes. On WSL the system windows
+  take 6 to 7 minutes and `itch_decoder` runs at about 2400 messages per second (about 75 minutes per source). Run it once per phase: Actions > itch-real-rtl > Run workflow (a workflow
+  of its own, so pushes do not cancel it).
+
+Adding a source:
+1. `python firmware/tb/common/itch_real.py URL LAST` downloads bytes 0..LAST of the file and prints the `range` and
+   `sha256` lines. The range must start at 0 (the gzip header).
+2. Add a `[[source]]` entry with those lines and `status = "active"`, then run `just itch-real`: the new source
+   fails and prints its measured `[source.expect]`. Check the numbers, then paste them.
+3. Choose the `system` windows (`[first packet, packets]`): the start of the day, then a window at an open.
+
+Retiring a source (its URL is gone or its file changed): set `status = "retired"` and a `note` with the date and the
+reason, and keep the entry with its hash and results as the record; a retired source is never downloaded and its
+tests skip with the note. Then add a new source as above and update the table in the README.
 
 AXI/AXI-Stream drivers come from [cocotbext-axi](https://github.com/alexforencich/cocotbext-axi). It works with
 cocotb 2.1 but emits `DeprecationWarning`s.
