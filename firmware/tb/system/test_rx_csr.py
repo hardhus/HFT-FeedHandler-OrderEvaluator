@@ -708,8 +708,10 @@ RANDOM_BINS = [
 async def tc_rx_csr_random(dut):
     """N_RANDOM frames from the F2 traffic generator (about half rejected) while software commits
     new random configurations (sometimes twice in a row) and takes snapshots (sometimes in bursts).
-    Every frame is checked against the model under the configuration it was sampled with; every
-    snapshot read is exact; coverage gate of audit/10 §2.12 (CDC bins)."""
+    Then, while no snapshot has landed on a stat edge, short frames back to back with a snapshot
+    (coverage independent of the seed). Every frame is checked against the model under the
+    configuration it was sampled with; every snapshot read is exact; coverage gate of audit/10
+    §2.12 (CDC bins)."""
     w, sysm = await start(dut)
     rng = random.Random(random.getrandbits(32))
     cov = Coverage("rx_csr.tc_rx_csr_random", RANDOM_BINS)
@@ -765,15 +767,35 @@ async def tc_rx_csr_random(dut):
         sent += 1
     await sysm.finish()
     await task
+
+    def on_stat_edge() -> bool:
+        events = {t for t, _, _ in w.snap.events}
+        return any(a in events for a in w.snap.accepts)
+
+    async def burst(frames: list) -> None:
+        for t in frames:
+            await sysm.send(t.frame, t.tuser)
+
+    # Top-up: in the random phase a snapshot on a stat edge is chance (about 1.6 % of seeds have
+    # none, e.g. HFT_SEED=1641716438). Short frames back to back put a stat event on every few net
+    # edges, and a snapshot taken meanwhile lands on one within a few rounds; each is checked.
+    for _ in range(200):
+        if on_stat_edge():
+            break
+        short = [t for t in random_traffic(rng, 200, rng.choice(configs)) if len(t.frame) <= 64][:30]
+        frames = cocotb.start_soon(burst(short))
+        await snapshot_checked(w)
+        await frames
+        sent += len(short)
+    await sysm.finish()
     await w.snap.quiet()
     final = await snapshot_checked(w)
-    assert final[0] == N_RANDOM
+    assert final[0] == sent
     for s in sysm.done:
         cov.hit(f"reason_{s.want.reason.name}")
     if sysm.cfg_changed_in_frame:
         cov.hit("cfg_change_in_frame")
-    events = {t for t, _, _ in w.snap.events}
-    if any(a in events for a in w.snap.accepts):
+    if on_stat_edge():
         cov.hit("snapshot_on_stat_edge")
     dut._log.info(f"{len(sysm.done)} frames, {len(w.committed)} commits, {len(w.snap.accepts)} snapshots, "
                   f"{sysm.cfg_changed_in_frame} frames with a cfg change in flight")  # fmt: skip
