@@ -1,0 +1,27 @@
+# Real Nasdaq TotalView-ITCH 5.0 data (audit/12 S11): where to download it, not the data.
+#
+# The files are Nasdaq's public samples (https://emi.nasdaq.com/ITCH/). They carry no license
+# that allows redistribution, so the data never enters this repository, its history, a CI
+# cache or an artifact: firmware/tb/common/itch_real.py downloads the byte range below
+# straight from Nasdaq into build/itch-real/ and checks its SHA-256. Every machine reads the
+# same bytes and gets the same results.
+#
+# range: bytes of the compressed file (HTTP Range, inclusive); its start is the start of the
+#   day's BinaryFile stream (2-byte length + message).
+# status: active (downloaded and checked) or retired (the URL is gone; the entry stays with its
+#   hash and results as the record, `note` says when and why, and is never downloaded).
+# expect: what the model reads in the range (filled from the model run, checked every run).
+
+[[source]]
+name = "nasdaq-2019-12-30-128m"
+url = "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/12302019.NASDAQ_ITCH50.gz"
+range = [0, 134217727]
+sha256 = "b5a1febd13632b119ccc3f766297f3b36f6d78857873635906ade841da5a533c"
+status = "active"
+
+[[source]]
+name = "nasdaq-2025-12-08-128m"
+url = "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/S120825-v50.txt.gz"
+range = [0, 134217727]
+sha256 = "b3a7dba4c7114c6a80af813a048a0e5ebfcad7b69ecb8cfc0bc1b79edfb9d6fd"
+status = "active"
