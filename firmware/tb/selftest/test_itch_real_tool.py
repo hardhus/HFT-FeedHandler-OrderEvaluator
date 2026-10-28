@@ -7,6 +7,8 @@ gzip'd BinaryFile stream built here.
 import gzip
 import hashlib
 import random
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -108,6 +110,28 @@ def test_fetch(tmp_path: Path):
     p.unlink()
     with pytest.raises(RuntimeError, match="changed"):
         fetch(src, tmp_path, lambda s, d: get(s, d, b"other bytes"))
+
+
+def test_fetch_concurrent(tmp_path: Path):
+    """Regression (CI itch-real-rtl, 2026-10-28): the unit and system tests of one source fetched
+    it at once on two workers, both wrote the same temporary file and one rename failed. Two
+    fetches at once: one download, both get the checked file."""
+    data = b"range bytes" * 1000
+    src = source(data)
+    calls = []
+
+    def get(s: Source, dest: Path) -> None:
+        calls.append(s.name)
+        tmp = dest.with_suffix(".tmp")
+        tmp.write_bytes(data[:10])
+        time.sleep(0.3)  # the other fetch arrives while this one downloads
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+
+    with ThreadPoolExecutor(2) as pool:
+        paths = list(pool.map(lambda _: fetch(src, tmp_path, get), range(2)))
+    assert len(calls) == 1
+    assert all(p.read_bytes() == data for p in paths)
 
 
 def test_fetch_retired(tmp_path: Path):

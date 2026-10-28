@@ -115,13 +115,22 @@ def download(src: Source, dest: Path) -> None:
 def fetch(src: Source, build: Path = BUILD, get=download) -> Path:
     """The source's range in the build directory, checked against the manifest hash.
     Downloaded once; a file whose hash does not match is downloaded again, and a fresh
-    download that does not match is an error (the file on the server changed)."""
+    download that does not match is an error (the file on the server changed). Workers that
+    fetch the same source at once (the unit and system tests of one range) take turns on a lock
+    file: the first downloads, the others then find the file and check it."""
+    import fcntl  # here, not at the top: the pinning script also runs on Windows
+
     if src.status == "retired":
         raise Retired(f"{src.name}: retired: {src.note}")
     dest = path_of(src, build)
-    if dest.is_file() and sha256_of(dest) == src.sha256:
-        return dest
-    get(src, dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if not (dest.is_file() and sha256_of(dest) == src.sha256):
+                get(src, dest)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
     got = sha256_of(dest)
     if got != src.sha256:
         raise RuntimeError(f"{src.name}: SHA-256 {got}, the manifest says {src.sha256}: the file at {src.url} "
