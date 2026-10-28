@@ -24,16 +24,16 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache pinned tools
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .tools
           key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools.env') }}
 
       - name: Cache uv
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/uv
           key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock', '.python-version') }}
@@ -48,7 +48,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: itch-real-rtl-${{ matrix.os }}
           path: |
