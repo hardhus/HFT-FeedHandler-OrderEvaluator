@@ -154,13 +154,15 @@ fmt:
       verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "$f"
     done
 
-# Regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl (PeakRDL)
+# Regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl (PeakRDL) and the
+# event descriptor outputs from firmware/formats/event_desc.toml
 [unix]
 gen:
     bash scripts/gen_csr.sh
+    uv run --frozen python scripts/gen_desc.py
 
-# Fail if the committed generated files differ from a fresh `just gen` (edited RDL without
-# gen, or a hand-edited generated file)
+# Fail if the committed generated files differ from a fresh `just gen` (edited RDL or schema
+# without gen, or a hand-edited generated file)
 [script("bash")]
 [unix]
 gen-check:
@@ -168,8 +170,10 @@ gen-check:
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     bash scripts/gen_csr.sh "$tmp"
+    uv run --frozen python scripts/gen_desc.py "$tmp"
+    desc=$(uv run --frozen python scripts/gen_desc.py --list)
     fail=0
-    for d in firmware/rtl/core/gen software/include/gen firmware/rdl/hft_csr.md; do
+    for d in firmware/rtl/core/gen software/include/gen firmware/rdl/hft_csr.md $desc; do
       diff -r "$tmp/$d" "$d" || fail=1
     done
     [ $fail = 0 ] && echo "gen-check: generated files are up to date" || { echo "gen-check: FAILED (run: just gen)"; exit 1; }
@@ -230,7 +234,7 @@ waves NAME:
 fmt:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just fmt"
 
-# Regenerate the CSR outputs in WSL (PeakRDL)
+# Regenerate the CSR and event descriptor outputs in WSL
 [windows]
 gen:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just gen"

@@ -55,7 +55,7 @@ Optional per-machine settings go in `.env.local` (git-ignored). Copy them from [
 ```bash
 just lint                 # Verilator -Wall + Verible lint + format check (blocking)
 just fmt                  # format every file under the lint gate in place (not generated files)
-just gen                  # regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl
+just gen                  # regenerate the CSR outputs (hft_csr.rdl) and the event descriptor outputs (event_desc.toml)
 just gen-check            # fail if a generated file differs from a fresh `just gen` (part of `just ci`)
 just test                 # all cocotb tests, in parallel
 just test-one reset_sync  # tests matching a name (pytest -k)

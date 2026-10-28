@@ -7,3 +7,5 @@
 ../rtl/core/symbol_filter.sv
 ../rtl/core/itch_decoder.sv
 ../rtl/core/itch_stats.sv
+../rtl/core/event_packer.sv
+../rtl/core/event_ring_writer.sv

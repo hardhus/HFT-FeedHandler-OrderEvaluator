@@ -1,0 +1,6 @@
+# Event descriptor schema: the one source of the 128-byte host ring entry.
+# scripts/gen_desc.py (`just gen`) writes the SV package, the C++ header and the Python model from
+# this file; `just gen-check` fails when they differ. The entry kinds and their fields come in S1.
+
+# Format version, carried in bits 3..0 of each line's ctrl byte (1..15).
+version = 1
