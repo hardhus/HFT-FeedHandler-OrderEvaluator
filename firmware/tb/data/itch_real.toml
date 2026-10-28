@@ -13,6 +13,9 @@
 # expect: what the model reads in the range (real/test_itch_real_model.py prints it for a new
 #   source; checked on every run): messages, last timestamp (ns since midnight), Stock Directory
 #   entries, MoldUDP64 packets of at most 1472 B, and messages per type.
+# system: [first packet, packets] windows of the system test (eth -> mold -> itch, CSR counters;
+#   the whole range would take hours there): the start of the day, then a window at an open. The
+#   sequence numbers jump between windows, a gap for the feed.
 
 [[source]]
 name = "nasdaq-2019-12-30-128m"
@@ -20,6 +23,7 @@ url = "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/12302019.NASDAQ_ITCH50.gz"
 range = [0, 134217727]
 sha256 = "b5a1febd13632b119ccc3f766297f3b36f6d78857873635906ade841da5a533c"
 status = "active"
+system = [[0, 100], [157959, 2000]]  # 09:29:59.09-09:30:00.12: the market open, opening crosses (Q)
 
 [source.expect]
 msgs = 10403622
@@ -34,6 +38,7 @@ url = "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/S120825-v50.txt.gz"
 range = [0, 134217727]
 sha256 = "b3a7dba4c7114c6a80af813a048a0e5ebfcad7b69ecb8cfc0bc1b79edfb9d6fd"
 status = "active"
+system = [[0, 100], [5573, 2000]]  # 03:05:13-04:00:11: the pre-market open at 04:00
 
 [source.expect]
 msgs = 10916110

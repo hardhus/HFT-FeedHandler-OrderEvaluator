@@ -16,8 +16,9 @@ sym_req_valid. A reset drops what is in the pipeline: inputs of the reset cycle 
 before.
 """
 
+import os
 import random
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,8 +28,10 @@ from cocotb.triggers import ReadOnly, RisingEdge
 
 from common.clocks import start_clock
 from common.coverage import Coverage
+from common.itch_real import Retired, fetch, load, packets, tally_text
 from common.runner import run_cocotb
 from model.itch import (
+    N_WORDS,
     PRICE4,
     PRICE_MAX,
     SPEC,
@@ -98,6 +101,8 @@ class Dec:
 
     def __init__(self, dut) -> None:
         self.dut = dut
+        self.keep = True  # keep every output in the lists below (off: only the tally, for long runs)
+        self.tally: Counter[Result] = Counter()  # results checked
         self.cycle = 0
         self.sent: deque[Msg] = deque()  # driven, not yet seen on the input by the monitor
         self.sent_pkts: deque[dict] = deque()
@@ -278,19 +283,24 @@ class Dec:
             w = self.out_q.popleft()
             name = w.msg.name or w.msg.data[:1].hex()
             lat = self.cycle - w.cycle
-            self.latencies.append(lat)
+            if self.keep:
+                self.latencies.append(lat)
             assert lat == LATENCY, f"{name}: result {lat} cycles after the input"
             got = Result(C(int(d.m_res_class.value)), Outcome(int(d.m_res_outcome.value)))
             assert got == w.res, f"{name}: result {got}, model {w.res}"
-            self.results.append((w.msg, got))
+            self.tally[got] += 1
+            if self.keep:
+                self.results.append((w.msg, got))
             assert bool(d.m_ev_valid.value) == (w.ev is not None), f"{name}: m_ev_valid {int(d.m_ev_valid.value)}"
             if w.ev is not None:
                 ev = self._event()
                 want = self._want_event(w)
                 for k in want:
                     assert ev[k] == want[k], f"{name}: m_ev_{k} {ev[k]:#x}, model {want[k]:#x}"
-                self.got.append((w.msg, ev))
-            self.order.append((self.cycle, "msg"))
+                if self.keep:
+                    self.got.append((w.msg, ev))
+            if self.keep:
+                self.order.append((self.cycle, "msg"))
         else:
             assert not d.m_ev_valid.value, f"cycle {self.cycle}: m_ev_valid without m_res_valid"
             self._due(self.out_q, "result")
@@ -300,7 +310,8 @@ class Dec:
             assert self.cycle - cyc == LATENCY, f"packet event {self.cycle - cyc} cycles after the input"
             got = {k: int(getattr(d, f"m_pkt_{k}").value) for k in PKT_PORTS}
             assert got == p, f"packet event {got}, sent {p}"
-            self.order.append((self.cycle, "pkt"))
+            if self.keep:
+                self.order.append((self.cycle, "pkt"))
         else:
             self._due(self.pkt_q, "packet event")
         if d.sym_rsp_valid.value:
@@ -882,12 +893,65 @@ async def tc_line_rate(dut):
     assert {r.outcome for _, r in res} == {Outcome.OUT, Outcome.FILTERED}
 
 
+WATCH = (b"AAPL", b"MSFT", b"AMZN", b"NVDA", b"TSLA", b"GOOGL", b"META", b"QQQ", b"SPY")
+
+
+@cocotb.test(timeout_time=1000, timeout_unit="ms")
+async def tc_real_itch(dut):
+    """Real Nasdaq data (audit/12 S11; the pytest entry downloads the range, ITCH_REAL): every
+    message of the range at line rate (one per cycle), in its MoldUDP64 packet with the
+    sequence numbers of the feed, each packet event with the next packet's first message. Every
+    class but ADMIN through the symbol filter (the host learns locates from the Stock Directory
+    events): every fourth locate subscribed from the start, and the watch list subscribed the
+    way the host does it, a bitmap write when its Stock Directory message passes, while the
+    traffic goes on. Every result and event exactly against the
+    model (Dec); only the tally is kept."""
+    path, n_want = Path(os.environ["ITCH_REAL"]), int(os.environ["ITCH_REAL_MSGS"])
+    dec = await start(dut)
+    dec.keep = False
+    await dec.wait_sweep()
+    for w in range(N_WORDS):
+        await dec.write(w, 0x11111111)  # locates 0 mod 4
+    dec.class_filter = ALL_EN & ~(1 << C.ADMIN)
+    todo: deque[int] = deque()  # watch-list locates to subscribe
+    watched = 0
+    seq, pkt_due, sent = 1, None, 0
+    for batch in packets(path):
+        sof_ts = random.getrandbits(64)
+        for i, data in enumerate(batch):
+            if data[0] == ord("R") and data[11:19].rstrip() in WATCH:
+                todo.append(int.from_bytes(data[1:3], "big"))
+            if dec.pending is None and todo:
+                loc = todo.popleft()
+                dec.issue(Cmd(True, loc >> 5, dec.bm.read(loc >> 5) | 1 << (loc & 31)))
+                watched += 1
+            pkt = pkt_due if i == 0 else None
+            await dec.step(Msg(data, seq + i, sof_ts, f"#{sent + i}"), pkt=pkt)
+        pkt_due = {"status": MoldStatus.OK.value, "seq": seq, "count": len(batch), "gap": 0, "msgs": len(batch),
+                   "dup_msgs": 0, "oversize": 0, "synced_now": int(seq == 1)}  # fmt: skip
+        seq += len(batch)
+        sent += len(batch)
+    await dec.step(pkt=pkt_due)
+    while todo:
+        await dec.write(todo[0] >> 5, dec.bm.read(todo[0] >> 5) | 1 << (todo.popleft() & 31))
+        watched += 1
+    await dec.finish()
+    n = sum(dec.tally.values())
+    dut._log.info(f"{path.name}: {n} messages, {watched} watch-list writes, results {tally_text(dec.tally)}")
+    assert n == sent == n_want, f"{n} results, {sent} sent, the manifest says {n_want}"
+    assert watched >= 5, f"only {watched} watch-list symbols in the directory"
+    assert {r.outcome for r in dec.tally} >= {Outcome.OUT, Outcome.FILTERED}
+
+
 # The long tests run as their own pytest entries (parallel workers, one shared build).
 LONG_TESTS = ("tc_random_golden", "tc_line_rate")
 
 
+REAL_TESTS = ("tc_real_itch",)  # marker real: needs the downloaded data
+
+
 def directed_tests() -> list[str]:
-    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS]
+    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS + REAL_TESTS]
 
 
 @pytest.mark.parametrize("group", ["directed", *LONG_TESTS])
@@ -898,4 +962,21 @@ def test_itch_decoder(group):
         test_module="test_itch_decoder",
         testcase=directed_tests() if group == "directed" else group,
         extra_env={"GROUP": group},
+    )
+
+
+@pytest.mark.real
+@pytest.mark.parametrize("name", load())
+def test_itch_decoder_real(name):
+    src = load()[name]
+    try:
+        path = fetch(src)
+    except Retired as e:
+        pytest.skip(str(e))
+    run_cocotb(
+        toplevel="itch_decoder",
+        filelists=["common.f", "core.f"],
+        test_module="test_itch_decoder",
+        testcase="tc_real_itch",
+        extra_env={"GROUP": "tc_real_itch", "ITCH_REAL": path, "ITCH_REAL_MSGS": src.expect["msgs"]},
     )

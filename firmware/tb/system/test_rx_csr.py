@@ -32,8 +32,10 @@ Clocks: the RATIO profile is (net period, host period), as in test_hft_csr_wrap.
 source (rst_in) goes through one reset_sync per domain.
 """
 
+import json
+import os
 import random
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -58,10 +60,11 @@ from common.csr_env import (
     read_cfg,
     read_feed_cfg,
 )
+from common.itch_real import Retired, fetch, load, packets, tally_text
 from common.runner import run_cocotb
 from model import mold
 from model.csr import OKAY
-from model.itch import Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
+from model.itch import N_WORDS, Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
 from model.itch import expect as itch_expect
 from model.mold import ACCEPTED, HDR_LEN, MAX_MSG, SEQ_MOD, FeedConfig, FeedState, MoldResult, MoldStatus
 from model.net import (
@@ -173,6 +176,8 @@ class System:
 
     def __init__(self, dut, w: Wrap):
         self.dut, self.w, self.root, self.mold = dut, w, dut.u_wrap, dut.u_mold
+        self.keep = True  # keep every outcome in the lists below (off: only the tally, for long runs)
+        self.itch_tally: Counter[Result] = Counter()  # ITCH results checked
         self.queue: deque[Sent] = deque()  # sent, outcome not seen yet
         self.stat_q: deque[Sent] = deque()
         self.pay_q: deque[Sent] = deque()
@@ -286,7 +291,8 @@ class System:
         assert s.want is not None, f"{s.name}: stat event before its stage A beat"
         got = (int(self.root.stat_reason.value), int(self.root.stat_bytes.value))
         assert got == (s.want.reason, s.want.nbytes), f"{s.name}: stat {got}, model ({s.want.reason.name}, {s.want.nbytes})"
-        self.done.append(s)
+        if self.keep:
+            self.done.append(s)
 
     def _payload_beat(self) -> None:
         d = self.dut
@@ -392,9 +398,10 @@ class System:
             hdr = (int.from_bytes(payload[10:18], "big"), int.from_bytes(payload[18:20], "big"))
             assert (int(d.m_pkt_seq.value), int(d.m_pkt_count.value)) == hdr, f"{name}: header seq/count"
         assert self.cycle - p.tlast == PKT_LATENCY, f"{name}: packet event {self.cycle - p.tlast} cycles after tlast"
-        if w.status in ACCEPTED:
-            self.accepted_msgs += w.msgs
-        self.mold_done.append(p)
+        if self.keep:
+            if w.status in ACCEPTED:
+                self.accepted_msgs += w.msgs
+            self.mold_done.append(p)
         self.fwd_q.append((self.cycle, {k: int(getattr(d, f"m_pkt_{k}").value) for k in FWD_PORTS}))
 
     # ---- itch_decoder: the chain model
@@ -418,8 +425,11 @@ class System:
                 }  # fmt: skip
                 diff = {k: (event[k], want[k]) for k in want if event[k] != want[k]}
                 assert not diff, f"{name}: seq {seq}: event (DUT, model) differ: {diff}"
-                self.itch_events.append((name, event))
-            self.itch_results.append((name, got))
+                if self.keep:
+                    self.itch_events.append((name, event))
+            self.itch_tally[got] += 1
+            if self.keep:
+                self.itch_results.append((name, got))
         else:
             assert not d.m_ev_valid.value, f"cycle {self.cycle}: m_ev_valid without m_res_valid"
             assert not self.itch_q or self.cycle - self.itch_q[0][0] < ITCH_LATENCY, (
@@ -1110,12 +1120,55 @@ async def tc_itch_random(dut):
     cov.check(Path.cwd())  # the run directory
 
 
+@cocotb.test(timeout_time=200, timeout_unit="ms")
+async def tc_real_itch(dut):
+    """Real Nasdaq data (audit/12 S11; the pytest entry downloads the range, ITCH_REAL): the
+    manifest's packet windows of the range (ITCH_REAL_WINDOWS: the start of the day, then an
+    open), each packet in its UDP frame on a feed line with the feed's sequence numbers (the jump
+    between windows is a gap), back to back. FEED with every class enabled and every class but
+    ADMIN filtered (the host learns locates from the Stock Directory events), every fourth locate
+    subscribed. Every frame, packet, message, result and event by the chain model; at the end the
+    counters against what was sent and the tally, with both identities."""
+    path, windows = Path(os.environ["ITCH_REAL"]), json.loads(os.environ["ITCH_REAL_WINDOWS"])
+    w, sysm = await start(dut)
+    sysm.keep = False
+    C, all_en = ItchClass, (1 << N_CLASS) - 1
+    await configure(w, NET_FEED)
+    await configure_feed(w, replace(FEED_ON, class_en=all_en, class_filter=all_en & ~bit(C.ADMIN)))
+    for word in range(N_WORDS):
+        assert await w.drv.write(SYMBOL.addr + 4 * word, 0x11111111) == OKAY  # locates 0 mod 4
+    seq, msgs, pkts, skipped = 1, 0, 0, 0
+    for i, batch in enumerate(packets(path)):
+        if any(a <= i < a + n for a, n in windows):
+            await sysm.send(feed_frame(mold.pack(SESSION, seq, batch), 0), name=f"packet {i}")
+            msgs += len(batch)
+            pkts += 1
+        elif i >= windows[-1][0] + windows[-1][1]:
+            break
+        elif msgs:
+            skipped += len(batch)  # a gap for the feed
+        seq += len(batch)
+    await sysm.finish()
+    v = named(await snapshot_checked(w))
+    dut._log.info(f"{path.name}: {pkts} packets, {msgs} messages, gap {skipped}, results {tally_text(sysm.itch_tally)}")
+    assert (v["MOLD_OK"], v["MOLD_MSGS"], v["MOLD_GAP_MSGS"]) == (pkts, msgs, skipped)
+    for c in C:
+        assert v[f"ITCH_{c.name}"] == sum(k for r, k in sysm.itch_tally.items() if r.cls == c), c.name
+    for o in Outcome:
+        assert v[f"ITCH_{o.name}"] == sum(k for r, k in sysm.itch_tally.items() if r.outcome == o), o.name
+    assert v["ITCH_OUT"] and v["ITCH_FILTERED"]
+    w.feed.check_done()
+
+
 # The long tests run as their own pytest entries.
 LONG_TESTS = ("tc_rx_csr_random", "tc_feed_random", "tc_itch_random")
 
 
+REAL_TESTS = ("tc_real_itch",)  # marker real: needs the downloaded data
+
+
 def directed_tests() -> list[str]:
-    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS]
+    return [name for name in globals() if name.startswith("tc_") and name not in LONG_TESTS + REAL_TESTS]
 
 
 # Clock profiles: (net period, host period); jitter = the CDC jitter model in the build.
@@ -1135,4 +1188,22 @@ def test_rx_csr(group, jit, ratio):
         defines={"HFT_SIM_CDC_JITTER": 1} if jit else {},
         testcase=directed_tests() if group == "directed" else group,
         extra_env={"GROUP": group, "JITTER": jit, "RATIO": ratio},
+    )
+
+
+@pytest.mark.real
+@pytest.mark.parametrize("name", load())
+def test_rx_csr_real(name):
+    src = load()[name]
+    try:
+        path = fetch(src)
+    except Retired as e:
+        pytest.skip(str(e))
+    run_cocotb(
+        toplevel="rx_csr_top",
+        filelists=["common.f", "core.f", "csr.f", "system.f"],
+        test_module="test_rx_csr",
+        testcase="tc_real_itch",
+        extra_env={"GROUP": "tc_real_itch", "JITTER": 0, "RATIO": "net2host", "ITCH_REAL": path,
+                   "ITCH_REAL_WINDOWS": json.dumps(src.system)},  # fmt: skip
     )

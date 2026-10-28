@@ -22,9 +22,13 @@ import sys
 import tomllib
 import urllib.request
 import zlib
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from model.itch import Result
+from model.mold import HDR_LEN, UDP_PAYLOAD_MAX
 
 REPO = Path(__file__).resolve().parents[3]
 MANIFEST = REPO / "firmware" / "tb" / "data" / "itch_real.toml"
@@ -43,6 +47,7 @@ class Source:
     status: str
     note: str = ""
     expect: dict = field(default_factory=dict)
+    system: tuple[tuple[int, int], ...] = ()  # (first packet, packets) windows of the system test
 
     @property
     def size(self) -> int:
@@ -59,8 +64,9 @@ def load(path: Path = MANIFEST) -> dict[str, Source]:
     out: dict[str, Source] = {}
     for s in doc["source"]:
         first, last = s["range"]
+        system = tuple((a, n) for a, n in s.get("system", []))
         src = Source(s["name"], s["url"], first, last, s["sha256"].lower(), s["status"], s.get("note", ""),
-                     s.get("expect", {}))  # fmt: skip
+                     s.get("expect", {}), system)  # fmt: skip
         if src.name in out:
             raise ValueError(f"{path.name}: source {src.name} twice")
         if src.status not in STATUSES:
@@ -69,6 +75,9 @@ def load(path: Path = MANIFEST) -> dict[str, Source]:
             raise ValueError(f"{src.name}: range {first}..{last}")
         if len(src.sha256) != 64 or any(c not in "0123456789abcdef" for c in src.sha256):
             raise ValueError(f"{src.name}: sha256 {src.sha256!r} is not a SHA-256")
+        ends = [a + n for a, n in system]
+        if any(n <= 0 for _, n in system) or any(a < e for (a, _), e in zip(system[1:], ends)):
+            raise ValueError(f"{src.name}: system windows {system} empty, overlapping or out of order")
         if src.status == "retired" and not src.note:
             raise ValueError(f"{src.name}: a retired source needs a note (when and why)")
         out[src.name] = src
@@ -135,6 +144,27 @@ def messages(path: Path) -> Iterator[bytes]:
                 yield bytes(buf[i + 2 : i + 2 + n])
                 i += 2 + n
             del buf[:i]
+
+
+def packets(path: Path) -> Iterator[list[bytes]]:
+    """The messages in MoldUDP64 packets of at most UDP_PAYLOAD_MAX bytes, filled in order (the
+    packing every real-data test uses, so packet n is the same packet everywhere)."""
+    batch: list[bytes] = []
+    size = 0
+    for msg in messages(path):
+        if size + 2 + len(msg) > UDP_PAYLOAD_MAX - HDR_LEN:
+            yield batch
+            batch, size = [], 0
+        batch.append(msg)
+        size += 2 + len(msg)
+    if batch:
+        yield batch
+
+
+def tally_text(tally: Counter[Result]) -> str:
+    """Results per class and outcome, for the log of a real-data run."""
+    items = sorted(tally.items(), key=lambda x: (x[0].cls, x[0].outcome))
+    return ", ".join(f"{r.cls.name}/{r.outcome.name} {k}" for r, k in items)
 
 
 if __name__ == "__main__":
