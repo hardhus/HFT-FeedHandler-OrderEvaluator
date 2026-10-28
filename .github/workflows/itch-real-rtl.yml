@@ -1,0 +1,57 @@
+# Real Nasdaq ITCH data through the RTL (audit/12 S11): itch_decoder on every message of each
+# manifest range and the system test on its windows (about 40 min on the hosted runners). Manual
+# runs only, once per phase: Actions > itch-real-rtl > Run workflow. The data is downloaded from
+# Nasdaq in each run and never cached or uploaded; only the test results are.
+#
+# A workflow of its own, so a long run neither cancels nor is cancelled by the push runs of ci.yml
+# (its own concurrency group, never cancelled in progress).
+name: itch-real-rtl
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: itch-real-rtl-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  itch-real-rtl:
+    name: itch-real-rtl (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pinned tools
+        uses: actions/cache@v4
+        with:
+          path: .tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools.env') }}
+
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock', '.python-version') }}
+
+      - name: Bootstrap
+        run: ./scripts/bootstrap.sh
+
+      - name: just itch-real-rtl
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          just itch-real-rtl
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: itch-real-rtl-${{ matrix.os }}
+          path: |
+            build/itch-real-rtl-results.xml
+            build/sim/*/run_*/results.xml
+          if-no-files-found: ignore
