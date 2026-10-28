@@ -30,13 +30,14 @@ def source(data: bytes, status: str = "active", note: str = "") -> Source:
 
 
 def test_manifest():
-    """The committed manifest loads, and every source names a Nasdaq file and a range that
-    starts at the stream's start (messages() needs the gzip header)."""
+    """The committed manifest loads, every source names a Nasdaq file and a range that starts at
+    the stream's start (messages() needs the gzip header) and has its expected results."""
     sources = load()
-    assert sources
+    assert any(src.status == "active" for src in sources.values())
     for src in sources.values():
         assert src.url.startswith("https://emi.nasdaq.com/ITCH/"), src.name
         assert src.first == 0, src.name
+        assert set(src.expect) == {"msgs", "last_timestamp", "directory", "packets", "types"}, src.name
 
 
 @pytest.mark.parametrize(

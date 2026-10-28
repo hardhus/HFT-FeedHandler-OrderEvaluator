@@ -25,4 +25,5 @@ package = false
 testpaths = ["firmware/tb"]
 pythonpath = ["firmware/tb"]
 python_files = ["test_*.py"]
-addopts = "-ra --junitxml=build/test-results.xml"
+# Real-data tests (marker `real`) need the network: only `-m real` (just itch-real) selects them.
+addopts = "-ra --junitxml=build/test-results.xml -m 'not real'"

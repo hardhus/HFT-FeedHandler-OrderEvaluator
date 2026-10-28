@@ -10,7 +10,9 @@
 #   day's BinaryFile stream (2-byte length + message).
 # status: active (downloaded and checked) or retired (the URL is gone; the entry stays with its
 #   hash and results as the record, `note` says when and why, and is never downloaded).
-# expect: what the model reads in the range (filled from the model run, checked every run).
+# expect: what the model reads in the range (real/test_itch_real_model.py prints it for a new
+#   source; checked on every run): messages, last timestamp (ns since midnight), Stock Directory
+#   entries, MoldUDP64 packets of at most 1472 B, and messages per type.
 
 [[source]]
 name = "nasdaq-2019-12-30-128m"
@@ -19,9 +21,23 @@ range = [0, 134217727]
 sha256 = "b5a1febd13632b119ccc3f766297f3b36f6d78857873635906ade841da5a533c"
 status = "active"
 
+[source.expect]
+msgs = 10403622
+last_timestamp = 34350946648366  # 09:32:30.946648366
+directory = 8906
+packets = 245847
+types = { A = 3907742, C = 2072, D = 3002773, E = 87571, F = 785665, H = 8901, I = 1073085, K = 3, L = 215089, P = 22773, Q = 8906, R = 8906, S = 3, U = 729719, V = 1, X = 541503, Y = 8910 }
+
 [[source]]
 name = "nasdaq-2025-12-08-128m"
 url = "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/S120825-v50.txt.gz"
 range = [0, 134217727]
 sha256 = "b3a7dba4c7114c6a80af813a048a0e5ebfcad7b69ecb8cfc0bc1b79edfb9d6fd"
 status = "active"
+
+[source.expect]
+msgs = 10916110
+last_timestamp = 25826997243540  # 07:10:26.997243540
+directory = 12102
+packets = 227957
+types = { A = 4908580, D = 4602360, E = 131823, F = 6, H = 12097, L = 271239, P = 99173, R = 12102, S = 2, U = 409020, V = 1, X = 457614, Y = 12093 }

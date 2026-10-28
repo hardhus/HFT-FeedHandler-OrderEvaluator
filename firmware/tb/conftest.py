@@ -16,6 +16,7 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "xdist_group(name): run on the same pytest-xdist worker")
+    config.addinivalue_line("markers", "real: real Nasdaq data, downloaded (`just itch-real`; not in `just test`)")
 
 
 @pytest.hookimpl(tryfirst=True)  # before pytest-xdist reads the xdist_group markers
