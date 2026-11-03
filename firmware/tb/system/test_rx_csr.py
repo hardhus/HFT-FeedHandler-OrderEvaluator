@@ -90,7 +90,7 @@ ITCH_LATENCY = 2  # itch_decoder: message / packet event -> result, event / forw
 N_CLASS = len(ItchClass)
 EV_PORTS = ("order_ref", "new_ref", "shares", "price", "match", "side", "stock", "attribution", "printable",
             "cross_type")  # fmt: skip
-FWD_PORTS = ("status", "seq", "count", "gap", "msgs", "dup_msgs", "oversize", "synced_now")
+FWD_PORTS = ("status", "seq", "count", "gap", "msgs", "dup_msgs", "oversize", "synced_now", "sof_ts")
 
 # Hand-written: DROP_<reason>.LO at 0x0420 + 8 * (reason - 1), and the two totals.
 RX_PKTS_LO, RX_BYTES_LO = 0x0410, 0x0418
@@ -398,6 +398,9 @@ class System:
             hdr = (int.from_bytes(payload[10:18], "big"), int.from_bytes(payload[18:20], "big"))
             assert (int(d.m_pkt_seq.value), int(d.m_pkt_count.value)) == hdr, f"{name}: header seq/count"
         assert self.cycle - p.tlast == PKT_LATENCY, f"{name}: packet event {self.cycle - p.tlast} cycles after tlast"
+        assert int(d.m_pkt_sof_ts.value) == p.ts, f"{name}: m_pkt_sof_ts is not its packet's"
+        ctx = int(d.m_pkt_ctx.value)
+        assert ctx == p.itch.class_filter << N_CLASS | p.itch.class_en, f"{name}: m_pkt_ctx {ctx:#x}"
         if self.keep:
             if w.status in ACCEPTED:
                 self.accepted_msgs += w.msgs

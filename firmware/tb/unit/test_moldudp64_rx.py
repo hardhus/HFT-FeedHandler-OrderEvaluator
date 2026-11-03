@@ -379,6 +379,9 @@ class Mold:
         want = (w.gap, len(w.msgs), w.dup_msgs, w.oversize)
         assert got == want, f"{p.name}: (gap, msgs, dup, oversize) {got}, model {want}"
         assert bool(self.p_synced_now.value) == w.synced_now, f"{p.name}: synced_now {int(self.p_synced_now.value)}"
+        assert int(self.dut.m_pkt_sof_ts.value) == p.ts, f"{p.name}: m_pkt_sof_ts is not its packet's"
+        ctx = int(self.dut.m_pkt_ctx.value)
+        assert ctx == p.ctx, f"{p.name}: m_pkt_ctx {ctx:#x}, its packet's first beat {p.ctx:#x}"
         if len(p.payload) >= HDR_LEN:
             hdr = (int.from_bytes(p.payload[10:18], "big"), int.from_bytes(p.payload[18:20], "big"))
             assert (int(self.p_seq.value), int(self.p_count.value)) == hdr, f"{p.name}: header seq/count"

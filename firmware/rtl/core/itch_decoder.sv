@@ -11,6 +11,7 @@
 //                decoded). Fields that do not apply are 0. Values are not validated.
 // Header       : stock locate, tracking number, timestamp for messages of >= ITCH_HDR_LEN bytes,
 //                in every class; 0 for shorter ones
+// Epoch        : s_msg_epoch and s_pkt_epoch pass to m_ev_epoch and m_pkt_epoch, like sof_ts
 // Config       : s_msg_class_en/s_msg_class_filter come with each message: moldudp64_rx samples
 //                them (cfg_msg_ctx) on the packet's first beat, so a FEED commit applies to whole
 //                packets
@@ -31,19 +32,22 @@ module itch_decoder
     input logic [MOLD_MSG_LEN_W-1:0] s_msg_len,
     input logic [              63:0] s_msg_seq,
     input logic [              63:0] s_msg_sof_ts,
-    input logic [  ITCH_N_CLASS-1:0] s_msg_class_en,     // bit c: class c is output, else MASKED
-    input logic [  ITCH_N_CLASS-1:0] s_msg_class_filter, // bit c: class c goes through the bitmap
+    input logic [  ITCH_N_CLASS-1:0] s_msg_class_en,      // bit c: class c is output, else MASKED
+    input logic [  ITCH_N_CLASS-1:0] s_msg_class_filter,  // bit c: class c goes through the bitmap
+    input logic [   CFG_EPOCH_W-1:0] s_msg_epoch,
 
     // Packet events (moldudp64_rx), passed through with the messages' latency
-    input logic                s_pkt_valid,
-    input mold_status_e        s_pkt_status,
-    input logic         [63:0] s_pkt_seq,
-    input logic         [15:0] s_pkt_count,
-    input logic         [63:0] s_pkt_gap,
-    input logic         [15:0] s_pkt_msgs,
-    input logic         [15:0] s_pkt_dup_msgs,
-    input logic         [15:0] s_pkt_oversize,
-    input logic                s_pkt_synced_now,
+    input logic                           s_pkt_valid,
+    input mold_status_e                   s_pkt_status,
+    input logic         [           63:0] s_pkt_seq,
+    input logic         [           15:0] s_pkt_count,
+    input logic         [           63:0] s_pkt_gap,
+    input logic         [           15:0] s_pkt_msgs,
+    input logic         [           15:0] s_pkt_dup_msgs,
+    input logic         [           15:0] s_pkt_oversize,
+    input logic                           s_pkt_synced_now,
+    input logic         [           63:0] s_pkt_sof_ts,
+    input logic         [CFG_EPOCH_W-1:0] s_pkt_epoch,
 
     // Symbol bitmap commands (hft_csr_wrap): bit i of word w = locate 32w + i
     input  logic        sym_req_valid,
@@ -64,6 +68,7 @@ module itch_decoder
     output logic        [MOLD_MSG_LEN_W-1:0] m_ev_len,
     output logic        [              63:0] m_ev_seq,
     output logic        [              63:0] m_ev_sof_ts,
+    output logic        [   CFG_EPOCH_W-1:0] m_ev_epoch,
     output logic        [              15:0] m_ev_locate,
     output logic        [              15:0] m_ev_tracking,
     output logic        [              47:0] m_ev_ts,
@@ -85,15 +90,17 @@ module itch_decoder
     output itch_outcome_e m_res_outcome,
 
     // Packet events, after the events of their messages
-    output logic                m_pkt_valid,
-    output mold_status_e        m_pkt_status,
-    output logic         [63:0] m_pkt_seq,
-    output logic         [15:0] m_pkt_count,
-    output logic         [63:0] m_pkt_gap,
-    output logic         [15:0] m_pkt_msgs,
-    output logic         [15:0] m_pkt_dup_msgs,
-    output logic         [15:0] m_pkt_oversize,
-    output logic                m_pkt_synced_now
+    output logic                           m_pkt_valid,
+    output mold_status_e                   m_pkt_status,
+    output logic         [           63:0] m_pkt_seq,
+    output logic         [           15:0] m_pkt_count,
+    output logic         [           63:0] m_pkt_gap,
+    output logic         [           15:0] m_pkt_msgs,
+    output logic         [           15:0] m_pkt_dup_msgs,
+    output logic         [           15:0] m_pkt_oversize,
+    output logic                           m_pkt_synced_now,
+    output logic         [           63:0] m_pkt_sof_ts,
+    output logic         [CFG_EPOCH_W-1:0] m_pkt_epoch
 );
   // ===================== Stage 0 -> 1: class, length check =====================
   logic [7:0] typ;
@@ -214,6 +221,7 @@ module itch_decoder
   logic        [MOLD_MSG_LEN_W-1:0] len1_q;
   logic        [8*MOLD_MAX_MSG-1:0] vec1_q;
   logic [63:0] seq1_q, sof_ts1_q;
+  logic [CFG_EPOCH_W-1:0] epoch1_q;
 
   always_ff @(posedge clk) begin
     v1_q      <= rst ? 1'b0 : s_msg_valid;
@@ -227,6 +235,7 @@ module itch_decoder
     vec1_q    <= s_msg_data;
     seq1_q    <= s_msg_seq;
     sof_ts1_q <= s_msg_sof_ts;
+    epoch1_q  <= s_msg_epoch;
   end
 
   logic lk_hit;
@@ -340,6 +349,7 @@ module itch_decoder
     m_ev_len         <= len1_q;
     m_ev_seq         <= seq1_q;
     m_ev_sof_ts      <= sof_ts1_q;
+    m_ev_epoch       <= epoch1_q;
     m_ev_locate      <= hdr1_q ? 16'(msg_be(vec1_q, 1, 2)) : '0;
     m_ev_tracking    <= hdr1_q ? 16'(msg_be(vec1_q, 3, 2)) : '0;
     m_ev_ts          <= hdr1_q ? 48'(msg_be(vec1_q, 5, 6)) : '0;
@@ -361,7 +371,9 @@ module itch_decoder
   mold_status_e p1_status_q;
   logic [63:0] p1_seq_q, p1_gap_q;
   logic [15:0] p1_count_q, p1_msgs_q, p1_dup_q, p1_over_q;
-  logic p1_synced_now_q;
+  logic                   p1_synced_now_q;
+  logic [           63:0] p1_sof_ts_q;
+  logic [CFG_EPOCH_W-1:0] p1_epoch_q;
 
   always_ff @(posedge clk) begin
     p1_valid_q       <= rst ? 1'b0 : s_pkt_valid;
@@ -373,6 +385,8 @@ module itch_decoder
     p1_dup_q         <= s_pkt_dup_msgs;
     p1_over_q        <= s_pkt_oversize;
     p1_synced_now_q  <= s_pkt_synced_now;
+    p1_sof_ts_q      <= s_pkt_sof_ts;
+    p1_epoch_q       <= s_pkt_epoch;
     m_pkt_valid      <= rst ? 1'b0 : p1_valid_q;
     m_pkt_status     <= p1_status_q;
     m_pkt_seq        <= p1_seq_q;
@@ -382,5 +396,7 @@ module itch_decoder
     m_pkt_dup_msgs   <= p1_dup_q;
     m_pkt_oversize   <= p1_over_q;
     m_pkt_synced_now <= p1_synced_now_q;
+    m_pkt_sof_ts     <= p1_sof_ts_q;
+    m_pkt_epoch      <= p1_epoch_q;
   end
 endmodule

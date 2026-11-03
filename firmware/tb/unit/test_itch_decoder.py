@@ -58,9 +58,9 @@ ALL_EN = (1 << len(ItchClass)) - 1
 C = ItchClass
 EV_PORTS = ("order_ref", "new_ref", "shares", "price", "match", "side", "stock", "attribution", "printable",
             "cross_type")  # fmt: skip
-PKT_PORTS = ("status", "seq", "count", "gap", "msgs", "dup_msgs", "oversize", "synced_now")
+PKT_PORTS = ("status", "seq", "count", "gap", "msgs", "dup_msgs", "oversize", "synced_now", "sof_ts", "epoch")
 PKT_WIDTHS = {"status": 4, "seq": 64, "count": 16, "gap": 64, "msgs": 16, "dup_msgs": 16, "oversize": 16,
-              "synced_now": 1}  # fmt: skip
+              "synced_now": 1, "sof_ts": 64, "epoch": 8}  # fmt: skip
 
 
 @dataclass
@@ -69,6 +69,7 @@ class Msg:
     seq: int = field(default_factory=lambda: random.getrandbits(64))
     sof_ts: int = field(default_factory=lambda: random.getrandbits(64))
     name: str = ""
+    epoch: int = field(default_factory=lambda: random.getrandbits(8))
 
 
 @dataclass
@@ -129,6 +130,7 @@ class Dec:
         d.s_msg_len.value = random.getrandbits(7)
         d.s_msg_seq.value = random.getrandbits(64)
         d.s_msg_sof_ts.value = random.getrandbits(64)
+        d.s_msg_epoch.value = random.getrandbits(8)
         d.s_msg_class_en.value = random.getrandbits(len(ItchClass))
         d.s_msg_class_filter.value = random.getrandbits(len(ItchClass))
         d.sym_req_valid.value = 0
@@ -162,10 +164,12 @@ class Dec:
             d.s_msg_len.value = len(msg.data)
             d.s_msg_seq.value = msg.seq
             d.s_msg_sof_ts.value = msg.sof_ts
+            d.s_msg_epoch.value = msg.epoch
             d.s_msg_class_en.value = self.class_en
             d.s_msg_class_filter.value = self.class_filter
             self.sent.append(msg)
         if pkt is not None:
+            pkt = {"sof_ts": random.getrandbits(64), "epoch": random.getrandbits(8), **pkt}
             d.s_pkt_valid.value = 1
             for k in PKT_PORTS:
                 getattr(d, f"s_pkt_{k}").value = pkt[k]
@@ -330,7 +334,8 @@ class Dec:
         ev = {k: int(getattr(d, f"m_ev_{k}").value) for k in EV_PORTS}
         ev |= {
             "class": int(d.m_ev_class.value), "type": int(d.m_ev_type.value), "len": int(d.m_ev_len.value),
-            "seq": int(d.m_ev_seq.value), "sof_ts": int(d.m_ev_sof_ts.value), "locate": int(d.m_ev_locate.value),
+            "seq": int(d.m_ev_seq.value), "sof_ts": int(d.m_ev_sof_ts.value), "epoch": int(d.m_ev_epoch.value),
+            "locate": int(d.m_ev_locate.value),
             "tracking": int(d.m_ev_tracking.value), "ts": int(d.m_ev_ts.value), "raw": int(d.m_ev_raw.value),
         }  # fmt: skip
         return ev
@@ -341,6 +346,7 @@ class Dec:
         want = {k: getattr(e, k) for k in EV_PORTS}
         want |= {
             "class": e.cls.value, "type": e.type, "len": e.length, "seq": w.msg.seq, "sof_ts": w.msg.sof_ts,
+            "epoch": w.msg.epoch,
             "locate": e.locate, "tracking": e.tracking, "ts": e.timestamp,
             "raw": int.from_bytes(e.raw.ljust(MAX_MSG, b"\x00"), "little"),
         }  # fmt: skip

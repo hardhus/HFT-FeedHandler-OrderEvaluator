@@ -191,6 +191,7 @@ MoldUDP64 in brief (all fields big-endian):
 | `m_pkt_msgs` | 16 | Messages output for this packet (in every status) |
 | `m_pkt_dup_msgs`, `m_pkt_oversize` | 16, 16 | Messages below the expected `seq`; messages longer than 64 B. Both 0 unless the status is `OK`, `HEARTBEAT`, `EOS` or `DUP` |
 | `m_pkt_synced_now` | 1 | This packet synchronized the feed |
+| `m_pkt_sof_ts`, `m_pkt_ctx` | 64, `CTX_W` | The packet's SOF timestamp and `cfg_msg_ctx` on its first beat, in every status, so a packet without messages has them too (F6: ring entries of heartbeats and end of session) |
 | `feed_expected_seq`, `feed_synced`, `feed_eos` | 64, 1, 1 | Feed state, for the CSR snapshot |
 
 `cfg_*` except the resync inputs are sampled on the first beat of each packet, so a configuration change applies
@@ -349,6 +350,7 @@ downstream. The 23 type codes are in `hft_pkg` (`ITCH_T_*`, legacy K12) and are 
 | `s_pkt_*` | as `moldudp64_rx` `m_pkt_*` | Packet events, forwarded on `m_pkt_*` |
 | `sym_req_valid/ready/wr/addr/wdata/wstrb`, `sym_rsp_valid/rdata` | 1/1/1/11/32/4, 1/32 | Symbol bitmap commands from `hft_csr_wrap` (word address; bit i of word w = locate 32w + i) |
 | `m_ev_valid`, `m_ev_class`, `m_ev_type`, `m_ev_len`, `m_ev_seq`, `m_ev_sof_ts` | 1, 3, 8, 7, 64, 64 | One event per output message |
+| `s_msg_epoch`, `m_ev_epoch`, `s_pkt_epoch`, `m_pkt_epoch` | `CFG_EPOCH_W` | The FEED commit count of the message's or event's packet, passed through for the ring entries |
 | `m_ev_locate`, `m_ev_tracking`, `m_ev_ts` | 16, 16, 48 | Common header (stock locate, tracking number, timestamp in ns since midnight) |
 | `m_ev_order_ref` … `m_ev_cross_type` | below | Normalized fields; 0 where they do not apply |
 | `m_ev_raw` | 512 | The input vector, unchanged (every class; the host decodes the classes the hardware does not) |

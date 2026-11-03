@@ -44,6 +44,8 @@ module moldudp64_rx_ooc
     output logic         [              15:0] m_pkt_dup_msgs,
     output logic         [              15:0] m_pkt_oversize,
     output logic                              m_pkt_synced_now,
+    output logic         [              63:0] m_pkt_sof_ts,
+    output logic         [         CTX_W-1:0] m_pkt_ctx,
     output logic         [              63:0] feed_expected_seq,
     output logic                              feed_synced,
     output logic                              feed_eos
@@ -123,6 +125,8 @@ module moldudp64_rx_ooc
       .m_pkt_dup_msgs   (m_pkt_dup_msgs),
       .m_pkt_oversize   (m_pkt_oversize),
       .m_pkt_synced_now (m_pkt_synced_now),
+      .m_pkt_sof_ts     (m_pkt_sof_ts),
+      .m_pkt_ctx        (m_pkt_ctx),
       .feed_expected_seq(feed_expected_seq),
       .feed_synced      (feed_synced),
       .feed_eos         (feed_eos)

@@ -10,7 +10,9 @@
 //                beat through tlast. cfg_* except cfg_resync* are sampled on the first beat
 // Context      : cfg_msg_ctx is opaque here (the ITCH decoder's per-packet config): sampled on
 //                the first beat with the other cfg_* and output with every message of the packet,
-//                so one FEED commit applies to a whole packet, framing and decoding alike
+//                so one FEED commit applies to a whole packet, framing and decoding alike. The
+//                packet event gives it too (m_pkt_ctx, with m_pkt_sof_ts), for packets without
+//                messages
 // Reset        : rst between packets or with the source; a packet cut by it gets no event, and
 //                the feed state (expected seq, synced, eos) goes back to 0
 module moldudp64_rx
@@ -53,15 +55,17 @@ module moldudp64_rx
 
     // One event per input packet, after its messages. Downstream keeps the packet's messages
     // only for MOLD_OK, MOLD_HEARTBEAT and MOLD_EOS.
-    output logic                m_pkt_valid,
-    output mold_status_e        m_pkt_status,
-    output logic         [63:0] m_pkt_seq,        // header fields (undefined for RUNT)
-    output logic         [15:0] m_pkt_count,
-    output logic         [63:0] m_pkt_gap,        // messages skipped; accepted in sync only
-    output logic         [15:0] m_pkt_msgs,       // messages output for this packet
-    output logic         [15:0] m_pkt_dup_msgs,   // seq below expected; 0 unless accepted or DUP
-    output logic         [15:0] m_pkt_oversize,   // > MOLD_MAX_MSG; 0 unless accepted or DUP
-    output logic                m_pkt_synced_now, // this packet synchronized the feed
+    output logic m_pkt_valid,
+    output mold_status_e m_pkt_status,
+    output logic [63:0] m_pkt_seq,  // header fields (undefined for RUNT)
+    output logic [15:0] m_pkt_count,
+    output logic [63:0] m_pkt_gap,  // messages skipped; accepted in sync only
+    output logic [15:0] m_pkt_msgs,  // messages output for this packet
+    output logic [15:0] m_pkt_dup_msgs,  // seq below expected; 0 unless accepted or DUP
+    output logic [15:0] m_pkt_oversize,  // > MOLD_MAX_MSG; 0 unless accepted or DUP
+    output logic m_pkt_synced_now,  // this packet synchronized the feed
+    output logic [63:0] m_pkt_sof_ts,  // in every status
+    output logic [CTX_W-1:0] m_pkt_ctx,  // cfg_msg_ctx at the packet's first beat
 
     // Feed state (for the CSR snapshot)
     output logic [63:0] feed_expected_seq,
@@ -600,6 +604,8 @@ module moldudp64_rx
   logic [63:0] p2_seq, p2_gap;
   logic [15:0] p2_cnt, p2_msgs, p2_dups, p2_over;
   logic p2_gap_ok, p2_checked, p2_synced_now;
+  logic [     63:0] p2_sof_ts;
+  logic [CTX_W-1:0] p2_ctx;
 
   always_ff @(posedge clk) begin
     if (rst) begin
@@ -622,6 +628,10 @@ module moldudp64_rx
     p2_over          <= over;
     p2_checked       <= checked;
     p2_synced_now    <= accepted && !synced_q;
+    p2_sof_ts        <= s1_ts;
+    // ctx_q is still this packet's: the next packet's first beat is at the earliest the cycle of
+    // s1_pkt, and it updates ctx_q in the edge that registers this.
+    p2_ctx           <= ctx_q;
     m_pkt_status     <= p2_status;
     m_pkt_seq        <= p2_seq;
     m_pkt_count      <= p2_cnt;
@@ -630,5 +640,7 @@ module moldudp64_rx
     m_pkt_dup_msgs   <= p2_checked ? p2_dups : '0;
     m_pkt_oversize   <= p2_checked ? p2_over : '0;
     m_pkt_synced_now <= p2_synced_now;
+    m_pkt_sof_ts     <= p2_sof_ts;
+    m_pkt_ctx        <= p2_ctx;
   end
 endmodule

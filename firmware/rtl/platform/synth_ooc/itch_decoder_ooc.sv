@@ -25,6 +25,9 @@ module itch_decoder_ooc
     input  logic          [              15:0] s_pkt_dup_msgs,
     input  logic          [              15:0] s_pkt_oversize,
     input  logic                               s_pkt_synced_now,
+    input  logic          [              63:0] s_pkt_sof_ts,
+    input  logic          [   CFG_EPOCH_W-1:0] s_pkt_epoch,
+    input  logic          [   CFG_EPOCH_W-1:0] s_msg_epoch,
     input  logic                               sym_req_valid,
     output logic                               sym_req_ready,
     input  logic                               sym_req_wr,
@@ -39,6 +42,7 @@ module itch_decoder_ooc
     output logic          [MOLD_MSG_LEN_W-1:0] m_ev_len,
     output logic          [              63:0] m_ev_seq,
     output logic          [              63:0] m_ev_sof_ts,
+    output logic          [   CFG_EPOCH_W-1:0] m_ev_epoch,
     output logic          [              15:0] m_ev_locate,
     output logic          [              15:0] m_ev_tracking,
     output logic          [              47:0] m_ev_ts,
@@ -64,7 +68,9 @@ module itch_decoder_ooc
     output logic          [              15:0] m_pkt_msgs,
     output logic          [              15:0] m_pkt_dup_msgs,
     output logic          [              15:0] m_pkt_oversize,
-    output logic                               m_pkt_synced_now
+    output logic                               m_pkt_synced_now,
+    output logic          [              63:0] m_pkt_sof_ts,
+    output logic          [   CFG_EPOCH_W-1:0] m_pkt_epoch
 );
   logic                              rst_q;
   logic                              msg_valid_q;
@@ -82,7 +88,9 @@ module itch_decoder_ooc
   logic         [              15:0] pkt_dup_msgs_q;
   logic         [              15:0] pkt_oversize_q;
   logic                              pkt_synced_now_q;
-  logic         [  ITCH_N_CLASS-1:0] msg_class_filter_q;
+  logic         [              63:0] pkt_sof_ts_q;
+  logic [CFG_EPOCH_W-1:0] pkt_epoch_q, msg_epoch_q;
+  logic [ITCH_N_CLASS-1:0] msg_class_filter_q;
   logic sym_req_valid_q, sym_req_wr_q;
   logic [10:0] sym_req_addr_q;
   logic [31:0] sym_req_wdata_q;
@@ -105,6 +113,9 @@ module itch_decoder_ooc
     pkt_dup_msgs_q     <= s_pkt_dup_msgs;
     pkt_oversize_q     <= s_pkt_oversize;
     pkt_synced_now_q   <= s_pkt_synced_now;
+    pkt_sof_ts_q       <= s_pkt_sof_ts;
+    pkt_epoch_q        <= s_pkt_epoch;
+    msg_epoch_q        <= s_msg_epoch;
     msg_class_filter_q <= s_msg_class_filter;
     sym_req_valid_q    <= sym_req_valid;
     sym_req_wr_q       <= sym_req_wr;
@@ -121,6 +132,7 @@ module itch_decoder_ooc
       .s_msg_len         (msg_len_q),
       .s_msg_seq         (msg_seq_q),
       .s_msg_sof_ts      (msg_sof_ts_q),
+      .s_msg_epoch       (msg_epoch_q),
       .s_msg_class_en    (msg_class_en_q),
       .s_msg_class_filter(msg_class_filter_q),
       .s_pkt_valid       (pkt_valid_q),
@@ -132,6 +144,8 @@ module itch_decoder_ooc
       .s_pkt_dup_msgs    (pkt_dup_msgs_q),
       .s_pkt_oversize    (pkt_oversize_q),
       .s_pkt_synced_now  (pkt_synced_now_q),
+      .s_pkt_sof_ts      (pkt_sof_ts_q),
+      .s_pkt_epoch       (pkt_epoch_q),
       .sym_req_valid     (sym_req_valid_q),
       .sym_req_ready     (sym_req_ready),
       .sym_req_wr        (sym_req_wr_q),
@@ -146,6 +160,7 @@ module itch_decoder_ooc
       .m_ev_len          (m_ev_len),
       .m_ev_seq          (m_ev_seq),
       .m_ev_sof_ts       (m_ev_sof_ts),
+      .m_ev_epoch        (m_ev_epoch),
       .m_ev_locate       (m_ev_locate),
       .m_ev_tracking     (m_ev_tracking),
       .m_ev_ts           (m_ev_ts),
@@ -171,6 +186,8 @@ module itch_decoder_ooc
       .m_pkt_msgs        (m_pkt_msgs),
       .m_pkt_dup_msgs    (m_pkt_dup_msgs),
       .m_pkt_oversize    (m_pkt_oversize),
-      .m_pkt_synced_now  (m_pkt_synced_now)
+      .m_pkt_synced_now  (m_pkt_synced_now),
+      .m_pkt_sof_ts      (m_pkt_sof_ts),
+      .m_pkt_epoch       (m_pkt_epoch)
   );
 endmodule

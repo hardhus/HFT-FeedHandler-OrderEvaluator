@@ -71,6 +71,8 @@ package hft_pkg;
   localparam int unsigned MOLD_N_CNT = MOLD_CNT_MSGS + 5;
 
   // ---- ITCH 5.0 (itch_decoder) ----
+  // FEED commit count (wraps), carried with a packet to its ring entries (audit/13 §2.6).
+  localparam int unsigned CFG_EPOCH_W = 8;
   // Message class = counter index (itch_stats). ORDER and TRADE messages are decoded into
   // fields; ADMIN, AUCTION and UNKNOWN pass with the common header and the raw vector only.
   // MALFORMED: a known type whose length is not the specification length (not decoded).
