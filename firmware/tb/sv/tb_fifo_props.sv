@@ -33,6 +33,8 @@ module tb_fifo_props;
       .rst        (rst),
       .wr_clk     (wr_clk),
       .wr_en      (wr_en),
+      .wr_commit  (1'b0),
+      .wr_rollback(1'b0),
       .full       (full),
       .overflow   (overflow),
       .wr_rst_busy(wr_rst_busy),

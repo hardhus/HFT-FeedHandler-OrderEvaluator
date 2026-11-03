@@ -30,6 +30,8 @@ module tb_fifo_props_arming;
       .rst        (rst),
       .wr_clk     (wr_clk),
       .wr_en      (1'b0),
+      .wr_commit  (1'b0),
+      .wr_rollback(1'b0),
       .full       (1'b0),
       .overflow   (overflow),
       .wr_rst_busy(1'b0),

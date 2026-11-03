@@ -9,18 +9,30 @@
 //                2*SYNC_STAGES+2 cycles of the slower clock; later a 1-cycle pulse is enough.
 //                While wr_rst_busy / rd_rst_busy are high, writes / reads are ignored and
 //                pulse overflow / underflow (audit 08 §2.2).
+// Commit       : COMMIT=1 (portable only): the reader sees a word only after wr_commit. wr_commit keeps
+//                every word written so far, one written in the same cycle included; wr_rollback
+//                drops every word written since the last commit, one written in the same cycle
+//                included. Not both in one cycle. Rolled-back words hold space until the rollback,
+//                so a commit unit must fit in the FIFO. The pointer that crosses to the read side walks
+//                to the commit point one word per wr_clk cycle: a gray pointer crosses safely
+//                only if it changes one bit at a time, and a commit jumps by many words.
+//                Latency: wr_commit -> the n-th word visible within n wr cycles + SYNC_STAGES+3 rd
+//                cycles. COMMIT=0: wr_commit and wr_rollback are ignored; tie them to 0.
 // Note         : FWFT: dout is valid whenever empty is low; rd_en pops it. Memory is an
 //                async-read array (LUTRAM). IMPL="xpm" selects cdc_async_fifo_xpm (Vivado only).
 module cdc_async_fifo #(
     parameter int unsigned WIDTH       = 64,
     parameter int unsigned DEPTH_LOG2  = 4,
     parameter int unsigned SYNC_STAGES = 2,
-    parameter string       IMPL        = "portable"
+    parameter string       IMPL        = "portable",
+    parameter bit          COMMIT      = 1'b0
 ) (
     input  logic             rst,
     input  logic             wr_clk,
     input  logic             wr_en,
     input  logic [WIDTH-1:0] din,
+    input  logic             wr_commit,
+    input  logic             wr_rollback,
     output logic             full,
     output logic             overflow,
     output logic             wr_rst_busy,
@@ -34,6 +46,9 @@ module cdc_async_fifo #(
 );
   if (DEPTH_LOG2 < 4 || SYNC_STAGES < 2) begin : g_check
     $error("cdc_async_fifo: DEPTH_LOG2 must be >= 4 (full rate, as XPM) and SYNC_STAGES >= 2");
+  end
+  if (COMMIT && IMPL == "xpm") begin : g_check_commit
+    $error("cdc_async_fifo: COMMIT=1 needs IMPL=\"portable\" (XPM has no commit)");
   end
 
   if (IMPL == "xpm") begin : g_xpm
@@ -68,6 +83,9 @@ module cdc_async_fifo #(
     logic [N:0] rbin_q, rgray_q, rbin_next, rgray_next, wgray_s;
     logic wr_fire, rd_fire;
     logic rst_req_q, ack_s, req_s, ack_q;
+    // COMMIT=1: commit point (cbin_q) and the pointer that walks to it and crosses to the read side.
+    logic [N:0] cbin_q, vbin_q, vgray_q, vbin_next, wcross;
+    logic commit_ok, rollback_ok;
     // LUTRAM on purpose: async read for FWFT; also keeps a consumer's output register from
     // pulling the array into a BRAM.
     (* ram_style = "distributed", hft_cdc_data = "TRUE" *) logic [WIDTH-1:0] mem[2**N];
@@ -106,7 +124,10 @@ module cdc_async_fifo #(
 
     // ---- write side ----
     assign wr_fire     = wr_en && !full && !wr_rst_busy && !rst;
-    assign wbin_next   = wbin_q + (N + 1)'(wr_fire);
+    // Not gated by busy: during a reset the pointers are 0 or are about to be cleared.
+    assign commit_ok   = COMMIT && wr_commit;
+    assign rollback_ok = COMMIT && wr_rollback;
+    assign wbin_next   = rollback_ok ? cbin_q : wbin_q + (N + 1)'(wr_fire);
     assign wgray_next  = wbin_next ^ (wbin_next >> 1);
 
     always_ff @(posedge wr_clk) begin
@@ -118,6 +139,23 @@ module cdc_async_fifo #(
         wbin_q  <= wbin_next;
         wgray_q <= wgray_next;
         full    <= wgray_next == {~rgray_s[N:N-1], rgray_s[N-2:0]};
+      end
+    end
+
+    assign vbin_next = vbin_q + (N + 1)'(vbin_q != cbin_q);
+    assign wcross    = COMMIT ? vgray_q : wgray_q;
+
+    always_ff @(posedge wr_clk) begin
+      if (rst_req_q) begin
+        cbin_q  <= '0;
+        vbin_q  <= '0;
+        vgray_q <= '0;
+      end else begin
+        if (commit_ok) begin
+          cbin_q <= wbin_next;
+        end
+        vbin_q  <= vbin_next;
+        vgray_q <= vbin_next ^ (vbin_next >> 1);
       end
     end
 
@@ -168,7 +206,7 @@ module cdc_async_fifo #(
         .STAGES(SYNC_STAGES)
     ) u_wptr_sync (
         .clk(rd_clk),
-        .d  (wgray_q),
+        .d  (wcross),
         .q  (wgray_s)
     );
 

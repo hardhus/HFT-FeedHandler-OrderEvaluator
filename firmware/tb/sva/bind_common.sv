@@ -29,11 +29,14 @@ bind axis_skid_buffer axis_props #(
 );
 
 bind cdc_async_fifo fifo_props #(
-    .WIDTH(WIDTH)
+    .WIDTH (WIDTH),
+    .COMMIT(COMMIT)
 ) u_fifo_props (
     .rst        (rst),
     .wr_clk     (wr_clk),
     .wr_en      (wr_en),
+    .wr_commit  (wr_commit),
+    .wr_rollback(wr_rollback),
     .full       (full),
     .overflow   (overflow),
     .wr_rst_busy(wr_rst_busy),

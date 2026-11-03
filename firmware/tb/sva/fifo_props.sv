@@ -8,11 +8,14 @@
 //    flight then); random synchronizer state can make rd_rst_busy glitch during the hold.
 // Regressions for both: tb/sv/tb_fifo_props_arming.sv.
 module fifo_props #(
-    parameter int unsigned WIDTH = 64
+    parameter int unsigned WIDTH  = 64,
+    parameter bit          COMMIT = 1'b0
 ) (
     input logic             rst,
     input logic             wr_clk,
     input logic             wr_en,
+    input logic             wr_commit,
+    input logic             wr_rollback,
     input logic             full,
     input logic             overflow,
     input logic             wr_rst_busy,
@@ -88,6 +91,55 @@ module fifo_props #(
   ))
   else begin
     $error("fifo_props: FWFT word vanished or changed without rd_en");
+  end
+
+  // ---- COMMIT=1: the reader only gets committed words ----
+  if (COMMIT) begin : g_commit
+    int unsigned pending;  // written since the last commit or rollback
+    int unsigned committed;
+    int unsigned popped;
+    logic write, read;
+    initial begin
+      pending   = 0;
+      committed = 0;
+      popped    = 0;
+    end
+    assign write = wr_en && !full && !wr_rst_busy && !rst;
+    assign read  = rd_en && !empty && !rd_rst_busy;
+
+    always @(posedge wr_clk) begin
+      if (rst || wr_rst_busy) begin
+        pending   <= 0;
+        committed <= 0;
+      end else if (wr_rollback) begin
+        pending <= 0;
+      end else if (wr_commit) begin
+        pending   <= 0;
+        committed <= committed + pending + int'(write);
+      end else begin
+        pending <= pending + int'(write);
+      end
+    end
+    always @(posedge rd_clk) begin
+      if (rd_rst_busy) begin
+        popped <= 0;
+      end else begin
+        popped <= popped + int'(read);
+      end
+    end
+
+    a_commit_xor_rollback :
+    assert property (@(posedge wr_clk) disable iff (!armed_wr) !(wr_commit && wr_rollback))
+    else begin
+      $error("fifo_props: wr_commit and wr_rollback in one cycle");
+    end
+
+    a_read_committed :
+    assert property (@(posedge rd_clk) disable iff (!armed_rd || rst || wr_rst_busy || rd_rst_busy)
+        read |-> popped < committed)
+    else begin
+      $error("fifo_props: read a word that was not committed");
+    end
   end
 
   // A finished reset leaves the FIFO empty.

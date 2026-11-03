@@ -156,6 +156,11 @@ FIFO_VIOLATIONS = {
     "a_underflow_cause": (5, "underflow without a rejected read"),
     "a_fwft_hold": (6, "FWFT word vanished or changed without rd_en"),
 }
+FIFO_COMMIT_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_commit_props.sv"]
+FIFO_COMMIT_VIOLATIONS = {
+    "a_commit_xor_rollback": (1, "wr_commit and wr_rollback in one cycle"),
+    "a_read_committed": (2, "read a word that was not committed"),
+}
 AXIS_TB = ["firmware/tb/sva/axis_props.sv", "firmware/tb/sv/tb_axis_props.sv"]
 AXIS_VIOLATIONS = {
     "a_stall_stable": (1, "payload changed or tvalid dropped while stalled"),
@@ -177,6 +182,7 @@ ARM_VIOLATIONS = {"a_after_arm": (1, "assertion fired while bad is high")}
 CHECKERS = {
     "arm": ("tb_assert_arm", ARM_TB, ARM_VIOLATIONS),
     "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
+    "fifo_commit": ("tb_fifo_commit_props", FIFO_COMMIT_TB, FIFO_COMMIT_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
 }
