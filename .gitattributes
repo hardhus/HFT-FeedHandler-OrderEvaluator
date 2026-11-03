@@ -7,3 +7,5 @@
 firmware/rtl/core/gen/** linguist-generated=true
 software/include/gen/** linguist-generated=true
 firmware/rdl/hft_csr.md linguist-generated=true
+# Generated from firmware/formats/event_desc.toml by `just gen` (checked by `just gen-check`)
+firmware/tb/model/desc_gen.py linguist-generated=true

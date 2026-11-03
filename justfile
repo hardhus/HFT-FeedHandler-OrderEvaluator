@@ -37,7 +37,7 @@ doctor:
 
 # SystemVerilog files under the lint gate, one per line: KIND PATH. KIND is
 # rtl (Verilator top = file name, -F common.f), core (+ core.f), csr (+ core.f and csr.f),
-# gen (as csr, but generated: Verilator only, no Verible style/format), system (+ system.f),
+# gen (as csr, but generated, in core.f or csr.f: Verilator only, no Verible style/format), system (+ system.f),
 # ooc (+ synth_ooc.f), ooc_core (+ core.f and synth_ooc_core.f), ooc_csr (+ core.f, csr.f and
 # synth_ooc_csr.f) or style (Verible only: XPM wrappers that Verilator cannot compile, SVA
 # checkers and self-checking SV testbenches).
@@ -53,7 +53,7 @@ sv-files:
       { grep -vE '^\s*(#|//)' "firmware/filelists/$1" || true; } | sed '/^\s*$/d; s|^|firmware/filelists/|'
     }
     files_of common.f | sed 's/^/rtl /'
-    files_of core.f | sed 's/^/core /'
+    files_of core.f | sed -E 's|^(.*/gen/.*)$|gen \1|; t; s/^/core /'
     files_of csr.f | sed -E 's|^(.*/gen/.*)$|gen \1|; t; s/^/csr /'
     files_of system.f | sed 's/^/system /'
     files_of synth_ooc.f | sed 's/^/ooc /'

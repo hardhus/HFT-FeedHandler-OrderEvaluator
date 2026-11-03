@@ -1,6 +1,118 @@
 # Event descriptor schema: the one source of the 128-byte host ring entry.
 # scripts/gen_desc.py (`just gen`) writes the SV package, the C++ header and the Python model from
-# this file; `just gen-check` fails when they differ. The entry kinds and their fields come in S1.
+# this file; `just gen-check` fails when they differ. It also checks the rules of the schema:
+# fields inside the entry, no overlap, natural alignment (u48 on 2 bytes), no field on a ctrl byte
+# (so no field crosses the line boundary), kind codes unique and not 0.
+#
+# Numbers are little-endian. Alpha fields are in wire order. Type: u8 u16 u32 u48 u64, alpha (ASCII
+# text), bytes (opaque). A field the writer stamps is not an argument of the SV pack functions.
 
-# Format version, carried in bits 3..0 of each line's ctrl byte (1..15).
-version = 1
+version = 1  # format version, carried in the low bits of each ctrl byte (1..15)
+entry_bytes = 128
+line_bytes = 64
+ctrl_bytes = [63, 127]  # last byte of each line, the same value in both
+ctrl_phase_bit = 7  # first pass over the ring 1, then the opposite on each pass
+ctrl_version_bits = 4
+
+[flags]  # bit numbers of the flags field
+overflow_before = 0  # entries were dropped between the previous committed entry and this one
+
+# In every entry. itch_class: `only` these kinds fill it, it is 0 in the others.
+[[common]]
+name = "seq"
+byte = 0
+size = 8
+type = "u64"
+desc = "ITCH, ITCH_RAW: message sequence number; GAP: first missing; EOS: the packet's"
+
+[[common]]
+name = "sof_ts"
+byte = 8
+size = 8
+type = "u64"
+desc = "start of frame timestamp of the packet"
+
+[[common]]
+name = "ring_idx"
+byte = 16
+size = 4
+type = "u32"
+writer = true
+desc = "low 32 bits of the producer index"
+
+[[common]]
+name = "kind"
+byte = 20
+size = 1
+type = "u8"
+kind_code = true
+desc = "entry kind"
+
+[[common]]
+name = "flags"
+byte = 21
+size = 1
+type = "u8"
+desc = "see flags"
+
+[[common]]
+name = "cfg_epoch"
+byte = 22
+size = 1
+type = "u8"
+desc = "FEED commit count (wraps) in force on the packet's first beat"
+
+[[common]]
+name = "itch_class"
+byte = 23
+size = 1
+type = "u8"
+only = ["ITCH", "ITCH_RAW"]
+desc = "itch_class_e"
+
+[[kind]]
+name = "ITCH"
+code = 1
+desc = "ORDER and TRADE messages: normalized fields, 0 where they do not apply"
+fields = [
+  { name = "msg_type", byte = 24, size = 1, type = "u8", desc = "ITCH type byte" },
+  { name = "len", byte = 25, size = 1, type = "u8", desc = "message length in bytes" },
+  { name = "locate", byte = 26, size = 2, type = "u16", desc = "stock locate" },
+  { name = "tracking", byte = 28, size = 2, type = "u16", desc = "tracking number" },
+  { name = "itch_ts", byte = 30, size = 6, type = "u48", desc = "ns since midnight" },
+  { name = "side", byte = 36, size = 1, type = "u8", desc = "ASCII: A F P" },
+  { name = "printable", byte = 37, size = 1, type = "u8", desc = "ASCII: C" },
+  { name = "cross_type", byte = 38, size = 1, type = "u8", desc = "ASCII: Q" },
+  { name = "price", byte = 40, size = 4, type = "u32", desc = "A F U P; C exec; Q cross" },
+  { name = "attribution", byte = 44, size = 4, type = "alpha", desc = "F" },
+  { name = "order_ref", byte = 48, size = 8, type = "u64", desc = "A F E C X D P; U: original" },
+  { name = "new_ref", byte = 64, size = 8, type = "u64", desc = "U" },
+  { name = "shares", byte = 72, size = 8, type = "u64", desc = "A F U P Q; E C X: exec/cancel" },
+  { name = "match", byte = 80, size = 8, type = "u64", desc = "E C P Q B" },
+  { name = "stock", byte = 88, size = 8, type = "alpha", desc = "A F P Q" },
+]
+
+[[kind]]
+name = "ITCH_RAW"
+code = 2
+desc = "ADMIN, AUCTION, UNKNOWN and MALFORMED messages: raw bytes, 0 from len on"
+fields = [
+  { name = "len", byte = 24, size = 1, type = "u8", desc = "message length in bytes" },
+  { name = "raw_lo", byte = 25, size = 38, type = "bytes", desc = "message bytes 0..37" },
+  { name = "raw_hi", byte = 64, size = 26, type = "bytes", desc = "message bytes 38..63" },
+]
+
+[[kind]]
+name = "GAP"
+code = 3
+desc = "an accepted packet started after the expected sequence number; after its messages"
+fields = [
+  { name = "first_seq", byte = 24, size = 8, type = "u64", desc = "the packet's first sequence number" },
+  { name = "gap", byte = 32, size = 8, type = "u64", desc = "messages skipped" },
+]
+
+[[kind]]
+name = "EOS"
+code = 4
+desc = "end of session; after the packet's GAP entry, if any"
+fields = []

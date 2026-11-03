@@ -22,6 +22,10 @@ lint_off -rule GENUNNAMED -file "*/rtl/core/gen/hft_csr.sv"
 // Map constants for users of the package; a build need not use all of them.
 lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_csr_pkg.sv" -match "*Parameter is not used: 'HFT_CSR_*'"
 
+// Generated descriptor package (scripts/gen_desc.py): the offsets and sizes of every field for its
+// users; a build need not use all of them.
+lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/event_desc_pkg.sv" -match "*Parameter is not used: 'DESC_*'"
+
 // hft_pkg holds the constants of several core blocks; a top that uses some of them
 // (eth_ip_udp_rx, rx_stats, the CSR block) need not use all. Parameters only: an unused signal is
 // still an error. That every constant has a user somewhere is checked across all RTL instead, by
