@@ -88,8 +88,9 @@ module packer_props
     $error("packer_props: a commit or rollback without a packet event");
   end
 
+  // Not `end_unit or ##1 end_unit`: Verilator 5.053 compiles that form and it never fires.
   a_accepted_gets_end :
-  assert property (@(posedge clk) disable iff (rst || !armed) accepted_event |=> end_unit or ##1 end_unit)
+  assert property (@(posedge clk) disable iff (rst || !armed) accepted_event |-> ##[1:2] end_unit)
   else begin
     $error("packer_props: an accepted packet event without a commit or rollback");
   end

@@ -90,18 +90,31 @@ module tb_packer_props;
     idle();
 
     accepted(v(1));  // 1: a_no_ev_with_pkt
+    // accepted() returns after the falling edge of the 2nd cycle after the event, so what is set here is sampled in
+    // that cycle: the last one its window covers.
     if (v(2)) begin  // 2: a_ev_after_pkt
-      @(negedge clk);
       s_ev_valid = 1'b1;
       idle();
     end
     idle(2);
 
+    // Legal at the edge: a message and an accepted event 3 cycles after an event.
+    accepted(1'b0);
+    @(negedge clk);
+    s_ev_valid = 1'b1;
+    idle(2);
+    accepted(1'b0);
+    accepted(1'b0);
+    idle(2);
+
     accepted(1'b0);
     if (v(3)) begin  // 3: a_accepted_spacing
-      @(negedge clk);
       s_pkt_valid  = 1'b1;
       pkt_accepted = 1'b1;
+      @(negedge clk);
+      s_pkt_valid  = 1'b0;
+      pkt_accepted = 1'b0;
+      fifo_commit  = 1'b1;
       idle();
     end
     idle(3);
