@@ -58,9 +58,9 @@ set port_clock {
   {^src_}                              src_clk
   {^dst_}                              dst_clk
   {^(s_axis_|m_axis_|q$|rst_out$)}     clk
-  {^(cfg_|ts_|stat_|[sm]_udp_|[sm]_msg_|[sm]_pkt_|m_ev_|m_res_|sym_|mpkt_|mres_|feed_)} {clk net_clk}
-  {^(s_axil_|host_rst$)}               host_clk
-  {^net_rst$}                          net_clk
+  {^(cfg_|ts_|stat_|cnt_|[sm]_udp_|[sm]_msg_|[sm]_pkt_|[sm]_ev_|m_res_|sym_|mpkt_|mres_|feed_)} {clk net_clk}
+  {^(s_axil_|host_)}                  host_clk
+  {^net_}                             net_clk
   {^rst$}                              {wr_clk clk}
 }
 
