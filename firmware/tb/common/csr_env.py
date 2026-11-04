@@ -42,22 +42,26 @@ ITCH_CTRL = addr("ITCH.ITCH_CTRL")
 SYMBOL = mem("SYMBOL")
 # Snapshot values, in register order: rx_stats (RX_PKTS, RX_BYTES, DROP_<reason> by reason code),
 # then mold_stats (MOLD_<status> by status code, then the message and gap counters), then
-# itch_stats (ITCH_<class> by class code, then one per outcome), then the feed state
-# (EXPECTED_SEQ, FEED_STATE).
+# itch_stats (ITCH_<class> by class code, then one per outcome), then event_packer's ring counters, then the
+# feed state (EXPECTED_SEQ, FEED_STATE).
 COUNTERS = ["RX_PKTS", "RX_BYTES"] + [f"DROP_{r.name}" for r in list(RxReason)[1:]]
 MOLD_COUNTERS = [f"MOLD_{s.name}" for s in MoldStatus]
 MOLD_COUNTERS += [f"MOLD_{n}" for n in ("MSGS", "DUP_MSGS", "OVERSIZE_MSGS", "GAP_EVENTS", "GAP_MSGS")]
 ITCH_COUNTERS = [f"ITCH_{c.name}" for c in ItchClass] + [f"ITCH_{o.name}" for o in Outcome]
 SNAP_NAMES = [f"STATS.{n}" for n in COUNTERS] + [f"FEED.{n}" for n in MOLD_COUNTERS]
 SNAP_NAMES += [f"ITCH.{n}" for n in ITCH_COUNTERS]
+SNAP_NAMES += [f"RING.RING_{n}" for n in ("COMMIT_ENTRIES", "DROP_PKTS", "DROP_ENTRIES")]
 SNAP_NAMES += ["FEED.EXPECTED_SEQ", "FEED.FEED_STATE"]
 N_CNT = len(SNAP_NAMES)
 MASK64 = (1 << 64) - 1
-# hft_csr_wrap delays feed_* by this many net cycles before the snapshot, so that the feed state
-# belongs to the same packet events as the counters (audit/11 S8 notes): moldudp64_rx's update 1
-# cycle before its packet event, itch_decoder forwards the event 2 cycles later, the counter
-# banks count it 1 cycle after that (audit/12 §2.7).
-FEED_DELAY = 4
+# hft_csr_wrap delays mpkt_* and mres_* by this many net cycles before the mold and ITCH counters, so that a
+# packet event moves them in the same cycle as event_packer's ring counters: 3 cycles after it (audit/13 S6).
+STATS_DELAY = 2
+# It delays feed_* by this many net cycles before the snapshot, so that the feed state belongs to the
+# same packet events as the counters (audit/11 S8 notes): moldudp64_rx's update 1 cycle before its
+# packet event, itch_decoder forwards the event 2 cycles later, the counter banks count it 3 cycles
+# after that (audit/12 §2.7, audit/13 S6).
+FEED_DELAY = 6
 N_CLASS = len(ItchClass)
 
 
@@ -302,6 +306,9 @@ class Feed:
         self.regs: dict[int, int] = {}  # FEED shadow registers written since reset
         self.committed: list[FeedCfg] = []  # the shadow at every FEED_COMMIT write, in order
         self.resync_requests = 0  # writes with FEED_COMMIT.resync = 1
+        self.commit_base = 0  # len(committed) at the last reset: cfg_epoch must reach the rest, mod 256
+        self.back_to_back = 0  # FEED_COMMIT writes in the cycle right after another one
+        self.epoch: int | None = None  # cfg_epoch in the net cycle before, once defined
         self.request_edges = 0  # rising edges of the resync field (one per request, held or not)
         self.held = 0  # cycles in which the resync field stayed high from the cycle before
         self.expected: list[bool] = []  # per accepted transfer: carries a resync
@@ -320,6 +327,7 @@ class Feed:
         commit_bit = root.hwif_out.FEED.FEED_COMMIT
         cdc = root.u_feed_cdc
         prev = False  # the resync field in the cycle before
+        prev_write = False  # a FEED_COMMIT write in the cycle before
         accept = False  # the transfer is accepted on the next edge
         while True:
             await RisingEdge(root.host_clk)
@@ -330,10 +338,15 @@ class Feed:
             if root.host_rst.value:
                 prev = self.pending = accept = False
                 self.expected.clear()
+                self.commit_base = len(self.committed)
+                prev_write = False
                 continue
             resync = bool(commit_bit.resync.value.value)
             if resync or commit_bit.commit.value.value:
                 self.pulse_times.append(edge)
+            write = bool(commit_bit.commit.swmod.value)
+            self.back_to_back += int(write and prev_write)
+            prev_write = write
             accept = bool(cdc.src_valid.value and cdc.src_ready.value)
             if accept:
                 self.expected.append(self.pending)
@@ -355,6 +368,7 @@ class Feed:
             await ReadOnly()
             if root.net_rst.value:
                 last_idx, loaded = -1, False
+                self.epoch = None
                 self.landed = self.resyncs = 0
                 self.seen.clear()
                 continue
@@ -365,6 +379,9 @@ class Feed:
                 assert not (root.cfg_feed_en.value or root.cfg_session_check.value or resync or root.cfg_class_en.value), (
                     "cfg_feed_en, cfg_session_check, cfg_resync or cfg_class_en set before any FEED commit was applied")
                 continue
+            epoch = int(root.cfg_epoch.value)
+            assert landing or epoch == self.epoch, f"cfg_epoch {epoch} changed outside the landing of a transfer"
+            self.epoch = epoch
             if landing:
                 self.land_times.append(edge)
                 assert self.landed < len(self.expected), "a FEED transfer landed that was never accepted"
@@ -425,14 +442,18 @@ class Feed:
         assert self.resyncs == sum(self.expected), f"{self.resyncs} cfg_resync pulses, {sum(self.expected)} expected"
         assert self.request_edges == self.resync_requests, (
             f"{self.resync_requests} resync writes, {self.request_edges} requests seen")
+        commits = len(self.committed) - self.commit_base
+        if commits:
+            assert self.epoch == commits % 256, f"{commits} FEED commit writes, cfg_epoch {self.epoch}"
 
 
 class Snap:
     """Counter side: stat_*, mpkt_* and mres_* event logs and the feed_* state at every net edge
     (from the wrapper's inputs), an optional generator of them (unit test only), snapshot handshake
     monitors and the software snapshot protocol. A snapshot taken on acceptance edge E holds the
-    counters of every event sampled before E and the feed state sampled FEED_DELAY net edges before
-    E. ITCH counters: a result waits for its packet event, which adds it for OK, HEARTBEAT and EOS
+    rx_stats counters of every event sampled before E, the mold and ITCH counters of every event
+    sampled more than STATS_DELAY net edges before E, the ring counters sampled on E and the feed state
+    sampled FEED_DELAY net edges before E. ITCH counters: a result waits for its packet event, which adds it for OK, HEARTBEAT and EOS
     and drops it otherwise; a result on the edge of a packet event belongs to the next packet."""
 
     def __init__(self, w: Wrap, drive: bool = True):
@@ -443,6 +464,7 @@ class Snap:
         # (sampling net edge time, (class, outcome) or None, packet status or None)
         self.itch_events: list[tuple[int, tuple[int, int] | None, int | None]] = []
         self.feed_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (E, synced, eos) it sampled
+        self.ring_at: dict[int, tuple[int, int, int]] = {}  # net edge -> the cnt_ring_* it sampled
         self.edges: list[int] = []  # every net edge, in order
         self.edge_index: dict[int, int] = {}  # net edge -> its index in edges
         self.accepts: list[int] = []  # net edges that take a snapshot (data handshake accepts)
@@ -481,6 +503,8 @@ class Snap:
             dut.mres_valid.value = int(rng.random() < self.p_valid)
             dut.mres_class.value = int(rng.choice(list(ItchClass)))
             dut.mres_outcome.value = int(rng.choice(list(Outcome)))
+            for name in ("cnt_ring_commit_entries", "cnt_ring_drop_pkts", "cnt_ring_drop_entries"):
+                getattr(dut, name).value = rng.choice([0, MASK64, rng.getrandbits(64)])
             if rng.random() < 0.1:
                 dut.feed_expected_seq.value = rng.getrandbits(64)
                 dut.feed_synced.value = rng.getrandbits(1)
@@ -508,9 +532,12 @@ class Snap:
                 mpkt = tuple(int(getattr(dut, n).value) for n in
                              ("mpkt_status", "mpkt_gap", "mpkt_msgs", "mpkt_dup_msgs", "mpkt_oversize"))  # fmt: skip
             feed = (int(dut.feed_expected_seq.value), int(dut.feed_synced.value), int(dut.feed_eos.value))
+            ring = (int(dut.cnt_ring_commit_entries.value), int(dut.cnt_ring_drop_pkts.value),
+                    int(dut.cnt_ring_drop_entries.value))  # fmt: skip
             await RisingEdge(dut.net_clk)
             edge = get_sim_time()
             self.feed_at[edge] = feed
+            self.ring_at[edge] = ring
             self.edge_index[edge] = len(self.edges)
             self.edges.append(edge)
             if accept:
@@ -541,8 +568,8 @@ class Snap:
                 self.req_accepts.append(get_sim_time())
 
     def model_at(self, edge: int) -> list[int]:
-        """Snapshot values taken on `edge`, in SNAP_NAMES order: the counters of every event sampled
-        before it, then the feed state sampled FEED_DELAY net edges before it."""
+        """Snapshot values taken on `edge`, in SNAP_NAMES order (see the class)."""
+        at = self.edge_index[edge]
         c = [0] * len(COUNTERS)
         for t, reason, nbytes in self.events:
             if t >= edge:
@@ -554,7 +581,7 @@ class Snap:
         m = [0] * len(MOLD_COUNTERS)
         n_status = len(MoldStatus)
         for t, status, gap, msgs, dups, over in self.mold_events:
-            if t >= edge:
+            if self.edge_index[t] + STATS_DELAY >= at:
                 break
             m[status] += 1
             if MoldStatus(status) in ACCEPTED:
@@ -566,7 +593,7 @@ class Snap:
         n_itch = len(ITCH_COUNTERS)
         it, pend = [0] * n_itch, [0] * n_itch
         for t, res, status in self.itch_events:
-            if t >= edge:
+            if self.edge_index[t] + STATS_DELAY >= at:
                 break
             inc = [0] * n_itch
             if res:
@@ -577,10 +604,10 @@ class Snap:
             if MoldStatus(status) in ACCEPTED:
                 it = [a + b for a, b in zip(it, pend, strict=True)]
             pend = inc  # this edge's result starts the next packet
-        i = self.edge_index[edge] - FEED_DELAY
+        i = at - FEED_DELAY
         assert i >= 0, "snapshot before the feed delay registers were loaded"
         e, synced, eos = self.feed_at[self.edges[i]]
-        return [v & MASK64 for v in c + m + it] + [e, synced | eos << 1]
+        return [v & MASK64 for v in c + m + it] + list(self.ring_at[edge]) + [e, synced | eos << 1]
 
     async def read_counters(self) -> list[int]:
         """Every snapshot register, in SNAP_NAMES order (64-bit values from LO and HI)."""

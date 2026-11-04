@@ -1,6 +1,6 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
-// Clock domain : host_clk (s_axil_*, hft_csr), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*,
-//                sym_*, rx_stats, mold_stats, itch_stats)
+// Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*,
+//                sym_*, cnt_ring_*, rx_stats, mold_stats, itch_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
 //                commit buffer and requests one cdc_handshake transfer; the receiver's cfg_* then
 //                change together in one net_clk cycle (eth_ip_udp_rx samples them per frame).
@@ -33,11 +33,22 @@
 //                (cfg_class_en, cfg_class_filter change with the other FEED cfg_*). The snapshot
 //                also takes the mold_stats and itch_stats counters and the feed state in the same
 //                net_clk cycle. Both counter banks count the packet events itch_decoder forwards
-//                (mpkt_*, with its results mres_*). feed_* go through FEED_DELAY = 4 registers
-//                first, so that the state belongs to the same packet events as the counters:
-//                moldudp64_rx shows a packet's feed update 1 cycle before its own packet event,
-//                itch_decoder forwards that event 2 cycles later, and the banks count it 1 cycle
-//                after that.
+//                (mpkt_*, with its results mres_*). They go through STATS_DELAY = 2 registers first,
+//                so that a packet event moves those banks in the same cycle as cnt_ring_* (3 cycles
+//                after it, event_packer). feed_* go through FEED_DELAY = 6 registers, so that the
+//                state belongs to the same packet events as the counters: moldudp64_rx shows a
+//                packet's feed update 1 cycle before its own packet event, itch_decoder forwards
+//                that event 2 cycles later, and the banks count it 3 cycles after that.
+//                The registers add no delay to any entry: only to the counters.
+// Epoch        : each FEED_COMMIT write with commit or resync set adds 1 to an 8-bit count, kept in the
+//                FEED configuration, so cfg_epoch changes with the other FEED cfg_* (like them, undefined
+//                until the first commit lands, when no message is output). The host keeps the same
+//                count, so writes count one by one: the cycle after a write with byte 0 enabled
+//                (swmod), with a request field high. Writes in consecutive cycles count each; a pulse
+//                held one more cycle by a write with byte 0 disabled does not.
+// Ring         : the RING registers are event_ring_writer's: host_clk, no transfer, no commit.
+//                RING_WRITTEN and RING_BRESP_ERR are live (the host reads HI, LO, HI); the
+//                cnt_ring_* counters are in the snapshot.
 // Symbols      : SYMBOL (regblock external mem) accesses go to itch_decoder's command port: the
 //                request (write flag, word address, data, byte strobes) over one cdc_handshake,
 //                the response (read data) back over another. rd_ack/wr_ack come when the response
@@ -105,6 +116,23 @@ module hft_csr_wrap
     // itch_decoder configuration (through moldudp64_rx's per-packet context)
     output logic [ITCH_N_CLASS-1:0] cfg_class_en,
     output logic [ITCH_N_CLASS-1:0] cfg_class_filter,
+    output logic [ CFG_EPOCH_W-1:0] cfg_epoch,
+
+    // event_ring_writer, host_clk
+    output logic        host_ring_enable,
+    output logic [63:0] host_ring_base,
+    output logic [ 4:0] host_ring_size_log2,
+    output logic [31:0] host_ring_cons,
+    input  logic [31:0] host_ring_prod_idx,
+    input  logic        host_ring_bresp_err,
+    input  logic        host_ring_enable_err,
+    input  logic [63:0] host_ring_cnt_written,
+    input  logic [63:0] host_ring_cnt_bresp_err,
+
+    // event_packer counters, net_clk
+    input logic [63:0] cnt_ring_commit_entries,
+    input logic [63:0] cnt_ring_drop_pkts,
+    input logic [63:0] cnt_ring_drop_entries,
 
     // Packet events as itch_decoder forwards them, and its message results
     input logic                 mpkt_valid,
@@ -153,6 +181,7 @@ module hft_csr_wrap
     logic [63:0]             resync_seq;
     logic [ITCH_N_CLASS-1:0] class_en;
     logic [ITCH_N_CLASS-1:0] class_filter;
+    logic [CFG_EPOCH_W-1:0]  epoch;
   } feed_set_t;
 
   // One SYMBOL access as it crosses to net.
@@ -243,6 +272,8 @@ module hft_csr_wrap
   feed_set_t feed_shadow, feed_set_q;
   logic feed_commit, feed_resync, feed_resync_q, feed_resync_req, feed_req;
   logic feed_pending_q, feed_src_ready, feed_resync_bit_q;
+  logic feed_write_q;
+  logic [CFG_EPOCH_W-1:0] epoch_q, epoch_next;
 
   always_comb begin
     feed_shadow.enable = hwif_out.FEED.FEED_CTRL.enable.value;
@@ -259,19 +290,25 @@ module hft_csr_wrap
     };
     feed_shadow.class_en = hwif_out.ITCH.ITCH_CTRL.class_en.value;
     feed_shadow.class_filter = hwif_out.ITCH.ITCH_CTRL.class_filter.value;
+    feed_shadow.epoch = epoch_next;
   end
 
   assign feed_commit = hwif_out.FEED.FEED_COMMIT.commit.value;  // level-sensitive, like NET_COMMIT
   assign feed_resync = hwif_out.FEED.FEED_COMMIT.resync.value;
   assign feed_resync_req = feed_resync && !feed_resync_q;  // rising edge: one resync per request
   assign feed_req = feed_commit || feed_resync_req;
+  assign epoch_next = epoch_q + CFG_EPOCH_W'(feed_write_q && (feed_commit || feed_resync));
 
   always_ff @(posedge host_clk) begin
     if (host_rst) begin
       feed_resync_q     <= 1'b0;
       feed_pending_q    <= 1'b0;
       feed_resync_bit_q <= 1'b0;
+      feed_write_q      <= 1'b0;
+      epoch_q           <= '0;
     end else begin
+      feed_write_q   <= hwif_out.FEED.FEED_COMMIT.commit.swmod;
+      epoch_q        <= epoch_next;
       feed_resync_q  <= feed_resync;
       feed_pending_q <= feed_req || (feed_pending_q && !feed_src_ready);
       // Set by a request, cleared by the transfer that carries it (a request in that same cycle
@@ -301,6 +338,9 @@ module hft_csr_wrap
     logic [RX_N_CNT-1:0][CNT_W-1:0]   rx;
     logic [MOLD_N_CNT-1:0][CNT_W-1:0] mold;
     logic [ITCH_N_CNT-1:0][CNT_W-1:0] itch;
+    logic [CNT_W-1:0]                 ring_commit_entries;
+    logic [CNT_W-1:0]                 ring_drop_pkts;
+    logic [CNT_W-1:0]                 ring_drop_entries;
     logic [63:0]                      expected_seq;
     logic                             synced;
     logic                             eos;
@@ -353,17 +393,59 @@ module hft_csr_wrap
       .cnt        (cnt)
   );
 
+  // Packet events and results on their way to the mold and ITCH counters: see Feed commit.
+  localparam int unsigned STATS_DELAY = 2;
+  typedef struct packed {
+    logic          mpkt_valid;
+    mold_status_e  mpkt_status;
+    logic [63:0]   mpkt_gap;
+    logic [15:0]   mpkt_msgs;
+    logic [15:0]   mpkt_dup_msgs;
+    logic [15:0]   mpkt_oversize;
+    logic          mres_valid;
+    itch_class_e   mres_class;
+    itch_outcome_e mres_outcome;
+  } stats_ev_t;
+  stats_ev_t [STATS_DELAY-1:0] stats_q;
+  stats_ev_t                   stats_ev;
+
+  assign stats_ev = stats_q[STATS_DELAY-1];
+
+  always_ff @(posedge net_clk) begin
+    stats_q <= {
+      stats_q[STATS_DELAY-2:0],
+      stats_ev_t
+'{
+          mpkt_valid: mpkt_valid,
+          mpkt_status: mpkt_status,
+          mpkt_gap: mpkt_gap,
+          mpkt_msgs: mpkt_msgs,
+          mpkt_dup_msgs: mpkt_dup_msgs,
+          mpkt_oversize: mpkt_oversize,
+          mres_valid: mres_valid,
+          mres_class: mres_class,
+          mres_outcome: mres_outcome
+      }
+    };
+    if (net_rst) begin
+      for (int i = 0; i < STATS_DELAY; i++) begin
+        stats_q[i].mpkt_valid <= 1'b0;
+        stats_q[i].mres_valid <= 1'b0;
+      end
+    end
+  end
+
   mold_stats #(
       .CNT_W(CNT_W)
   ) u_mold_stats (
       .clk         (net_clk),
       .rst         (net_rst),
-      .pkt_valid   (mpkt_valid),
-      .pkt_status  (mpkt_status),
-      .pkt_gap     (mpkt_gap),
-      .pkt_msgs    (mpkt_msgs),
-      .pkt_dup_msgs(mpkt_dup_msgs),
-      .pkt_oversize(mpkt_oversize),
+      .pkt_valid   (stats_ev.mpkt_valid),
+      .pkt_status  (stats_ev.mpkt_status),
+      .pkt_gap     (stats_ev.mpkt_gap),
+      .pkt_msgs    (stats_ev.mpkt_msgs),
+      .pkt_dup_msgs(stats_ev.mpkt_dup_msgs),
+      .pkt_oversize(stats_ev.mpkt_oversize),
       .cnt         (mold_cnt)
   );
 
@@ -372,16 +454,16 @@ module hft_csr_wrap
   ) u_itch_stats (
       .clk        (net_clk),
       .rst        (net_rst),
-      .res_valid  (mres_valid),
-      .res_class  (mres_class),
-      .res_outcome(mres_outcome),
-      .pkt_valid  (mpkt_valid),
-      .pkt_status (mpkt_status),
+      .res_valid  (stats_ev.mres_valid),
+      .res_class  (stats_ev.mres_class),
+      .res_outcome(stats_ev.mres_outcome),
+      .pkt_valid  (stats_ev.mpkt_valid),
+      .pkt_status (stats_ev.mpkt_status),
       .cnt        (itch_cnt)
   );
 
   // Feed state delayed to the cycle in which the counter banks hold the packet event that made it.
-  localparam int unsigned FEED_DELAY = 4;
+  localparam int unsigned FEED_DELAY = 6;
   logic [FEED_DELAY-1:0][63:0] feed_seq_q;
   logic [FEED_DELAY-1:0] feed_synced_q, feed_eos_q;
 
@@ -391,12 +473,15 @@ module hft_csr_wrap
     feed_eos_q    <= {feed_eos_q[FEED_DELAY-2:0], feed_eos};
   end
 
-  assign snap_src.rx           = cnt;
-  assign snap_src.mold         = mold_cnt;
-  assign snap_src.itch         = itch_cnt;
-  assign snap_src.expected_seq = feed_seq_q[FEED_DELAY-1];
-  assign snap_src.synced       = feed_synced_q[FEED_DELAY-1];
-  assign snap_src.eos          = feed_eos_q[FEED_DELAY-1];
+  assign snap_src.rx                  = cnt;
+  assign snap_src.mold                = mold_cnt;
+  assign snap_src.itch                = itch_cnt;
+  assign snap_src.ring_commit_entries = cnt_ring_commit_entries;
+  assign snap_src.ring_drop_pkts      = cnt_ring_drop_pkts;
+  assign snap_src.ring_drop_entries   = cnt_ring_drop_entries;
+  assign snap_src.expected_seq        = feed_seq_q[FEED_DELAY-1];
+  assign snap_src.synced              = feed_synced_q[FEED_DELAY-1];
+  assign snap_src.eos                 = feed_eos_q[FEED_DELAY-1];
 
   always_ff @(posedge net_clk) begin
     if (net_rst) begin
@@ -508,10 +593,31 @@ module hft_csr_wrap
   assign hwif_in.ITCH.ITCH_FILTERED.HI.value.next = snap_cnt.itch[ITCH_CNT_FILTERED][63:32];
   assign hwif_in.ITCH.ITCH_MASKED.LO.value.next = snap_cnt.itch[ITCH_CNT_MASKED][31:0];
   assign hwif_in.ITCH.ITCH_MASKED.HI.value.next = snap_cnt.itch[ITCH_CNT_MASKED][63:32];
+  assign hwif_in.RING.RING_COMMIT_ENTRIES.LO.value.next = snap_cnt.ring_commit_entries[31:0];
+  assign hwif_in.RING.RING_COMMIT_ENTRIES.HI.value.next = snap_cnt.ring_commit_entries[63:32];
+  assign hwif_in.RING.RING_DROP_PKTS.LO.value.next = snap_cnt.ring_drop_pkts[31:0];
+  assign hwif_in.RING.RING_DROP_PKTS.HI.value.next = snap_cnt.ring_drop_pkts[63:32];
+  assign hwif_in.RING.RING_DROP_ENTRIES.LO.value.next = snap_cnt.ring_drop_entries[31:0];
+  assign hwif_in.RING.RING_DROP_ENTRIES.HI.value.next = snap_cnt.ring_drop_entries[63:32];
   assign hwif_in.FEED.EXPECTED_SEQ.LO.value.next = snap_cnt.expected_seq[31:0];
   assign hwif_in.FEED.EXPECTED_SEQ.HI.value.next = snap_cnt.expected_seq[63:32];
   assign hwif_in.FEED.FEED_STATE.synced.next = snap_cnt.synced;
   assign hwif_in.FEED.FEED_STATE.eos.next = snap_cnt.eos;
+
+  // ---- RING: event_ring_writer, in this clock domain ----
+  assign host_ring_enable = hwif_out.RING.RING_CTRL.enable.value;
+  assign host_ring_base = {
+    hwif_out.RING.RING_BASE_HI.base.value, hwif_out.RING.RING_BASE_LO.base.value, 12'h000
+  };
+  assign host_ring_size_log2 = hwif_out.RING.RING_SIZE_LOG2.size_log2.value;
+  assign host_ring_cons = hwif_out.RING.CONS_IDX.cons.value;
+  assign hwif_in.RING.PROD_IDX.prod.next = host_ring_prod_idx;
+  assign hwif_in.RING.RING_STATUS.bresp_err.next = host_ring_bresp_err;
+  assign hwif_in.RING.RING_STATUS.enable_err.next = host_ring_enable_err;
+  assign hwif_in.RING.RING_WRITTEN.LO.value.next = host_ring_cnt_written[31:0];
+  assign hwif_in.RING.RING_WRITTEN.HI.value.next = host_ring_cnt_written[63:32];
+  assign hwif_in.RING.RING_BRESP_ERR.LO.value.next = host_ring_cnt_bresp_err[31:0];
+  assign hwif_in.RING.RING_BRESP_ERR.HI.value.next = host_ring_cnt_bresp_err[63:32];
 
   // ---- host -> net ----
   net_cfg_t cfg_dst;
@@ -588,6 +694,7 @@ module hft_csr_wrap
   assign cfg_resync_seq = feed_dst.set.resync_seq;
   assign cfg_class_en = feed_dst.set.class_en & {ITCH_N_CLASS{feed_loaded_q || feed_dst_valid}};
   assign cfg_class_filter = feed_dst.set.class_filter;
+  assign cfg_epoch = feed_dst.set.epoch;
 
   // ---- symbol bitmap access: host -> net request, net -> host response ----
   sym_req_t sym_req, sym_req_q, sym_dst;

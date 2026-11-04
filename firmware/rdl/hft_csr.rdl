@@ -28,9 +28,9 @@ addrmap hft_csr {
         reg {
             name = "Register map version";
             field {
-                desc = "Major.minor of this map: 0x0005_0002 is the F5 map with the F3 FEED block and the F4 ITCH block and SYMBOL bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
+                desc = "Major.minor of this map: 0x0005_0003 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap and the F6 RING block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
                 sw = r; hw = na;
-            } version[31:0] = 32'h0005_0002;
+            } version[31:0] = 32'h0005_0003;
         } VERSION @ 0x4;
 
         reg {
@@ -136,7 +136,7 @@ addrmap hft_csr {
 
     regfile {
         name = "MoldUDP64 feed";
-        desc = "moldudp64_rx configuration, resync and counters. FEED_CTRL, SESSION_* and RESYNC_SEQ_* are a shadow like the NET block: FEED_COMMIT moves them to the net clock domain in one transfer. EXPECTED_SEQ, FEED_STATE and the MOLD_* counters (net clock domain, 64 bit, wrap; cleared only by reset) are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS counters; STATS_SEQ counts both. MOLD_<status> is at 0x0240 + 8 * status, status = mold_status_e in hft_pkg.sv.";
+        desc = "moldudp64_rx configuration, resync and counters. FEED_CTRL, SESSION_* and RESYNC_SEQ_* are a shadow like the NET block: FEED_COMMIT moves them to the net clock domain in one transfer. EXPECTED_SEQ, FEED_STATE and the MOLD_* counters (net clock domain, 64 bit, wrap; cleared only by reset) are updated by STATS_CTRL.snapshot in the same net clock cycle as the STATS counters; STATS_SEQ counts both. MOLD_<status> is at 0x0240 + 8 * status, status = mold_status_e in hft_pkg.sv. Each FEED_COMMIT write with commit or resync set adds 1 to an 8-bit wrapping count, 0 after reset. It travels with the configuration, so every ring entry carries, as cfg_epoch, the count of the commit in effect at its packet's first beat. The host keeps its own count to match them: every such write counts, also two in consecutive bus cycles, and a write that leaves byte 0 disabled does not.";
 
         reg {
             name = "Feed control";
@@ -202,7 +202,7 @@ addrmap hft_csr {
             name = "Commit";
             field {
                 desc = "Write 1: send FEED_CTRL, SESSION_* and RESYNC_SEQ_* to moldudp64_rx (atomic; it takes them at the first beat of each packet). A commit while the previous one is in flight is not lost: the newest shadow is sent when the transfer is free.";
-                sw = w; hw = r; singlepulse;
+                sw = w; hw = r; singlepulse; swmod;
             } commit[0:0] = 1'b0;
             field {
                 desc = "Write 1: commit as above and resync the feed with resync_learn and RESYNC_SEQ of that commit. moldudp64_rx applies it between packets, or after the packet in progress. Like a self-clearing command bit, a request stays pending until a transfer carries it: it is never lost, and requests made before that merge into one resync with the newest shadow. FEED_STATUS.commit_busy reads 0 once it is in moldudp64_rx; software that wants two separate resyncs waits for that between them.";
@@ -249,6 +249,98 @@ addrmap hft_csr {
         counter64 MOLD_GAP_EVENTS    @ 0xB0;  // accepted packets with a gap
         counter64 MOLD_GAP_MSGS      @ 0xB8;  // messages skipped by gaps
     } FEED @ 0x0200;
+
+    // A 64-bit counter of the host clock domain: live, so LO and HI of one value need a retry.
+    regfile counter64_live {
+        name = "64-bit live counter";
+        reg {
+            name = "Low word";
+            field {
+                desc = "Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.";
+                sw = r; hw = w;
+            } value[31:0];
+        } LO @ 0x0;
+        reg {
+            name = "High word";
+            field {
+                desc = "Counter bits [63:32], live.";
+                sw = r; hw = w;
+            } value[31:0];
+        } HI @ 0x4;
+    };
+
+    regfile {
+        name = "Host event ring";
+        desc = "event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.";
+
+        reg {
+            name = "Ring control";
+            field {
+                desc = "Writer enabled. A rising edge with CONS_IDX = 0 and RING_SIZE_LOG2 in 4..20 sets PROD_IDX to 0, takes RING_BASE_* and RING_SIZE_LOG2 (ignored until the next rising edge) and clears RING_STATUS; any other rising edge is refused. To retry after a refusal: write 0, then 1. Falling edge: bursts in flight finish, no new entry starts.";
+                sw = rw; hw = r;
+            } enable[0:0] = 1'b0;
+        } RING_CTRL @ 0x00;
+
+        reg {
+            name = "Ring base address, low";
+            field {
+                desc = "Base address bits [31:12]; the region is 4 KiB aligned and bits [11:0] read 0.";
+                sw = rw; hw = r;
+            } base[31:12] = 20'h0;
+        } RING_BASE_LO @ 0x04;
+
+        reg {
+            name = "Ring base address, high";
+            field {
+                desc = "Base address bits [63:32].";
+                sw = rw; hw = r;
+            } base[31:0] = 32'h0;
+        } RING_BASE_HI @ 0x08;
+
+        reg {
+            name = "Ring size";
+            field {
+                desc = "log2 of the number of entries, 4..20. Any other value makes the next enable refused.";
+                sw = rw; hw = r;
+            } size_log2[4:0] = 5'h0;
+        } RING_SIZE_LOG2 @ 0x0C;
+
+        reg {
+            name = "Consumer index";
+            field {
+                desc = "Entries the host has consumed: a wrapping 32-bit count, the same arithmetic as PROD_IDX. PROD_IDX - CONS_IDX = 2^RING_SIZE_LOG2 means full, and the writer waits. It must be 0 at each enable and must never pass PROD_IDX.";
+                sw = rw; hw = r;
+            } cons[31:0] = 32'h0;
+        } CONS_IDX @ 0x10;
+
+        reg {
+            name = "Producer index";
+            field {
+                desc = "Bursts started since the last accepted enable, live, wrapping. An entry counted here may still be on its way: the phase bits tell which entries are in memory.";
+                sw = r; hw = w;
+            } prod[31:0];
+        } PROD_IDX @ 0x14;
+
+        reg {
+            name = "Ring status";
+            field {
+                desc = "A write answered with a BRESP other than OKAY since the last accepted enable. The write is not retried; RING_BRESP_ERR counts them.";
+                sw = r; hw = w;
+            } bresp_err[0:0];
+            field {
+                desc = "The last rising edge of RING_CTRL.enable was refused: CONS_IDX was not 0 or RING_SIZE_LOG2 was not in 4..20. Stays set until an accepted enable.";
+                sw = r; hw = w;
+            } enable_err[1:1];
+        } RING_STATUS @ 0x18;
+
+        counter64_live RING_WRITTEN   @ 0x20;  // entries answered with OKAY
+        counter64_live RING_BRESP_ERR @ 0x28;  // entries answered with another BRESP
+
+        // Net clock domain, updated by STATS_CTRL.snapshot with the STATS, MOLD_* and ITCH_* counters.
+        counter64 RING_COMMIT_ENTRIES @ 0x40;  // entries committed to the FIFO, GAP and EOS included
+        counter64 RING_DROP_PKTS      @ 0x48;  // accepted packets that did not fit the FIFO
+        counter64 RING_DROP_ENTRIES   @ 0x50;  // their entries, GAP and EOS included
+    } RING @ 0x0300;
 
     regfile {
         name = "Statistics";

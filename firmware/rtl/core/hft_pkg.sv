@@ -76,6 +76,9 @@ package hft_pkg;
   // Ring entries of one packet at most: 181 messages of 2 + MOLD_MIN_LEN bytes in a 1472-byte UDP
   // payload after the 20-byte header, GAP and EOS. The commit FIFO must hold this many.
   localparam int unsigned RING_MAX_PKT_ENTRIES = 183;
+  // Ring sizes an enable accepts: log2 of the number of entries (RING_SIZE_LOG2).
+  localparam int unsigned RING_SIZE_LOG2_MIN = 4;
+  localparam int unsigned RING_SIZE_LOG2_MAX = 20;
   // Message class = counter index (itch_stats). ORDER and TRADE messages are decoded into
   // fields; ADMIN, AUCTION and UNKNOWN pass with the common header and the raw vector only.
   // MALFORMED: a known type whose length is not the specification length (not decoded).

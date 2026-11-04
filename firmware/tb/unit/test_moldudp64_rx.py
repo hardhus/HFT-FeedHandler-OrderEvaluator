@@ -59,7 +59,7 @@ MSG_LATENCY = 2  # input beat with a message's last byte -> m_msg_valid (11 §2.
 PKT_LATENCY = 3  # input tlast -> m_pkt_valid
 SESSION = b"SESSION001"
 CFG = FeedConfig(enable=True, session_check=True, session=SESSION, filter_mask=0x01)
-CTX_W = 12  # cfg_msg_ctx width: itch_decoder class enable and filter (as in the OOC harness)
+CTX_W = 20  # cfg_msg_ctx width: epoch, itch_decoder class filter and enable (as in the OOC harness)
 UDP_PAYLOAD_MAX = 65535 - 28  # largest UDP payload eth_ip_udp_rx delivers (ip_len 65535)
 S = MoldStatus
 

@@ -347,6 +347,35 @@ module hft_csr (
             } MOLD_GAP_MSGS;
         } FEED;
         struct {
+            logic RING_CTRL;
+            logic RING_BASE_LO;
+            logic RING_BASE_HI;
+            logic RING_SIZE_LOG2;
+            logic CONS_IDX;
+            logic PROD_IDX;
+            logic RING_STATUS;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_WRITTEN;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_BRESP_ERR;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_COMMIT_ENTRIES;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_DROP_PKTS;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_DROP_ENTRIES;
+        } RING;
+        struct {
             logic STATS_CTRL;
             logic STATS_SEQ;
             struct {
@@ -613,6 +642,57 @@ module hft_csr (
         decoded_reg_strb.FEED.MOLD_GAP_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2bc);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_CTRL = cpuif_req_masked & (cpuif_addr == 16'h300);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h300);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h300);
+        decoded_reg_strb.RING.RING_BASE_LO = cpuif_req_masked & (cpuif_addr == 16'h304);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h304);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h304);
+        decoded_reg_strb.RING.RING_BASE_HI = cpuif_req_masked & (cpuif_addr == 16'h308);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h308);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h308);
+        decoded_reg_strb.RING.RING_SIZE_LOG2 = cpuif_req_masked & (cpuif_addr == 16'h30c);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h30c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h30c);
+        decoded_reg_strb.RING.CONS_IDX = cpuif_req_masked & (cpuif_addr == 16'h310);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h310);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h310);
+        decoded_reg_strb.RING.PROD_IDX = cpuif_req_masked & (cpuif_addr == 16'h314) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h314);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h314) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_STATUS = cpuif_req_masked & (cpuif_addr == 16'h318) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h318);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h318) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_WRITTEN.LO = cpuif_req_masked & (cpuif_addr == 16'h320) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h320);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h320) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_WRITTEN.HI = cpuif_req_masked & (cpuif_addr == 16'h324) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h324);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h324) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_BRESP_ERR.LO = cpuif_req_masked & (cpuif_addr == 16'h328) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h328);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h328) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_BRESP_ERR.HI = cpuif_req_masked & (cpuif_addr == 16'h32c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h32c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h32c) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h340) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h340);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h340) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h344) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h344);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h344) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_PKTS.LO = cpuif_req_masked & (cpuif_addr == 16'h348) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h348);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h348) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_PKTS.HI = cpuif_req_masked & (cpuif_addr == 16'h34c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h34c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h34c) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h350) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h350);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h350) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h354) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h354);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h354) & !cpuif_req_is_wr;
         decoded_reg_strb.STATS.STATS_CTRL = cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h400);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
@@ -898,6 +978,38 @@ module hft_csr (
                 struct {
                     logic next;
                     logic load_next;
+                } enable;
+            } RING_CTRL;
+            struct {
+                struct {
+                    logic [19:0] next;
+                    logic load_next;
+                } base;
+            } RING_BASE_LO;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } base;
+            } RING_BASE_HI;
+            struct {
+                struct {
+                    logic [4:0] next;
+                    logic load_next;
+                } size_log2;
+            } RING_SIZE_LOG2;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                } cons;
+            } CONS_IDX;
+        } RING;
+        struct {
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
                 } snapshot;
             } STATS_CTRL;
             struct {
@@ -1021,6 +1133,33 @@ module hft_csr (
                 } resync;
             } FEED_COMMIT;
         } FEED;
+        struct {
+            struct {
+                struct {
+                    logic value;
+                } enable;
+            } RING_CTRL;
+            struct {
+                struct {
+                    logic [19:0] value;
+                } base;
+            } RING_BASE_LO;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } base;
+            } RING_BASE_HI;
+            struct {
+                struct {
+                    logic [4:0] value;
+                } size_log2;
+            } RING_SIZE_LOG2;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } cons;
+            } CONS_IDX;
+        } RING;
         struct {
             struct {
                 struct {
@@ -1490,6 +1629,7 @@ module hft_csr (
         end
     end
     assign hwif_out.FEED.FEED_COMMIT.commit.value = field_storage.FEED.FEED_COMMIT.commit.value;
+    assign hwif_out.FEED.FEED_COMMIT.commit.swmod = decoded_reg_strb.FEED.FEED_COMMIT && decoded_req_is_wr && |(decoded_wr_biten[0:0]);
     // Field: hft_csr.FEED.FEED_COMMIT.resync
     always_comb begin
         automatic logic [0:0] next_c;
@@ -1516,6 +1656,121 @@ module hft_csr (
         end
     end
     assign hwif_out.FEED.FEED_COMMIT.resync.value = field_storage.FEED.FEED_COMMIT.resync.value;
+    // Field: hft_csr.RING.RING_CTRL.enable
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.RING.RING_CTRL.enable.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.RING.RING_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.RING.RING_CTRL.enable.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end
+        field_combo.RING.RING_CTRL.enable.next = next_c;
+        field_combo.RING.RING_CTRL.enable.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.RING.RING_CTRL.enable.value <= 1'h0;
+        end else begin
+            if(field_combo.RING.RING_CTRL.enable.load_next) begin
+                field_storage.RING.RING_CTRL.enable.value <= field_combo.RING.RING_CTRL.enable.next;
+            end
+        end
+    end
+    assign hwif_out.RING.RING_CTRL.enable.value = field_storage.RING.RING_CTRL.enable.value;
+    // Field: hft_csr.RING.RING_BASE_LO.base
+    always_comb begin
+        automatic logic [19:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.RING.RING_BASE_LO.base.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.RING.RING_BASE_LO && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.RING.RING_BASE_LO.base.value & ~decoded_wr_biten[31:12]) | (decoded_wr_data[31:12] & decoded_wr_biten[31:12]);
+            load_next_c = '1;
+        end
+        field_combo.RING.RING_BASE_LO.base.next = next_c;
+        field_combo.RING.RING_BASE_LO.base.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.RING.RING_BASE_LO.base.value <= 20'h0;
+        end else begin
+            if(field_combo.RING.RING_BASE_LO.base.load_next) begin
+                field_storage.RING.RING_BASE_LO.base.value <= field_combo.RING.RING_BASE_LO.base.next;
+            end
+        end
+    end
+    assign hwif_out.RING.RING_BASE_LO.base.value = field_storage.RING.RING_BASE_LO.base.value;
+    // Field: hft_csr.RING.RING_BASE_HI.base
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.RING.RING_BASE_HI.base.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.RING.RING_BASE_HI && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.RING.RING_BASE_HI.base.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.RING.RING_BASE_HI.base.next = next_c;
+        field_combo.RING.RING_BASE_HI.base.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.RING.RING_BASE_HI.base.value <= 32'h0;
+        end else begin
+            if(field_combo.RING.RING_BASE_HI.base.load_next) begin
+                field_storage.RING.RING_BASE_HI.base.value <= field_combo.RING.RING_BASE_HI.base.next;
+            end
+        end
+    end
+    assign hwif_out.RING.RING_BASE_HI.base.value = field_storage.RING.RING_BASE_HI.base.value;
+    // Field: hft_csr.RING.RING_SIZE_LOG2.size_log2
+    always_comb begin
+        automatic logic [4:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.RING.RING_SIZE_LOG2.size_log2.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.RING.RING_SIZE_LOG2 && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.RING.RING_SIZE_LOG2.size_log2.value & ~decoded_wr_biten[4:0]) | (decoded_wr_data[4:0] & decoded_wr_biten[4:0]);
+            load_next_c = '1;
+        end
+        field_combo.RING.RING_SIZE_LOG2.size_log2.next = next_c;
+        field_combo.RING.RING_SIZE_LOG2.size_log2.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.RING.RING_SIZE_LOG2.size_log2.value <= 5'h0;
+        end else begin
+            if(field_combo.RING.RING_SIZE_LOG2.size_log2.load_next) begin
+                field_storage.RING.RING_SIZE_LOG2.size_log2.value <= field_combo.RING.RING_SIZE_LOG2.size_log2.next;
+            end
+        end
+    end
+    assign hwif_out.RING.RING_SIZE_LOG2.size_log2.value = field_storage.RING.RING_SIZE_LOG2.size_log2.value;
+    // Field: hft_csr.RING.CONS_IDX.cons
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.RING.CONS_IDX.cons.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.RING.CONS_IDX && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.RING.CONS_IDX.cons.value & ~decoded_wr_biten[31:0]) | (decoded_wr_data[31:0] & decoded_wr_biten[31:0]);
+            load_next_c = '1;
+        end
+        field_combo.RING.CONS_IDX.cons.next = next_c;
+        field_combo.RING.CONS_IDX.cons.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.RING.CONS_IDX.cons.value <= 32'h0;
+        end else begin
+            if(field_combo.RING.CONS_IDX.cons.load_next) begin
+                field_storage.RING.CONS_IDX.cons.value <= field_combo.RING.CONS_IDX.cons.next;
+            end
+        end
+    end
+    assign hwif_out.RING.CONS_IDX.cons.value = field_storage.RING.CONS_IDX.cons.value;
     // Field: hft_csr.STATS.STATS_CTRL.snapshot
     always_comb begin
         automatic logic [0:0] next_c;
@@ -1686,7 +1941,7 @@ module hft_csr (
             readback_data_var[ad_hi(16'h0)][31:0] = 32'h48465431;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h4)) begin
-            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50002;
+            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50003;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h8)) begin
             readback_data_var[ad_hi(16'h8)][31:0] = field_storage.GLOBAL.SCRATCH.value.value;
@@ -1842,6 +2097,58 @@ module hft_csr (
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h2bc)) begin
             readback_data_var[ad_hi(16'h2bc)][31:0] = hwif_in.FEED.MOLD_GAP_MSGS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h300)) begin
+            readback_data_var[ad_hi(16'h300)][0] = field_storage.RING.RING_CTRL.enable.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h304)) begin
+            readback_data_var[ad_hi(16'h304)][31:12] = field_storage.RING.RING_BASE_LO.base.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h308)) begin
+            readback_data_var[ad_hi(16'h308)][31:0] = field_storage.RING.RING_BASE_HI.base.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h30c)) begin
+            readback_data_var[ad_hi(16'h30c)][4:0] = field_storage.RING.RING_SIZE_LOG2.size_log2.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h310)) begin
+            readback_data_var[ad_hi(16'h310)][31:0] = field_storage.RING.CONS_IDX.cons.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h314)) begin
+            readback_data_var[ad_hi(16'h314)][31:0] = hwif_in.RING.PROD_IDX.prod.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h318)) begin
+            readback_data_var[ad_hi(16'h318)][0] = hwif_in.RING.RING_STATUS.bresp_err.next;
+            readback_data_var[ad_hi(16'h318)][1] = hwif_in.RING.RING_STATUS.enable_err.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h320)) begin
+            readback_data_var[ad_hi(16'h320)][31:0] = hwif_in.RING.RING_WRITTEN.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h324)) begin
+            readback_data_var[ad_hi(16'h324)][31:0] = hwif_in.RING.RING_WRITTEN.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h328)) begin
+            readback_data_var[ad_hi(16'h328)][31:0] = hwif_in.RING.RING_BRESP_ERR.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h32c)) begin
+            readback_data_var[ad_hi(16'h32c)][31:0] = hwif_in.RING.RING_BRESP_ERR.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h340)) begin
+            readback_data_var[ad_hi(16'h340)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h344)) begin
+            readback_data_var[ad_hi(16'h344)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h348)) begin
+            readback_data_var[ad_hi(16'h348)][31:0] = hwif_in.RING.RING_DROP_PKTS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h34c)) begin
+            readback_data_var[ad_hi(16'h34c)][31:0] = hwif_in.RING.RING_DROP_PKTS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h350)) begin
+            readback_data_var[ad_hi(16'h350)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h354)) begin
+            readback_data_var[ad_hi(16'h354)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.HI.value.next;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h404)) begin
             readback_data_var[ad_hi(16'h404)][31:0] = field_storage.STATS.STATS_SEQ.seq.value;

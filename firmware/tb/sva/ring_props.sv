@@ -9,6 +9,7 @@ module ring_props #(
     input logic             enable_q,
     input logic             start,
     input logic [     31:0] cfg_cons,
+    input logic [      4:0] cfg_size_log2,
     input logic             take,
     input logic             fifo_rd_en,
     input logic [     31:0] mask_q,
@@ -19,6 +20,9 @@ module ring_props #(
     input logic             phase_q,
     input logic [OUT_W-1:0] out_q
 );
+  logic size_ok;
+  assign size_ok = int'(cfg_size_log2) >= 4 && int'(cfg_size_log2) <= 20;
+
   // Sim-only: initial + always (not always_ff) on purpose.
   logic        armed;
   logic        ring_full;
@@ -57,7 +61,7 @@ module ring_props #(
   end
 
   a_prod_start :
-  assert property (@(posedge clk) disable iff (rst || !armed) start && cfg_cons == '0 |=> prod_q == '0)
+  assert property (@(posedge clk) disable iff (rst || !armed) start && cfg_cons == '0 && size_ok |=> prod_q == '0)
   else begin
     $error("ring_props: prod not 0 after enable");
   end
@@ -66,6 +70,12 @@ module ring_props #(
   assert property (@(posedge clk) disable iff (rst || !armed) start && cfg_cons != '0 |=> !enable_q)
   else begin
     $error("ring_props: an enable with a stale cons was not refused");
+  end
+
+  a_enable_bad_size :
+  assert property (@(posedge clk) disable iff (rst || !armed) start && !size_ok |=> !enable_q)
+  else begin
+    $error("ring_props: an enable with a size out of range was not refused");
   end
 
   a_phase :

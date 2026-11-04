@@ -140,18 +140,19 @@ bind event_ring_writer ring_props #(
     .MAX_OUTSTANDING(MAX_OUTSTANDING),
     .OUT_W          (OUT_W)
 ) u_ring_props (
-    .clk       (clk),
-    .rst       (rst),
-    .enable_q  (running_q),
-    .start     (start),
-    .cfg_cons  (cfg_cons),
-    .take      (take),
-    .fifo_rd_en(fifo_rd_en),
-    .mask_q    (mask_q),
-    .base_q    (base_q),
-    .prod_q    (prod_q),
-    .cons_q    (cons_q),
-    .addr_q    (addr_q),
-    .phase_q   (phase_q),
-    .out_q     (out_q)
+    .clk          (clk),
+    .rst          (rst),
+    .enable_q     (running_q),
+    .start        (start),
+    .cfg_cons     (cfg_cons),
+    .cfg_size_log2(cfg_size_log2),
+    .take         (take),
+    .fifo_rd_en   (fifo_rd_en),
+    .mask_q       (mask_q),
+    .base_q       (base_q),
+    .prod_q       (prod_q),
+    .cons_q       (cons_q),
+    .addr_q       (addr_q),
+    .phase_q      (phase_q),
+    .out_q        (out_q)
 );

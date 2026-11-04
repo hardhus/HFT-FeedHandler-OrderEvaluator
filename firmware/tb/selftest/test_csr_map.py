@@ -30,7 +30,7 @@ ITCH_CLASSES = ("ORDER", "TRADE", "ADMIN", "AUCTION", "UNKNOWN", "MALFORMED")
 # ITCH counters after the per-class ones, with their addresses.
 ITCH_EXTRA = {"OUT": 0x0670, "FILTERED": 0x0678, "MASKED": 0x0680}
 
-# Every register of the map (F5 + F3 FEED block + F4 ITCH block): path -> address.
+# Every register of the map (F5 + F3 FEED block + F4 ITCH block + F6 RING block): path -> address.
 EXPECTED = {
     "GLOBAL.ID": 0x0000,
     "GLOBAL.VERSION": 0x0004,
@@ -85,6 +85,23 @@ EXPECTED = {
     "FEED.MOLD_GAP_EVENTS.HI": 0x02B4,
     "FEED.MOLD_GAP_MSGS.LO": 0x02B8,
     "FEED.MOLD_GAP_MSGS.HI": 0x02BC,
+    "RING.RING_CTRL": 0x0300,
+    "RING.RING_BASE_LO": 0x0304,
+    "RING.RING_BASE_HI": 0x0308,
+    "RING.RING_SIZE_LOG2": 0x030C,
+    "RING.CONS_IDX": 0x0310,
+    "RING.PROD_IDX": 0x0314,
+    "RING.RING_STATUS": 0x0318,
+    "RING.RING_WRITTEN.LO": 0x0320,
+    "RING.RING_WRITTEN.HI": 0x0324,
+    "RING.RING_BRESP_ERR.LO": 0x0328,
+    "RING.RING_BRESP_ERR.HI": 0x032C,
+    "RING.RING_COMMIT_ENTRIES.LO": 0x0340,
+    "RING.RING_COMMIT_ENTRIES.HI": 0x0344,
+    "RING.RING_DROP_PKTS.LO": 0x0348,
+    "RING.RING_DROP_PKTS.HI": 0x034C,
+    "RING.RING_DROP_ENTRIES.LO": 0x0350,
+    "RING.RING_DROP_ENTRIES.HI": 0x0354,
     "STATS.STATS_CTRL": 0x0400,
     "STATS.STATS_SEQ": 0x0404,
     "STATS.RX_PKTS.LO": 0x0410,
@@ -133,8 +150,9 @@ EXPECTED = {
 EXPECTED_MEMS = {"SYMBOL": (0x8000, 2048, 32)}
 
 # Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved
-# (RING 0x0300, RISK 0x0500, STRATEGY 0x1000, TX 0x2000) except the SYMBOL memory at 0x8000.
-BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "STATS": (0x0400, 0x0500),
+# (RISK 0x0500, STRATEGY 0x1000, TX 0x2000) except the SYMBOL memory at 0x8000.
+BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "RING": (0x0300, 0x0400),
+          "STATS": (0x0400, 0x0500),
           "ITCH": (0x0600, 0x0700)}  # fmt: skip
 
 
@@ -146,7 +164,7 @@ def test_every_register_at_its_address():
 def test_constants():
     regs = regs_by_path()
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
-    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0002  # + F3 FEED, F4 ITCH and SYMBOL (minor)
+    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0003  # + F3 FEED, F4 ITCH, SYMBOL and F6 RING (minor)
 
 
 def test_drop_counters_follow_reason_codes():
@@ -233,7 +251,8 @@ def test_access_kinds():
         return {(True, True): "RW", (True, False): "RO", (False, True): "WO"}[r.readable, r.writable]
 
     ro = {"GLOBAL.ID", "GLOBAL.VERSION", "NET.NET_STATUS", "STATS.STATS_SEQ", "FEED.FEED_STATUS", "FEED.FEED_STATE"}
-    ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.", "ITCH.")) and p.endswith((".LO", ".HI"))}
+    ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.", "ITCH.", "RING.")) and p.endswith((".LO", ".HI"))}
+    ro |= {"RING.PROD_IDX", "RING.RING_STATUS"}
     ro -= {"FEED.RESYNC_SEQ_LO", "FEED.RESYNC_SEQ_HI"}  # software writes the resync value
     wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL", "FEED.FEED_COMMIT"}
     assert {p: kind(p) for p in EXPECTED} == {p: "RO" if p in ro else "WO" if p in wo else "RW" for p in EXPECTED}
@@ -249,6 +268,10 @@ def test_access_kinds():
     assert regs["FEED.SESSION_2"].fields[0].lsb == 16, "session bytes 8..9 in [31:16]"
     itch = {f.name: (f.lsb, f.width, f.reset) for f in regs["ITCH.ITCH_CTRL"].fields}
     assert itch == {"class_en": (0, 6, 0), "class_filter": (8, 6, 0)}, "class_en must reset to 0 (nothing output)"
+    assert {f.name: (f.lsb, f.width, f.reset) for f in regs["RING.RING_CTRL"].fields} == {"enable": (0, 1, 0)}
+    assert {f.name: (f.lsb, f.width, f.reset) for f in regs["RING.RING_BASE_LO"].fields} == {"base": (12, 20, 0)}
+    assert {f.name: (f.lsb, f.width, f.reset) for f in regs["RING.RING_SIZE_LOG2"].fields} == {"size_log2": (0, 5, 0)}
+    assert {f.name: f.lsb for f in regs["RING.RING_STATUS"].fields} == {"bresp_err": 0, "enable_err": 1}
 
 
 def test_no_field_written_by_both_sw_and_hw():
@@ -275,7 +298,7 @@ def test_model_access_rules():
     assert m.read(a["GLOBAL.ID"]) == (0x48465431, OKAY)
     assert m.write(a["GLOBAL.ID"], 0) == (SLVERR, set())
     assert m.read(a["NET.NET_COMMIT"]) == (0, SLVERR)
-    assert m.read(0x0300) == (0, SLVERR) and m.write(0xFFFC, 1) == (SLVERR, set())
+    assert m.read(0x0500) == (0, SLVERR) and m.write(0xFFFC, 1) == (SLVERR, set())
     assert m.write(a["NET.FILTER[2].PORT_EN"], 0xFFFF_FFFF, strb=0b0100) == (OKAY, set())
     assert m.read(a["NET.FILTER[2].PORT_EN"]) == (1 << 16, OKAY), "only byte 2 written, only en is in it"
     assert m.write(a["NET.NET_COMMIT"], 1) == (OKAY, {"NET.NET_COMMIT.commit"})

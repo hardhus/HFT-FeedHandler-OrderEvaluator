@@ -18,7 +18,9 @@
 // Capacity     : a packet has at most RING_MAX_PKT_ENTRIES entries: the FIFO must hold that many, or it
 //                always drops.
 // Counters     : CNT_W bits each, wrapping, cleared only by rst. Registers: a reader that samples them on
-//                one clock edge gets the same cycle of all three.
+//                one clock edge gets the same cycle of all three. Always 3 cycles after s_pkt_valid, with or
+//                without a pending EOS entry, so hft_csr_wrap can hold its ITCH and MOLD counters to the same
+//                packet events (audit/13 S6).
 // Reset        : rst clears everything. Reset the FIFO with it (entries of a packet cut by it are gone).
 module event_packer
   import hft_pkg::*;
@@ -91,7 +93,7 @@ module event_packer
   end
 
   // ===================== Stage 0 -> 1: which entry =====================
-  logic s1_valid, s1_commit, s1_rollback;
+  logic s1_valid, s1_commit, s1_rollback, s1_late;
   logic [DESC_W-1:0] s1_din;
 
   logic next_valid, next_commit, next_rollback, next_eos;
@@ -169,12 +171,14 @@ module event_packer
       s1_valid    <= 1'b0;
       s1_commit   <= 1'b0;
       s1_rollback <= 1'b0;
+      s1_late     <= 1'b0;
       eos_q       <= 1'b0;
       empty_q     <= 1'b1;
     end else begin
       s1_valid    <= next_valid;
       s1_commit   <= next_commit;
       s1_rollback <= next_rollback;
+      s1_late     <= eos_q;
       eos_q       <= next_eos;
       if (s_pkt_valid) begin
         empty_q <= 1'b1;
@@ -187,6 +191,9 @@ module event_packer
   // ===================== Stage 1: the FIFO =====================
   logic dropping, drop_q;
   logic [PEND_W-1:0] pend_q, pend_now;  // entries of the current packet, the dropped ones included
+  // What the counters take: a commit that came with the event waits 1 cycle for one that came after it.
+  logic count_q, count_drop_q, count_now, count_drop;
+  logic [PEND_W-1:0] count_n_q, count_n;
 
   assign dropping      = drop_q || (s1_valid && (fifo_full || fifo_wr_busy));
   assign pend_now      = pend_q + PEND_W'(s1_valid);
@@ -194,12 +201,16 @@ module event_packer
   assign fifo_din      = s1_din;
   assign fifo_commit   = s1_commit && !dropping;
   assign fifo_rollback = s1_rollback || (s1_commit && dropping);
+  assign count_now     = s1_commit && s1_late;
+  assign count_drop    = count_now ? dropping : count_drop_q;
+  assign count_n       = count_now ? pend_now : count_n_q;
 
   always_ff @(posedge clk) begin
     if (rst) begin
       drop_q             <= 1'b0;
       pend_q             <= '0;
       overflow_q         <= 1'b0;
+      count_q            <= 1'b0;
       cnt_commit_entries <= '0;
       cnt_drop_pkts      <= '0;
       cnt_drop_entries   <= '0;
@@ -212,16 +223,24 @@ module event_packer
         pend_q <= pend_now;
       end
       if (s1_commit) begin
-        if (dropping) begin
-          overflow_q       <= 1'b1;
+        // A commit without entries (a heartbeat) leaves a pending flag for the next entry.
+        overflow_q <= dropping || (overflow_q && pend_now == '0);
+      end
+      count_q <= s1_commit && !s1_late;
+      if (count_q || count_now) begin
+        if (count_drop) begin
           cnt_drop_pkts    <= cnt_drop_pkts + CNT_W'(1);
-          cnt_drop_entries <= cnt_drop_entries + CNT_W'(pend_now);
+          cnt_drop_entries <= cnt_drop_entries + CNT_W'(count_n);
         end else begin
-          // A commit without entries (a heartbeat) leaves a pending flag for the next entry.
-          overflow_q         <= overflow_q && pend_now == '0;
-          cnt_commit_entries <= cnt_commit_entries + CNT_W'(pend_now);
+          cnt_commit_entries <= cnt_commit_entries + CNT_W'(count_n);
         end
       end
     end
+  end
+
+  // Datapath: no reset (only used after count_q has been set).
+  always_ff @(posedge clk) begin
+    count_drop_q <= dropping;
+    count_n_q    <= pend_now;
   end
 endmodule

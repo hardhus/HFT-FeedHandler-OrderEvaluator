@@ -395,6 +395,27 @@ async def tc_enable_with_stale_cons_is_refused(dut):
 
 
 @cocotb.test()
+async def tc_enable_with_bad_size_is_refused(dut):
+    """RING_SIZE_LOG2 outside 4..20 refuses the enable like a stale cons (audit/13 S6): nothing moves and the writer
+    needs a disable and a new enable. The two ends of the range are accepted."""
+    b = await bench(dut)
+    b.put(1)
+    for size_log2 in (0, 3, 21, 31):
+        await b.enable(size_log2=size_log2)
+        await b.idle(32)
+        assert dut.status_enable_err.value, f"size_log2 {size_log2} not refused"
+        assert b.pops == 0 and b.prod() == 0 and b.written() == 0
+        await b.disable()
+    for size_log2 in (20, 4):
+        await b.enable(size_log2=size_log2)
+        await b.idle(32)
+        assert not dut.status_enable_err.value, f"size_log2 {size_log2} refused"
+        assert b.prod() == 1, f"size_log2 {size_log2}: prod {b.prod()}"
+        await b.disable()
+        b.put(1)
+
+
+@cocotb.test()
 async def tc_base_and_size_ignored_while_enabled(dut):
     """A new base or size while enabled has no effect, also where the ring wraps and goes back to its base."""
     b = await bench(dut)

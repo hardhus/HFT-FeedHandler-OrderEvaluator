@@ -180,6 +180,7 @@ RING_VIOLATIONS = {
     "a_addr": (6, "address differs from its formula"),
     "a_outstanding": (7, "more bursts unanswered than MAX_OUTSTANDING"),
     "a_enable_refused": (8, "an enable with a stale cons was not refused"),
+    "a_enable_bad_size": (9, "an enable with a size out of range was not refused"),
 }
 
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]

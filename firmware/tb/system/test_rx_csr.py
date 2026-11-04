@@ -169,6 +169,7 @@ class MoldPkt:
     msgs: deque = field(default_factory=deque)  # messages still expected
     tlast: int = -1  # cycle of the input tlast
     resync_waited: bool = False
+    epoch: int = 0  # cfg_epoch at the first beat (the same context)
 
 
 class System:
@@ -204,7 +205,7 @@ class System:
         self.feed_cfg_changed_in_pkt = 0
         # itch_decoder chain
         self.bm = Bitmap()  # the decoder's bitmap: writes as its command port takes them
-        self.itch_q: deque[tuple[int, Event | None, Result, int, int, str]] = deque()  # (cycle, ...)
+        self.itch_q: deque[tuple[int, Event | None, Result, int, int, str, int]] = deque()  # (cycle, ...)
         self.fwd_q: deque[tuple[int, dict[str, int]]] = deque()
         self.itch_results: list[tuple[str, Result]] = []  # every result, with its packet's name
         self.itch_events: list[tuple[str, dict[str, int]]] = []  # every event as the DUT gave it
@@ -333,6 +334,7 @@ class System:
             want, self._after = mold.expect(s.want.payload, s.want.aborted, s.want.meta.filter_idx, cfg, self.state)
             itch = ItchConfig(self.cur_cfg.class_en, self.cur_cfg.class_filter)
             self.cur = MoldPkt(s, int(d.m_udp_sof_ts.value), cfg, self.state, want, itch, deque(want.msgs))
+            self.cur.epoch = int(r.cfg_epoch.value)
             self.out_q.append(self.cur)
         elif self.cur is not None:
             if resync:
@@ -377,9 +379,10 @@ class System:
         assert not any(vec[n:]), f"{name}: seq {seq}: bytes after the length are not 0"
         assert int(d.m_msg_sof_ts.value) == p.ts, f"{name}: seq {seq}: m_msg_sof_ts is not its packet's"
         ctx = int(d.m_msg_ctx.value)
-        assert ctx == p.itch.class_filter << N_CLASS | p.itch.class_en, f"{name}: seq {seq}: m_msg_ctx {ctx:#x}"
+        assert ctx == p.epoch << 2 * N_CLASS | p.itch.class_filter << N_CLASS | p.itch.class_en, (
+            f"{name}: seq {seq}: m_msg_ctx {ctx:#x}")
         ev, res = itch_expect(data, p.itch, self.bm)  # the lookup in this cycle: before its write
-        self.itch_q.append((self.cycle, ev, res, seq, p.ts, name))
+        self.itch_q.append((self.cycle, ev, res, seq, p.ts, name, p.epoch))
 
     def _mold_pkt(self) -> None:
         d = self.dut
@@ -400,12 +403,14 @@ class System:
         assert self.cycle - p.tlast == PKT_LATENCY, f"{name}: packet event {self.cycle - p.tlast} cycles after tlast"
         assert int(d.m_pkt_sof_ts.value) == p.ts, f"{name}: m_pkt_sof_ts is not its packet's"
         ctx = int(d.m_pkt_ctx.value)
-        assert ctx == p.itch.class_filter << N_CLASS | p.itch.class_en, f"{name}: m_pkt_ctx {ctx:#x}"
+        assert ctx == p.epoch << 2 * N_CLASS | p.itch.class_filter << N_CLASS | p.itch.class_en, (
+            f"{name}: m_pkt_ctx {ctx:#x}")
         if self.keep:
             if w.status in ACCEPTED:
                 self.accepted_msgs += w.msgs
             self.mold_done.append(p)
-        self.fwd_q.append((self.cycle, {k: int(getattr(d, f"m_pkt_{k}").value) for k in FWD_PORTS}))
+        want_fwd = {k: int(getattr(d, f"m_pkt_{k}").value) for k in FWD_PORTS} | {"epoch": p.epoch}
+        self.fwd_q.append((self.cycle, want_fwd))
 
     # ---- itch_decoder: the chain model
     def _itch_out(self) -> None:
@@ -413,7 +418,7 @@ class System:
         d = self.dut
         if d.m_res_valid.value:
             assert self.itch_q, f"cycle {self.cycle}: ITCH result with no message outstanding"
-            cyc, ev, res, seq, ts, name = self.itch_q.popleft()
+            cyc, ev, res, seq, ts, name, epoch = self.itch_q.popleft()
             assert self.cycle - cyc == ITCH_LATENCY, f"{name}: seq {seq}: result {self.cycle - cyc} cycles after the message"
             got = Result(ItchClass(int(d.m_res_class.value)), Outcome(int(d.m_res_outcome.value)))
             assert got == res, f"{name}: seq {seq}: result {got}, model {res}"
@@ -428,6 +433,7 @@ class System:
                 }  # fmt: skip
                 diff = {k: (event[k], want[k]) for k in want if event[k] != want[k]}
                 assert not diff, f"{name}: seq {seq}: event (DUT, model) differ: {diff}"
+                assert int(d.m_ev_epoch.value) == epoch, f"{name}: seq {seq}: m_ev_epoch, its packet's {epoch}"
                 if self.keep:
                     self.itch_events.append((name, event))
             self.itch_tally[got] += 1
@@ -441,7 +447,7 @@ class System:
             assert self.fwd_q, f"cycle {self.cycle}: forwarded packet event with none outstanding"
             cyc, want = self.fwd_q.popleft()
             assert self.cycle - cyc == ITCH_LATENCY, f"forwarded packet event {self.cycle - cyc} cycles late"
-            got = {k: int(getattr(d, f"m_fwd_pkt_{k}").value) for k in FWD_PORTS}
+            got = {k: int(getattr(d, f"m_fwd_pkt_{k}").value) for k in (*FWD_PORTS, "epoch")}
             assert got == want, f"forwarded packet event {got}, moldudp64_rx's {want}"
         else:
             assert not self.fwd_q or self.cycle - self.fwd_q[0][0] < ITCH_LATENCY, "forwarded packet event missing"
@@ -579,7 +585,7 @@ async def tc_bring_up(dut):
     committed, so every payload packet reaches moldudp64_rx as MOLD_DISABLED."""
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0002, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0003, OKAY)
     frames = []
     for i in range(5):  # before any commit: receiver off
         frames.append((await sysm.send(udp_frame(bytes(range(20 + i))), gap=2)).frame)

@@ -11,8 +11,8 @@
 //                Full: prod - cons == N (32-bit, both wrap). cons must never pass prod.
 // Enable       : the host writes cfg_cons = 0 and zeroes the region before each enable (its rule, audit/13 S5).
 //                A rising edge of cfg_enable with cfg_cons != 0 is refused: status_enable_err is set and the
-//                writer stays stopped, since a stale cons would overwrite unread entries in silence. Disable and
-//                enable again to retry. An accepted rising edge sets prod to 0 and takes base and size_log2, which
+//                writer stays stopped, since a stale cons would overwrite unread entries in silence. The same
+//                for cfg_size_log2 outside RING_SIZE_LOG2_MIN..MAX. Disable and enable again to retry. An accepted rising edge sets prod to 0 and takes base and size_log2, which
 //                are ignored until the next one, and clears both status bits. Base bits 11:0 are ignored (4 KiB
 //                aligned, so no burst crosses 4 KiB). Falling edge: bursts in flight finish, no new entry starts.
 // Errors       : a BRESP other than OKAY counts in cnt_bresp_err and sets status_bresp_err; no retry.
@@ -20,6 +20,7 @@
 //                prod_idx counts bursts started.
 // Reset        : rst clears everything; AWVALID and WVALID go low. Reset the memory side with it.
 module event_ring_writer
+  import hft_pkg::*;
   import event_desc_pkg::*;
 #(
     parameter int unsigned DATA_W          = 512,
@@ -91,7 +92,8 @@ module event_ring_writer
   logic b_fire, b_ok;
 
   assign start = cfg_enable && !enable_q;
-  assign start_ok = start && cfg_cons == '0;
+  assign start_ok = start && cfg_cons == '0 && cfg_size_log2 >= 5'(RING_SIZE_LOG2_MIN)
+      && cfg_size_log2 <= 5'(RING_SIZE_LOG2_MAX);
   assign run = cfg_enable && running_q;
   assign used = prod_q - cons_q;
   assign last_slot = (prod_q & mask_q) == mask_q;

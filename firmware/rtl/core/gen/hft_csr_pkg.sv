@@ -84,6 +84,58 @@ package hft_csr_pkg;
     } hft_csr__FEED__in_t;
 
     typedef struct {
+        logic [31:0] next;
+    } hft_csr__RING__PROD_IDX__prod__in_t;
+
+    typedef struct {
+        hft_csr__RING__PROD_IDX__prod__in_t prod;
+    } hft_csr__RING__PROD_IDX__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__RING__RING_STATUS__bresp_err__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__RING__RING_STATUS__enable_err__in_t;
+
+    typedef struct {
+        hft_csr__RING__RING_STATUS__bresp_err__in_t bresp_err;
+        hft_csr__RING__RING_STATUS__enable_err__in_t enable_err;
+    } hft_csr__RING__RING_STATUS__in_t;
+
+    typedef struct {
+        logic [31:0] next;
+    } hft_csr__counter64_live__LO__value__in_t;
+
+    typedef struct {
+        hft_csr__counter64_live__LO__value__in_t value;
+    } hft_csr__counter64_live__LO__in_t;
+
+    typedef struct {
+        logic [31:0] next;
+    } hft_csr__counter64_live__HI__value__in_t;
+
+    typedef struct {
+        hft_csr__counter64_live__HI__value__in_t value;
+    } hft_csr__counter64_live__HI__in_t;
+
+    typedef struct {
+        hft_csr__counter64_live__LO__in_t LO;
+        hft_csr__counter64_live__HI__in_t HI;
+    } hft_csr__counter64_live__in_t;
+
+    typedef struct {
+        hft_csr__RING__PROD_IDX__in_t PROD_IDX;
+        hft_csr__RING__RING_STATUS__in_t RING_STATUS;
+        hft_csr__counter64_live__in_t RING_WRITTEN;
+        hft_csr__counter64_live__in_t RING_BRESP_ERR;
+        hft_csr__counter64__in_t RING_COMMIT_ENTRIES;
+        hft_csr__counter64__in_t RING_DROP_PKTS;
+        hft_csr__counter64__in_t RING_DROP_ENTRIES;
+    } hft_csr__RING__in_t;
+
+    typedef struct {
         logic incr;
     } hft_csr__STATS__STATS_SEQ__seq__in_t;
 
@@ -127,6 +179,7 @@ package hft_csr_pkg;
     typedef struct {
         hft_csr__NET__in_t NET;
         hft_csr__FEED__in_t FEED;
+        hft_csr__RING__in_t RING;
         hft_csr__STATS__in_t STATS;
         hft_csr__ITCH__in_t ITCH;
         hft_csr__SYMBOL__external__in_t SYMBOL;
@@ -268,6 +321,7 @@ package hft_csr_pkg;
 
     typedef struct {
         logic value;
+        logic swmod;
     } hft_csr__FEED__FEED_COMMIT__commit__out_t;
 
     typedef struct {
@@ -288,6 +342,54 @@ package hft_csr_pkg;
         hft_csr__FEED__RESYNC_SEQ_HI__out_t RESYNC_SEQ_HI;
         hft_csr__FEED__FEED_COMMIT__out_t FEED_COMMIT;
     } hft_csr__FEED__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__RING__RING_CTRL__enable__out_t;
+
+    typedef struct {
+        hft_csr__RING__RING_CTRL__enable__out_t enable;
+    } hft_csr__RING__RING_CTRL__out_t;
+
+    typedef struct {
+        logic [19:0] value;
+    } hft_csr__RING__RING_BASE_LO__base__out_t;
+
+    typedef struct {
+        hft_csr__RING__RING_BASE_LO__base__out_t base;
+    } hft_csr__RING__RING_BASE_LO__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RING__RING_BASE_HI__base__out_t;
+
+    typedef struct {
+        hft_csr__RING__RING_BASE_HI__base__out_t base;
+    } hft_csr__RING__RING_BASE_HI__out_t;
+
+    typedef struct {
+        logic [4:0] value;
+    } hft_csr__RING__RING_SIZE_LOG2__size_log2__out_t;
+
+    typedef struct {
+        hft_csr__RING__RING_SIZE_LOG2__size_log2__out_t size_log2;
+    } hft_csr__RING__RING_SIZE_LOG2__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RING__CONS_IDX__cons__out_t;
+
+    typedef struct {
+        hft_csr__RING__CONS_IDX__cons__out_t cons;
+    } hft_csr__RING__CONS_IDX__out_t;
+
+    typedef struct {
+        hft_csr__RING__RING_CTRL__out_t RING_CTRL;
+        hft_csr__RING__RING_BASE_LO__out_t RING_BASE_LO;
+        hft_csr__RING__RING_BASE_HI__out_t RING_BASE_HI;
+        hft_csr__RING__RING_SIZE_LOG2__out_t RING_SIZE_LOG2;
+        hft_csr__RING__CONS_IDX__out_t CONS_IDX;
+    } hft_csr__RING__out_t;
 
     typedef struct {
         logic value;
@@ -329,6 +431,7 @@ package hft_csr_pkg;
     typedef struct {
         hft_csr__NET__out_t NET;
         hft_csr__FEED__out_t FEED;
+        hft_csr__RING__out_t RING;
         hft_csr__STATS__out_t STATS;
         hft_csr__ITCH__out_t ITCH;
         hft_csr__SYMBOL__external__out_t SYMBOL;

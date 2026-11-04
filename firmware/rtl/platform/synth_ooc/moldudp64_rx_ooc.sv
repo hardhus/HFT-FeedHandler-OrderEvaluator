@@ -8,7 +8,7 @@ module moldudp64_rx_ooc
   import hft_pkg::*;
 #(
     parameter int unsigned N_FILTERS = 8,
-    parameter int unsigned CTX_W = 2 * ITCH_N_CLASS,  // itch_decoder class enable and filter
+    parameter int unsigned CTX_W = CFG_EPOCH_W + 2 * ITCH_N_CLASS,  // epoch, class filter and enable
     localparam int unsigned FIDX_W = (N_FILTERS > 1) ? $clog2(N_FILTERS) : 1
 ) (
     input  logic                              clk,

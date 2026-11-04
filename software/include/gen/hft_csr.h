@@ -20,7 +20,7 @@ extern "C" {
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bm 0xffffffff
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bp 0
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bw 32
-#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50002
+#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50003
 
 // reg - hft_csr::GLOBAL::SCRATCH
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bm 0xffffffff
@@ -219,6 +219,83 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t MOLD_GAP_MSGS;
 } hft_csr__FEED_t;
 
+// reg - hft_csr::RING::RING_CTRL
+#define HFT_CSR__RING__RING_CTRL__ENABLE_bm 0x1
+#define HFT_CSR__RING__RING_CTRL__ENABLE_bp 0
+#define HFT_CSR__RING__RING_CTRL__ENABLE_bw 1
+#define HFT_CSR__RING__RING_CTRL__ENABLE_reset 0x0
+
+// reg - hft_csr::RING::RING_BASE_LO
+#define HFT_CSR__RING__RING_BASE_LO__BASE_bm 0xfffff000
+#define HFT_CSR__RING__RING_BASE_LO__BASE_bp 12
+#define HFT_CSR__RING__RING_BASE_LO__BASE_bw 20
+#define HFT_CSR__RING__RING_BASE_LO__BASE_reset 0x0
+
+// reg - hft_csr::RING::RING_BASE_HI
+#define HFT_CSR__RING__RING_BASE_HI__BASE_bm 0xffffffff
+#define HFT_CSR__RING__RING_BASE_HI__BASE_bp 0
+#define HFT_CSR__RING__RING_BASE_HI__BASE_bw 32
+#define HFT_CSR__RING__RING_BASE_HI__BASE_reset 0x0
+
+// reg - hft_csr::RING::RING_SIZE_LOG2
+#define HFT_CSR__RING__RING_SIZE_LOG2__SIZE_LOG2_bm 0x1f
+#define HFT_CSR__RING__RING_SIZE_LOG2__SIZE_LOG2_bp 0
+#define HFT_CSR__RING__RING_SIZE_LOG2__SIZE_LOG2_bw 5
+#define HFT_CSR__RING__RING_SIZE_LOG2__SIZE_LOG2_reset 0x0
+
+// reg - hft_csr::RING::CONS_IDX
+#define HFT_CSR__RING__CONS_IDX__CONS_bm 0xffffffff
+#define HFT_CSR__RING__CONS_IDX__CONS_bp 0
+#define HFT_CSR__RING__CONS_IDX__CONS_bw 32
+#define HFT_CSR__RING__CONS_IDX__CONS_reset 0x0
+
+// reg - hft_csr::RING::PROD_IDX
+#define HFT_CSR__RING__PROD_IDX__PROD_bm 0xffffffff
+#define HFT_CSR__RING__PROD_IDX__PROD_bp 0
+#define HFT_CSR__RING__PROD_IDX__PROD_bw 32
+
+// reg - hft_csr::RING::RING_STATUS
+#define HFT_CSR__RING__RING_STATUS__BRESP_ERR_bm 0x1
+#define HFT_CSR__RING__RING_STATUS__BRESP_ERR_bp 0
+#define HFT_CSR__RING__RING_STATUS__BRESP_ERR_bw 1
+#define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bm 0x2
+#define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bp 1
+#define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bw 1
+
+// reg - hft_csr::counter64_live::LO
+#define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bp 0
+#define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bw 32
+
+// reg - hft_csr::counter64_live::HI
+#define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bp 0
+#define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bw 32
+
+// regfile - hft_csr::counter64_live
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t LO;
+    uint32_t HI;
+} hft_csr__counter64_live_t;
+
+// regfile - hft_csr::RING
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t RING_CTRL;
+    uint32_t RING_BASE_LO;
+    uint32_t RING_BASE_HI;
+    uint32_t RING_SIZE_LOG2;
+    uint32_t CONS_IDX;
+    uint32_t PROD_IDX;
+    uint32_t RING_STATUS;
+    uint8_t RESERVED_1c_1f[0x4];
+    hft_csr__counter64_live_t RING_WRITTEN;
+    hft_csr__counter64_live_t RING_BRESP_ERR;
+    uint8_t RESERVED_30_3f[0x10];
+    hft_csr__counter64_t RING_COMMIT_ENTRIES;
+    hft_csr__counter64_t RING_DROP_PKTS;
+    hft_csr__counter64_t RING_DROP_ENTRIES;
+} hft_csr__RING_t;
+
 // reg - hft_csr::STATS::STATS_CTRL
 #define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
 #define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
@@ -286,7 +363,9 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__NET_t NET;
     uint8_t RESERVED_160_1ff[0xa0];
     hft_csr__FEED_t FEED;
-    uint8_t RESERVED_2c0_3ff[0x140];
+    uint8_t RESERVED_2c0_2ff[0x40];
+    hft_csr__RING_t RING;
+    uint8_t RESERVED_358_3ff[0xa8];
     hft_csr__STATS_t STATS;
     uint8_t RESERVED_468_5ff[0x198];
     hft_csr__ITCH_t ITCH;

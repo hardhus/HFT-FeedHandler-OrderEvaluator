@@ -3,7 +3,8 @@
 // bus decode, read mux and counter paths are register to register and inside the timing gate.
 // Every output is a port, so synthesis keeps (and the gate checks) all of the logic.
 // Not used in simulation.
-// Clock domain : host_clk (s_axil_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*)
+// Clock domain : host_clk (s_axil_*, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
+//                cnt_ring_*)
 module hft_csr_wrap_ooc
   import hft_pkg::*;
 #(
@@ -56,6 +57,21 @@ module hft_csr_wrap_ooc
 
     output logic [ITCH_N_CLASS-1:0] cfg_class_en,
     output logic [ITCH_N_CLASS-1:0] cfg_class_filter,
+    output logic [ CFG_EPOCH_W-1:0] cfg_epoch,
+
+    output logic        host_ring_enable,
+    output logic [63:0] host_ring_base,
+    output logic [ 4:0] host_ring_size_log2,
+    output logic [31:0] host_ring_cons,
+    input  logic [31:0] host_ring_prod_idx,
+    input  logic        host_ring_bresp_err,
+    input  logic        host_ring_enable_err,
+    input  logic [63:0] host_ring_cnt_written,
+    input  logic [63:0] host_ring_cnt_bresp_err,
+
+    input logic [63:0] cnt_ring_commit_entries,
+    input logic [63:0] cnt_ring_drop_pkts,
+    input logic [63:0] cnt_ring_drop_entries,
 
     input logic                 mpkt_valid,
     input mold_status_e         mpkt_status,
@@ -95,105 +111,130 @@ module hft_csr_wrap_ooc
   itch_class_e          mres_class_q;
   itch_outcome_e        mres_outcome_q;
   logic          [31:0] sym_rsp_rdata_q;
+  logic          [31:0] ring_prod_idx_q;
+  logic ring_bresp_err_q, ring_enable_err_q;
+  logic [63:0] ring_cnt_written_q, ring_cnt_bresp_err_q;
+  logic [63:0] cnt_ring_commit_entries_q, cnt_ring_drop_pkts_q, cnt_ring_drop_entries_q;
 
   always_ff @(posedge host_clk) begin
-    host_rst_q <= host_rst;
-    awvalid_q  <= s_axil_awvalid;
-    awaddr_q   <= s_axil_awaddr;
-    awprot_q   <= s_axil_awprot;
-    wvalid_q   <= s_axil_wvalid;
-    wdata_q    <= s_axil_wdata;
-    wstrb_q    <= s_axil_wstrb;
-    bready_q   <= s_axil_bready;
-    arvalid_q  <= s_axil_arvalid;
-    araddr_q   <= s_axil_araddr;
-    arprot_q   <= s_axil_arprot;
-    rready_q   <= s_axil_rready;
+    host_rst_q           <= host_rst;
+    awvalid_q            <= s_axil_awvalid;
+    awaddr_q             <= s_axil_awaddr;
+    awprot_q             <= s_axil_awprot;
+    wvalid_q             <= s_axil_wvalid;
+    wdata_q              <= s_axil_wdata;
+    wstrb_q              <= s_axil_wstrb;
+    bready_q             <= s_axil_bready;
+    arvalid_q            <= s_axil_arvalid;
+    araddr_q             <= s_axil_araddr;
+    arprot_q             <= s_axil_arprot;
+    rready_q             <= s_axil_rready;
+    ring_prod_idx_q      <= host_ring_prod_idx;
+    ring_bresp_err_q     <= host_ring_bresp_err;
+    ring_enable_err_q    <= host_ring_enable_err;
+    ring_cnt_written_q   <= host_ring_cnt_written;
+    ring_cnt_bresp_err_q <= host_ring_cnt_bresp_err;
   end
 
   always_ff @(posedge net_clk) begin
-    net_rst_q           <= net_rst;
-    stat_valid_q        <= stat_valid;
-    stat_reason_q       <= stat_reason;
-    stat_bytes_q        <= stat_bytes;
-    mpkt_valid_q        <= mpkt_valid;
-    mpkt_status_q       <= mpkt_status;
-    mpkt_gap_q          <= mpkt_gap;
-    mpkt_msgs_q         <= mpkt_msgs;
-    mpkt_dup_msgs_q     <= mpkt_dup_msgs;
-    mpkt_oversize_q     <= mpkt_oversize;
-    feed_expected_seq_q <= feed_expected_seq;
-    feed_synced_q       <= feed_synced;
-    feed_eos_q          <= feed_eos;
-    mres_valid_q        <= mres_valid;
-    mres_class_q        <= mres_class;
-    mres_outcome_q      <= mres_outcome;
-    sym_req_ready_q     <= sym_req_ready;
-    sym_rsp_valid_q     <= sym_rsp_valid;
-    sym_rsp_rdata_q     <= sym_rsp_rdata;
+    net_rst_q                 <= net_rst;
+    stat_valid_q              <= stat_valid;
+    stat_reason_q             <= stat_reason;
+    stat_bytes_q              <= stat_bytes;
+    mpkt_valid_q              <= mpkt_valid;
+    mpkt_status_q             <= mpkt_status;
+    mpkt_gap_q                <= mpkt_gap;
+    mpkt_msgs_q               <= mpkt_msgs;
+    mpkt_dup_msgs_q           <= mpkt_dup_msgs;
+    mpkt_oversize_q           <= mpkt_oversize;
+    feed_expected_seq_q       <= feed_expected_seq;
+    feed_synced_q             <= feed_synced;
+    feed_eos_q                <= feed_eos;
+    mres_valid_q              <= mres_valid;
+    mres_class_q              <= mres_class;
+    mres_outcome_q            <= mres_outcome;
+    sym_req_ready_q           <= sym_req_ready;
+    sym_rsp_valid_q           <= sym_rsp_valid;
+    sym_rsp_rdata_q           <= sym_rsp_rdata;
+    cnt_ring_commit_entries_q <= cnt_ring_commit_entries;
+    cnt_ring_drop_pkts_q      <= cnt_ring_drop_pkts;
+    cnt_ring_drop_entries_q   <= cnt_ring_drop_entries;
   end
 
   hft_csr_wrap u_wrap (
-      .host_clk         (host_clk),
-      .host_rst         (host_rst_q),
-      .s_axil_awvalid   (awvalid_q),
-      .s_axil_awready   (s_axil_awready),
-      .s_axil_awaddr    (awaddr_q),
-      .s_axil_awprot    (awprot_q),
-      .s_axil_wvalid    (wvalid_q),
-      .s_axil_wready    (s_axil_wready),
-      .s_axil_wdata     (wdata_q),
-      .s_axil_wstrb     (wstrb_q),
-      .s_axil_bvalid    (s_axil_bvalid),
-      .s_axil_bready    (bready_q),
-      .s_axil_bresp     (s_axil_bresp),
-      .s_axil_arvalid   (arvalid_q),
-      .s_axil_arready   (s_axil_arready),
-      .s_axil_araddr    (araddr_q),
-      .s_axil_arprot    (arprot_q),
-      .s_axil_rvalid    (s_axil_rvalid),
-      .s_axil_rready    (rready_q),
-      .s_axil_rdata     (s_axil_rdata),
-      .s_axil_rresp     (s_axil_rresp),
-      .net_clk          (net_clk),
-      .net_rst          (net_rst_q),
-      .cfg_rx_en        (cfg_rx_en),
-      .cfg_local_mac    (cfg_local_mac),
-      .cfg_accept_bcast (cfg_accept_bcast),
-      .cfg_filter_ip    (cfg_filter_ip),
-      .cfg_filter_port  (cfg_filter_port),
-      .cfg_filter_en    (cfg_filter_en),
-      .stat_valid       (stat_valid_q),
-      .stat_reason      (stat_reason_q),
-      .stat_bytes       (stat_bytes_q),
-      .cfg_feed_en      (cfg_feed_en),
-      .cfg_session_check(cfg_session_check),
-      .cfg_session      (cfg_session),
-      .cfg_filter_mask  (cfg_filter_mask),
-      .cfg_resync       (cfg_resync),
-      .cfg_resync_learn (cfg_resync_learn),
-      .cfg_resync_seq   (cfg_resync_seq),
-      .cfg_class_en     (cfg_class_en),
-      .cfg_class_filter (cfg_class_filter),
-      .mpkt_valid       (mpkt_valid_q),
-      .mpkt_status      (mpkt_status_q),
-      .mpkt_gap         (mpkt_gap_q),
-      .mpkt_msgs        (mpkt_msgs_q),
-      .mpkt_dup_msgs    (mpkt_dup_msgs_q),
-      .mpkt_oversize    (mpkt_oversize_q),
-      .mres_valid       (mres_valid_q),
-      .mres_class       (mres_class_q),
-      .mres_outcome     (mres_outcome_q),
-      .feed_expected_seq(feed_expected_seq_q),
-      .feed_synced      (feed_synced_q),
-      .feed_eos         (feed_eos_q),
-      .sym_req_valid    (sym_req_valid),
-      .sym_req_ready    (sym_req_ready_q),
-      .sym_req_wr       (sym_req_wr),
-      .sym_req_addr     (sym_req_addr),
-      .sym_req_wdata    (sym_req_wdata),
-      .sym_req_wstrb    (sym_req_wstrb),
-      .sym_rsp_valid    (sym_rsp_valid_q),
-      .sym_rsp_rdata    (sym_rsp_rdata_q)
+      .host_clk               (host_clk),
+      .host_rst               (host_rst_q),
+      .s_axil_awvalid         (awvalid_q),
+      .s_axil_awready         (s_axil_awready),
+      .s_axil_awaddr          (awaddr_q),
+      .s_axil_awprot          (awprot_q),
+      .s_axil_wvalid          (wvalid_q),
+      .s_axil_wready          (s_axil_wready),
+      .s_axil_wdata           (wdata_q),
+      .s_axil_wstrb           (wstrb_q),
+      .s_axil_bvalid          (s_axil_bvalid),
+      .s_axil_bready          (bready_q),
+      .s_axil_bresp           (s_axil_bresp),
+      .s_axil_arvalid         (arvalid_q),
+      .s_axil_arready         (s_axil_arready),
+      .s_axil_araddr          (araddr_q),
+      .s_axil_arprot          (arprot_q),
+      .s_axil_rvalid          (s_axil_rvalid),
+      .s_axil_rready          (rready_q),
+      .s_axil_rdata           (s_axil_rdata),
+      .s_axil_rresp           (s_axil_rresp),
+      .net_clk                (net_clk),
+      .net_rst                (net_rst_q),
+      .cfg_rx_en              (cfg_rx_en),
+      .cfg_local_mac          (cfg_local_mac),
+      .cfg_accept_bcast       (cfg_accept_bcast),
+      .cfg_filter_ip          (cfg_filter_ip),
+      .cfg_filter_port        (cfg_filter_port),
+      .cfg_filter_en          (cfg_filter_en),
+      .stat_valid             (stat_valid_q),
+      .stat_reason            (stat_reason_q),
+      .stat_bytes             (stat_bytes_q),
+      .cfg_feed_en            (cfg_feed_en),
+      .cfg_session_check      (cfg_session_check),
+      .cfg_session            (cfg_session),
+      .cfg_filter_mask        (cfg_filter_mask),
+      .cfg_resync             (cfg_resync),
+      .cfg_resync_learn       (cfg_resync_learn),
+      .cfg_resync_seq         (cfg_resync_seq),
+      .cfg_class_en           (cfg_class_en),
+      .cfg_class_filter       (cfg_class_filter),
+      .cfg_epoch              (cfg_epoch),
+      .host_ring_enable       (host_ring_enable),
+      .host_ring_base         (host_ring_base),
+      .host_ring_size_log2    (host_ring_size_log2),
+      .host_ring_cons         (host_ring_cons),
+      .host_ring_prod_idx     (ring_prod_idx_q),
+      .host_ring_bresp_err    (ring_bresp_err_q),
+      .host_ring_enable_err   (ring_enable_err_q),
+      .host_ring_cnt_written  (ring_cnt_written_q),
+      .host_ring_cnt_bresp_err(ring_cnt_bresp_err_q),
+      .cnt_ring_commit_entries(cnt_ring_commit_entries_q),
+      .cnt_ring_drop_pkts     (cnt_ring_drop_pkts_q),
+      .cnt_ring_drop_entries  (cnt_ring_drop_entries_q),
+      .mpkt_valid             (mpkt_valid_q),
+      .mpkt_status            (mpkt_status_q),
+      .mpkt_gap               (mpkt_gap_q),
+      .mpkt_msgs              (mpkt_msgs_q),
+      .mpkt_dup_msgs          (mpkt_dup_msgs_q),
+      .mpkt_oversize          (mpkt_oversize_q),
+      .mres_valid             (mres_valid_q),
+      .mres_class             (mres_class_q),
+      .mres_outcome           (mres_outcome_q),
+      .feed_expected_seq      (feed_expected_seq_q),
+      .feed_synced            (feed_synced_q),
+      .feed_eos               (feed_eos_q),
+      .sym_req_valid          (sym_req_valid),
+      .sym_req_ready          (sym_req_ready_q),
+      .sym_req_wr             (sym_req_wr),
+      .sym_req_addr           (sym_req_addr),
+      .sym_req_wdata          (sym_req_wdata),
+      .sym_req_wstrb          (sym_req_wstrb),
+      .sym_rsp_valid          (sym_rsp_valid_q),
+      .sym_rsp_rdata          (sym_rsp_rdata_q)
   );
 endmodule

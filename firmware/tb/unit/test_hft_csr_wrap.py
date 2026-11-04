@@ -19,7 +19,7 @@ Counters: a generator drives stat_*, mpkt_* and mres_* on net_clk and moves feed
 records the edge that samples each event. A snapshot taken on acceptance edge E must equal the sum
 of the events sampled before E, exactly (the event sampled on E belongs to the next snapshot), for
 the rx_stats, mold_stats and itch_stats counters (ITCH: committed results only), and the feed state
-must be the one sampled FEED_DELAY = 4 net edges before E (it then belongs to the same packet
+must be the one sampled FEED_DELAY = 6 net edges before E (it then belongs to the same packet
 events as the counters). The acceptance and landing edges are observed on the snapshot handshake
 inside the wrapper (grey box). The bus side is the generated block (tested in test_hft_csr.py);
 axil_props is bound to it here too. The harness (Wrap, Snap, Sym, NetCfg, FeedCfg) is in
@@ -42,6 +42,7 @@ from cocotb.utils import get_sim_time
 from common.clocks import PROFILES, profile, start_clock
 from common.csr_env import (
     FEED_COMMIT,
+    FEED_DELAY,
     ITCH_CTRL,
     MASK64,
     N_CNT,
@@ -49,6 +50,7 @@ from common.csr_env import (
     SCRATCH,
     STATS_CTRL,
     SYMBOL,
+    STATS_DELAY,
     FeedCfg,
     NetCfg,
     Snap,
@@ -96,7 +98,9 @@ async def start(dut) -> Wrap:
     dut.stat_bytes.value = 0
     for name in ("mpkt_valid", "mpkt_status", "mpkt_gap", "mpkt_msgs", "mpkt_dup_msgs", "mpkt_oversize",
                  "mres_valid", "mres_class", "mres_outcome", "feed_expected_seq", "feed_synced", "feed_eos",
-                 "sym_req_ready", "sym_rsp_valid", "sym_rsp_rdata"):  # fmt: skip
+                 "sym_req_ready", "sym_rsp_valid", "sym_rsp_rdata", "host_ring_prod_idx", "host_ring_bresp_err",
+                 "host_ring_enable_err", "host_ring_cnt_written", "host_ring_cnt_bresp_err",
+                 "cnt_ring_commit_entries", "cnt_ring_drop_pkts", "cnt_ring_drop_entries"):  # fmt: skip
         getattr(dut, name).value = 0
     dut.host_rst.value = 1
     dut.net_rst.value = 1
@@ -351,18 +355,81 @@ async def tc_snapshot_feed_aligned(dut):
         await w.snap.check(seq, got)
         edge = w.snap.edge_index[w.snap.accepts[seq - 1]]
         for u in updates:
-            if -1 <= edge - w.snap.edge_index[u] <= 4:
+            if -1 <= edge - w.snap.edge_index[u] <= FEED_DELAY:
                 phases.add(edge - w.snap.edge_index[u])
         e = got[idx["FEED.EXPECTED_SEQ"]]
         moved = sum(got[idx[f"FEED.MOLD_{n}"]] for n in ("MSGS", "OVERSIZE_MSGS", "GAP_MSGS"))
         assert (e - e0) & MASK64 == moved & MASK64, (
             f"snapshot {seq}: EXPECTED_SEQ - E0 = {(e - e0) & MASK64}, counters account for {moved & MASK64}")
         assert got[idx["FEED.FEED_STATE"]] == 1, "synced"
-        if phases == set(range(-1, 5)):
+        if phases == set(range(-1, FEED_DELAY + 1)):
             break
         for _ in range(w.rng.randint(0, 3)):
             await RisingEdge(dut.net_clk)
-    assert phases == set(range(-1, 5)), f"snapshot phases around a feed update: {sorted(phases)}"
+    assert phases == set(range(-1, FEED_DELAY + 1)), f"snapshot phases around a feed update: {sorted(phases)}"
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_snapshot_ring_aligned(dut):
+    """User decision (audit/13 S6): at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT +
+    MOLD_GAP_EVENTS + MOLD_EOS. Packet events as itch_decoder forwards them, the ring counters moving 3 cycles
+    after each, as event_packer's do. Snapshots are taken until one was accepted on each edge from 1 before to
+    STATS_DELAY + 3 after the edge that samples a packet event: the window in which a shorter delay takes the ITCH
+    counters without the ring counters. Hand-counted accepted packets, some of them dropped whole."""
+    w = await start(dut)
+    w.snap.drive = False
+    idx = {n: i for i, n in enumerate(SNAP_NAMES)}
+    for _ in range(4):
+        await RisingEdge(dut.net_clk)
+    events: list[int] = []  # net edges that sample a packet event
+
+    async def packets():
+        commit = drop_pkts = drop_entries = 0
+        while True:
+            msgs = w.rng.randint(0, 3)
+            for _ in range(msgs):
+                dut.mres_valid.value = 1
+                dut.mres_class.value = int(ItchClass.ORDER)
+                dut.mres_outcome.value = int(Outcome.OUT)
+                await RisingEdge(dut.net_clk)
+            dut.mres_valid.value = 0
+            status, gap = w.rng.choice([(MoldStatus.OK, 0), (MoldStatus.OK, 7), (MoldStatus.EOS, 0), (MoldStatus.EOS, 7)])
+            dut.mpkt_valid.value = 1
+            dut.mpkt_status.value = int(status)
+            dut.mpkt_gap.value = gap
+            await RisingEdge(dut.net_clk)
+            events.append(get_sim_time())
+            dut.mpkt_valid.value = 0
+            for _ in range(2):
+                await RisingEdge(dut.net_clk)
+            entries = msgs + int(gap != 0) + int(status == MoldStatus.EOS)
+            if w.rng.random() < 0.25:
+                drop_pkts += 1
+                drop_entries += entries
+            else:
+                commit += entries
+            dut.cnt_ring_commit_entries.value = commit
+            dut.cnt_ring_drop_pkts.value = drop_pkts
+            dut.cnt_ring_drop_entries.value = drop_entries
+            for _ in range(w.rng.randint(0, 3)):
+                await RisingEdge(dut.net_clk)
+
+    cocotb.start_soon(packets())
+    want_phases = set(range(-1, STATS_DELAY + 4))
+    phases: set[int] = set()
+    for _ in range(600):
+        seq, got = await w.snap.snapshot()
+        await w.snap.check(seq, got)
+        edge = w.snap.edge_index[w.snap.accepts[seq - 1]]
+        phases |= {edge - w.snap.edge_index[e] for e in events if edge - w.snap.edge_index[e] in want_phases}
+        left = got[idx["RING.RING_COMMIT_ENTRIES"]] + got[idx["RING.RING_DROP_ENTRIES"]]
+        right = got[idx["ITCH.ITCH_OUT"]] + got[idx["FEED.MOLD_GAP_EVENTS"]] + got[idx["FEED.MOLD_EOS"]]
+        assert left == right, f"snapshot {seq}: ring counters account for {left} entries, ITCH and MOLD for {right}"
+        if phases == want_phases:
+            break
+        for _ in range(w.rng.randint(0, 3)):
+            await RisingEdge(dut.net_clk)
+    assert phases == want_phases, f"snapshot phases around a packet event: {sorted(phases)}"
 
 
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
@@ -926,6 +993,118 @@ async def tc_sym_reset_in_flight(dut):
         phases.add("before the port" if len(sym.cmds) == cmds else "taken by the port")
         await sym_reset_and_recover(w, dut)
     assert phases == {"before the port", "taken by the port"}, f"reset phases: {sorted(phases)}"
+
+
+@cocotb.test(timeout_time=30, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_feed_epoch(dut):
+    """User decision (audit/13 S6): cfg_epoch counts every FEED_COMMIT write with commit or resync set, because the
+    host keeps the same count, and wraps at 256 (hand-written values). Commits that coalesce and writes in consecutive
+    bus cycles count one by one, a pulse held by a write with byte 0 disabled counts once, a write of 0 not at all, and
+    a reset starts it again. The Feed monitor checks at every net edge that it changes only where a transfer lands."""
+    w = await start(dut)
+    await w.feed.write_cfg(FeedCfg.random(w.rng))
+    for k in range(1, 261):
+        await w.feed.commit(resync=k % 7 == 0)
+        await w.feed.wait_idle()
+        await w.feed.applied()
+        assert int(dut.cfg_epoch.value) == k % 256, f"after {k} commits"
+    w.feed.check_done()
+    assert int(dut.cfg_epoch.value) == 4, "hand-written: 260 commits wrap to 4"
+
+    for _ in range(3):  # no wait: they coalesce
+        await w.feed.commit()
+    await w.feed.wait_idle()
+    await w.feed.applied()
+    assert int(dut.cfg_epoch.value) == 7, "3 commits that coalesce count 3"
+
+    first = w.drv.write_nowait(FEED_COMMIT, 1)
+    held = w.drv.write_nowait(FEED_COMMIT, 0, strb=0b1110)
+    w.feed.committed.append(FeedCfg.from_regs(w.feed.regs))
+    assert await first.wait() == (0, OKAY) and await held.wait() == (0, OKAY)
+    await w.feed.wait_idle()
+    await w.feed.applied()
+    assert int(dut.cfg_epoch.value) == 8, "a held pulse is one commit"
+
+    w.feed.back_to_back = 0
+    w.feed.committed += [FeedCfg.from_regs(w.feed.regs)] * 3
+    w.feed.resync_requests += 1
+    pend = [w.drv.write_nowait(FEED_COMMIT, 1), w.drv.write_nowait(FEED_COMMIT, 2), w.drv.write_nowait(FEED_COMMIT, 1)]
+    for q in pend:
+        assert await q.wait() == (0, OKAY)
+    await w.feed.wait_idle()
+    await w.feed.applied()
+    assert w.feed.back_to_back > 0, "the writes never came in consecutive cycles"
+    assert int(dut.cfg_epoch.value) == 11, "3 writes in consecutive cycles count 3"
+
+    assert await w.drv.write(FEED_COMMIT, 0) == OKAY
+    await w.feed.wait_idle()
+    assert int(dut.cfg_epoch.value) == 11, "a write of 0 changed the count"
+    await w.feed.commit()
+    await w.feed.wait_idle()
+    await w.feed.applied()
+    assert int(dut.cfg_epoch.value) == 12, "a write of 0 counted"
+
+    await reset(dut)
+    w.feed.regs = {}
+    w.feed.resync_requests = w.feed.request_edges = 0
+    await w.feed.commit()
+    await w.feed.wait_idle()
+    await w.feed.applied()
+    assert int(dut.cfg_epoch.value) == 1, "the count starts again after a reset"
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_registers(dut):
+    """RING is in the host domain, with no commit: a write reaches host_ring_* by itself, and reads back through the
+    fields' own widths. PROD_IDX, RING_STATUS and the host counters read the input live; software cannot write them
+    (K5). The snapshot counters do not move with a read. All 0 after reset, so an enable needs a size first."""
+    w = await start(dut)
+    regs = {n: addr(f"RING.{n}") for n in ("RING_CTRL", "RING_BASE_LO", "RING_BASE_HI", "RING_SIZE_LOG2", "CONS_IDX",
+                                           "PROD_IDX", "RING_STATUS")}  # fmt: skip
+
+    async def check(name, value):
+        assert await w.drv.read(regs[name]) == (value, OKAY), name
+
+    for name in ("RING_CTRL", "RING_BASE_LO", "RING_BASE_HI", "RING_SIZE_LOG2", "CONS_IDX"):
+        await check(name, 0)
+    assert not dut.host_ring_enable.value and int(dut.host_ring_size_log2.value) == 0
+
+    assert await w.drv.write(regs["RING_BASE_LO"], 0x1234_5FFF) == OKAY
+    assert await w.drv.write(regs["RING_BASE_HI"], 0xABCD_EF01) == OKAY
+    await check("RING_BASE_LO", 0x1234_5000)
+    await check("RING_BASE_HI", 0xABCD_EF01)
+    assert int(dut.host_ring_base.value) == 0xABCD_EF01_1234_5000, "bits 11:0 are 0"
+
+    assert await w.drv.write(regs["RING_SIZE_LOG2"], 0xFFFF_FFF4) == OKAY
+    await check("RING_SIZE_LOG2", 0x14)
+    assert int(dut.host_ring_size_log2.value) == 0x14
+
+    assert await w.drv.write(regs["CONS_IDX"], 0xDEAD_BEEF) == OKAY
+    await check("CONS_IDX", 0xDEAD_BEEF)
+    assert int(dut.host_ring_cons.value) == 0xDEAD_BEEF
+
+    assert await w.drv.write(regs["RING_CTRL"], 0xFFFF_FFFF) == OKAY
+    await check("RING_CTRL", 1)
+    assert dut.host_ring_enable.value
+    assert await w.drv.write(regs["RING_CTRL"], 0) == OKAY
+    assert not dut.host_ring_enable.value
+
+    for prod, bresp, enable, written, errors in ((7, 1, 0, 1 << 40 | 3, 5), (0xFFFF_FFFF, 0, 1, 9, 1 << 33), (0, 1, 1, 0, 0)):
+        dut.host_ring_prod_idx.value = prod
+        dut.host_ring_bresp_err.value = bresp
+        dut.host_ring_enable_err.value = enable
+        dut.host_ring_cnt_written.value = written
+        dut.host_ring_cnt_bresp_err.value = errors
+        await RisingEdge(dut.host_clk)
+        await check("PROD_IDX", prod)
+        await check("RING_STATUS", bresp | enable << 1)
+        assert await w.drv.read(addr("RING.RING_WRITTEN.LO")) == (written & 0xFFFF_FFFF, OKAY)
+        assert await w.drv.read(addr("RING.RING_WRITTEN.HI")) == (written >> 32, OKAY)
+        assert await w.drv.read(addr("RING.RING_BRESP_ERR.LO")) == (errors & 0xFFFF_FFFF, OKAY)
+        assert await w.drv.read(addr("RING.RING_BRESP_ERR.HI")) == (errors >> 32, OKAY)
+    for name in ("PROD_IDX", "RING_STATUS"):
+        assert await w.drv.write(regs[name], 0xFFFF_FFFF) != OKAY, f"{name} takes a software write"
 
 
 # The long test runs as its own pytest entry, at one profile (it checks the counter width, not CDC).

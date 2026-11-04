@@ -10,11 +10,13 @@ module tb_ring_props;
   localparam logic [31:0] MASK = 32'd15;
   localparam logic [51:0] BASE = 52'h12345;
 
-  logic             clk = 1'b0;
-  logic             rst = 1'b1;
-  logic             enable_q = 1'b0;
-  logic             start = 1'b0;
-  logic [     31:0] cfg_cons = '0;
+  logic        clk = 1'b0;
+  logic        rst = 1'b1;
+  logic        enable_q = 1'b0;
+  logic        start = 1'b0;
+  logic [31:0] cfg_cons = '0;
+  logic [ 4:0] cfg_size_log2 = 5'd8;
+  localparam logic [4:0] BAD_SIZES[2] = '{5'd3, 5'd21};
   logic             take = 1'b0;
   logic             fifo_rd_en = 1'b0;
   logic [     31:0] mask_q = MASK;
@@ -33,20 +35,21 @@ module tb_ring_props;
       .MAX_OUTSTANDING(MAX_OUTSTANDING),
       .OUT_W          (OUT_W)
   ) u_props (
-      .clk       (clk),
-      .rst       (rst),
-      .enable_q  (enable_q),
-      .start     (start),
-      .cfg_cons  (cfg_cons),
-      .take      (take),
-      .fifo_rd_en(fifo_rd_en),
-      .mask_q    (mask_q),
-      .base_q    (base_q),
-      .prod_q    (prod_q),
-      .cons_q    (cons_q),
-      .addr_q    (addr_q),
-      .phase_q   (phase_q),
-      .out_q     (out_q)
+      .clk          (clk),
+      .rst          (rst),
+      .enable_q     (enable_q),
+      .start        (start),
+      .cfg_cons     (cfg_cons),
+      .cfg_size_log2(cfg_size_log2),
+      .take         (take),
+      .fifo_rd_en   (fifo_rd_en),
+      .mask_q       (mask_q),
+      .base_q       (base_q),
+      .prod_q       (prod_q),
+      .cons_q       (cons_q),
+      .addr_q       (addr_q),
+      .phase_q      (phase_q),
+      .out_q        (out_q)
   );
 
   // 1 when this run violates property k.
@@ -104,6 +107,20 @@ module tb_ring_props;
     idle();
     enable_q = 1'b0;
     idle();
+
+    // Enables with a size just out of range, on both sides: refused.
+    foreach (BAD_SIZES[i]) begin
+      @(negedge clk);
+      cfg_size_log2 = BAD_SIZES[i];
+      start         = 1'b1;
+      @(negedge clk);
+      start         = 1'b0;
+      cfg_size_log2 = 5'd8;
+      enable_q      = v(9);  // 9: a_enable_bad_size
+      idle();
+      enable_q = 1'b0;
+      idle();
+    end
 
     // The enable: prod goes to 0 in the next cycle.
     @(negedge clk);

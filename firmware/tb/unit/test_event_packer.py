@@ -75,6 +75,8 @@ class Packer:
         self.unread = 0  # committed words the reader has not taken
         self.pending = False  # overflow_before waiting for a committed entry
         self.commit_entries = self.drop_pkts = self.drop_entries = 0
+        self.counted = [0, 0, 0]  # what the counters must show now: they move 3 cycles after the event
+        self.count_q: list[tuple[int, int, int, int]] = []  # (cycle shown, commit entries, drop pkts, entries)
         self.committed: list[bytes] = []  # every committed entry (keep)
         self.done: list[Pkt] = []  # every finished packet (keep)
         self.packets = 0
@@ -179,7 +181,10 @@ class Packer:
     def _check(self, full: bool, busy: bool) -> None:
         d, m = self.dut, self.m
         got = (int(d.cnt_commit_entries.value), int(d.cnt_drop_pkts.value), int(d.cnt_drop_entries.value))
-        want = (self.commit_entries, self.drop_pkts, self.drop_entries)
+        while self.count_q and self.count_q[0][0] <= m:
+            _, *moved = self.count_q.pop(0)
+            self.counted = [a + b for a, b in zip(self.counted, moved, strict=True)]
+        want = tuple(self.counted)
         assert got == want, f"cycle {m}: counters (commit, drop pkts, drop entries) {got}, model {want}"
         wr, commit, rollback = bool(d.fifo_wr_en.value), bool(d.fifo_commit.value), bool(d.fifo_rollback.value)
 
@@ -204,6 +209,9 @@ class Packer:
         assert (commit, rollback) == (keep, not keep), f"cycle {self.m}: commit {commit} rollback {rollback}, {pkt}"
         r = expect_entries([pkt.ring()], self.pending)
         self.pending = r.overflow_pending
+        # The end comes 1 cycle after the event, 2 with a pending EOS entry; the counters 3 after the event.
+        late = pkt.gap != 0 and pkt.status == MoldStatus.EOS
+        self.count_q.append((self.m + (1 if late else 2), len(r.entries) if keep else 0, r.drop_pkts, r.drop_entries))
         self.drop_pkts += r.drop_pkts
         self.drop_entries += r.drop_entries
         if keep:
@@ -490,6 +498,8 @@ async def tc_reset_mid_packet(dut):
     p.ends.clear()
     p.unit, p.unread, p.pending = [], 0, False
     p.commit_entries = p.drop_pkts = p.drop_entries = 0
+    p.counted = [0, 0, 0]
+    p.count_q.clear()
     p.force_full.clear()
     await RisingEdge(dut.clk)
     p.d += 1
