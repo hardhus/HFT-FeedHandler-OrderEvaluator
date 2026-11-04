@@ -146,6 +146,18 @@ def test_itch_stats_props_fires(prop, capsys):
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
 
 
+PACKER_TB = ["firmware/rtl/core/hft_pkg.sv", "firmware/tb/sva/packer_props.sv", "firmware/tb/sv/tb_packer_props.sv"]
+PACKER_VIOLATIONS = {
+    "a_no_ev_with_pkt": (1, "a message in the cycle of a packet event"),
+    "a_ev_after_pkt": (2, "a message within 2 cycles after a packet event"),
+    "a_accepted_spacing": (3, "an accepted packet event within 2 cycles after another"),
+    "a_capacity": (4, "a packet of more than RING_MAX_PKT_ENTRIES entries"),
+    "a_write_when_ready": (5, "a write to a full or busy FIFO"),
+    "a_end_xor": (6, "fifo_commit and fifo_rollback in one cycle"),
+    "a_end_has_event": (7, "a commit or rollback without a packet event"),
+    "a_accepted_gets_end": (8, "an accepted packet event without a commit or rollback"),
+}
+
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
 # HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
 FIFO_VIOLATIONS = {
@@ -183,6 +195,7 @@ CHECKERS = {
     "arm": ("tb_assert_arm", ARM_TB, ARM_VIOLATIONS),
     "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
     "fifo_commit": ("tb_fifo_commit_props", FIFO_COMMIT_TB, FIFO_COMMIT_VIOLATIONS),
+    "packer": ("tb_packer_props", PACKER_TB, PACKER_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
 }

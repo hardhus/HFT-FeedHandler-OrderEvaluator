@@ -5,6 +5,7 @@ The expected values are stated here field by field, or byte by byte for one full
 """
 
 import random
+from pathlib import Path
 
 import pytest
 from desc_hand import HAND_ITCH, HAND_RAW
@@ -207,6 +208,8 @@ def test_the_largest_packet_fits_the_default_fifo():
     # 1472-byte payload, 20-byte header, at least 2 + 6 bytes per message: 181, plus GAP and EOS.
     assert MAX_PKT_ENTRIES == 183
     assert MAX_PKT_ENTRIES <= 256
+    pkg = (Path(__file__).resolve().parents[2] / "rtl" / "core" / "hft_pkg.sv").read_text(encoding="utf-8")
+    assert f"RING_MAX_PKT_ENTRIES = {MAX_PKT_ENTRIES};" in pkg
 
 
 def test_random_run_keeps_the_identities():

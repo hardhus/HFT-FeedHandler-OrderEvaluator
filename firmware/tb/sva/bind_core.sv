@@ -92,6 +92,20 @@ bind itch_decoder itch_props u_itch_props (
     .sym_rsp_valid(sym_rsp_valid)
 );
 
+bind event_packer packer_props u_packer_props (
+    .clk          (clk),
+    .rst          (rst),
+    .s_ev_valid   (s_ev_valid),
+    .s_pkt_valid  (s_pkt_valid),
+    .pkt_accepted (pkt_accepted),
+    .s1_valid     (s1_valid),
+    .fifo_wr_en   (fifo_wr_en),
+    .fifo_commit  (fifo_commit),
+    .fifo_rollback(fifo_rollback),
+    .fifo_full    (fifo_full),
+    .fifo_wr_busy (fifo_wr_busy)
+);
+
 bind itch_stats itch_stats_props #(
     .PEND_W(PEND_W)
 ) u_itch_stats_props (

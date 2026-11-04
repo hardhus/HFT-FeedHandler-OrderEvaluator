@@ -73,6 +73,9 @@ package hft_pkg;
   // ---- ITCH 5.0 (itch_decoder) ----
   // FEED commit count (wraps), carried with a packet to its ring entries (audit/13 §2.6).
   localparam int unsigned CFG_EPOCH_W = 8;
+  // Ring entries of one packet at most: 181 messages of 2 + MOLD_MIN_LEN bytes in a 1472-byte UDP
+  // payload after the 20-byte header, GAP and EOS. The commit FIFO must hold this many.
+  localparam int unsigned RING_MAX_PKT_ENTRIES = 183;
   // Message class = counter index (itch_stats). ORDER and TRADE messages are decoded into
   // fields; ADMIN, AUCTION and UNKNOWN pass with the common header and the raw vector only.
   // MALFORMED: a known type whose length is not the specification length (not decoded).
