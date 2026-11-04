@@ -1,18 +1,20 @@
-// event_path_ooc: OOC synthesis harness for event_packer and the COMMIT=1 cdc_async_fifo. Every input goes
-// through one register first, as from itch_decoder's output registers, and the FIFO's word goes into a read
-// domain register, as into a real consumer, so the packer and the memory -> read-domain paths are inside
-// the timing and CDC gates. Every output is a port, so synthesis keeps all of the logic.
+// event_path_ooc: OOC synthesis harness for event_packer, the COMMIT=1 cdc_async_fifo and event_ring_writer. Every
+// input goes through one register first, as from itch_decoder's output registers on the net side and a register
+// slice on the host side, so all paths are register to register and inside the timing and CDC gates. Every output is
+// a port, so synthesis keeps all of the logic.
 // Not used in simulation.
 // Clock domain : net_clk, host_clk
 module event_path_ooc
   import hft_pkg::*;
   import event_desc_pkg::*;
 #(
-    parameter int unsigned DEPTH_LOG2 = 8
+    parameter int unsigned DEPTH_LOG2 = 8,
+    parameter int unsigned DATA_W     = 512
 ) (
     input logic net_clk,
     input logic net_rst,
     input logic host_clk,
+    input logic host_rst,
 
     input logic                             s_ev_valid,
     input itch_class_e                      s_ev_class,
@@ -48,11 +50,32 @@ module event_path_ooc
     output logic [63:0] cnt_drop_entries,
     output logic        net_overflow,
 
-    input  logic              host_rd_en,
-    output logic [DESC_W-1:0] host_dout_q,
-    output logic              host_empty,
-    output logic              host_underflow,
-    output logic              host_rd_rst_busy
+    output logic host_underflow,
+
+    input  logic        host_cfg_enable,
+    input  logic [63:0] host_cfg_base,
+    input  logic [ 4:0] host_cfg_size_log2,
+    input  logic [31:0] host_cfg_cons,
+    output logic [31:0] host_prod_idx,
+    output logic        host_status_bresp_err,
+    output logic        host_status_enable_err,
+    output logic [63:0] host_cnt_written,
+    output logic [63:0] host_cnt_bresp_err,
+
+    output logic [        63:0] m_axi_hmw_awaddr,
+    output logic [         7:0] m_axi_hmw_awlen,
+    output logic [         2:0] m_axi_hmw_awsize,
+    output logic [         1:0] m_axi_hmw_awburst,
+    output logic                m_axi_hmw_awvalid,
+    input  logic                m_axi_hmw_awready,
+    output logic [  DATA_W-1:0] m_axi_hmw_wdata,
+    output logic [DATA_W/8-1:0] m_axi_hmw_wstrb,
+    output logic                m_axi_hmw_wlast,
+    output logic                m_axi_hmw_wvalid,
+    input  logic                m_axi_hmw_wready,
+    input  logic [         1:0] m_axi_hmw_bresp,
+    input  logic                m_axi_hmw_bvalid,
+    output logic                m_axi_hmw_bready
 );
   logic                             rst_q;
   logic                             ev_valid_q;
@@ -109,6 +132,7 @@ module event_path_ooc
 
   logic fifo_wr_en, fifo_commit, fifo_rollback, fifo_full, fifo_wr_busy;
   logic [DESC_W-1:0] fifo_din, fifo_dout;
+  logic fifo_rd_en, fifo_empty, fifo_rd_rst_busy;
 
   event_packer u_packer (
       .clk             (net_clk),
@@ -166,16 +190,63 @@ module event_path_ooc
       .overflow   (net_overflow),
       .wr_rst_busy(fifo_wr_busy),
       .rd_clk     (host_clk),
-      .rd_en      (host_rd_en),
+      .rd_en      (fifo_rd_en),
       .dout       (fifo_dout),
-      .empty      (host_empty),
+      .empty      (fifo_empty),
       .underflow  (host_underflow),
-      .rd_rst_busy(host_rd_rst_busy)
+      .rd_rst_busy(fifo_rd_rst_busy)
   );
 
+  logic host_rst_q, cfg_enable_q;
+  logic [63:0] cfg_base_q;
+  logic [ 4:0] cfg_size_log2_q;
+  logic [31:0] cfg_cons_q;
+  logic awready_q, wready_q, bvalid_q;
+  logic [1:0] bresp_q;
+
   always_ff @(posedge host_clk) begin
-    if (host_rd_en && !host_empty) begin
-      host_dout_q <= fifo_dout;
-    end
+    host_rst_q      <= host_rst;
+    cfg_enable_q    <= host_cfg_enable;
+    cfg_base_q      <= host_cfg_base;
+    cfg_size_log2_q <= host_cfg_size_log2;
+    cfg_cons_q      <= host_cfg_cons;
+    awready_q       <= m_axi_hmw_awready;
+    wready_q        <= m_axi_hmw_wready;
+    bvalid_q        <= m_axi_hmw_bvalid;
+    bresp_q         <= m_axi_hmw_bresp;
   end
+
+  event_ring_writer #(
+      .DATA_W(DATA_W)
+  ) u_writer (
+      .clk              (host_clk),
+      .rst              (host_rst_q),
+      .fifo_rd_en,
+      .fifo_dout,
+      .fifo_empty,
+      .fifo_rd_rst_busy,
+      .cfg_enable       (cfg_enable_q),
+      .cfg_base         (cfg_base_q),
+      .cfg_size_log2    (cfg_size_log2_q),
+      .cfg_cons         (cfg_cons_q),
+      .prod_idx         (host_prod_idx),
+      .status_bresp_err (host_status_bresp_err),
+      .status_enable_err(host_status_enable_err),
+      .m_axi_hmw_awaddr,
+      .m_axi_hmw_awlen,
+      .m_axi_hmw_awsize,
+      .m_axi_hmw_awburst,
+      .m_axi_hmw_awvalid,
+      .m_axi_hmw_awready(awready_q),
+      .m_axi_hmw_wdata,
+      .m_axi_hmw_wstrb,
+      .m_axi_hmw_wlast,
+      .m_axi_hmw_wvalid,
+      .m_axi_hmw_wready (wready_q),
+      .m_axi_hmw_bresp  (bresp_q),
+      .m_axi_hmw_bvalid (bvalid_q),
+      .m_axi_hmw_bready,
+      .cnt_written      (host_cnt_written),
+      .cnt_bresp_err    (host_cnt_bresp_err)
+  );
 endmodule

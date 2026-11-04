@@ -158,6 +158,30 @@ PACKER_VIOLATIONS = {
     "a_accepted_gets_end": (8, "an accepted packet event without a commit or rollback"),
 }
 
+AXI_WR_TB = ["firmware/tb/sva/axi_wr_props.sv", "firmware/tb/sv/tb_axi_wr_props.sv"]
+AXI_WR_VIOLATIONS = {
+    "a_aw_stable": (1, "AW changed or dropped before AWREADY"),
+    "a_w_stable": (2, "W changed or dropped before WREADY"),
+    "a_4k": (3, "a burst crosses 4 KiB"),
+    "a_incr": (4, "a burst that is not INCR of full-width beats"),
+    "a_wstrb": (5, "a W beat without all its strobes"),
+    "a_w_beats": (6, "W beats differ from AWLEN+1"),
+    "a_b_after_aw": (7, "more B responses than AW"),
+    "a_reset_valid": (8, "VALID high after reset"),
+}
+
+RING_TB = ["firmware/tb/sva/ring_props.sv", "firmware/tb/sv/tb_ring_props.sv"]
+RING_VIOLATIONS = {
+    "a_no_take_when_full": (1, "a burst started on a full ring"),
+    "a_no_pop_when_full": (2, "the FIFO read on a full ring"),
+    "a_prod_step": (3, "prod moved other than by one per burst"),
+    "a_prod_start": (4, "prod not 0 after enable"),
+    "a_phase": (5, "phase differs from its formula"),
+    "a_addr": (6, "address differs from its formula"),
+    "a_outstanding": (7, "more bursts unanswered than MAX_OUTSTANDING"),
+    "a_enable_refused": (8, "an enable with a stale cons was not refused"),
+}
+
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
 # HFT_VIOLATE number in tb_fifo_props.sv -> the assertion's message (a_empty_after_reset: above).
 FIFO_VIOLATIONS = {
@@ -196,6 +220,8 @@ CHECKERS = {
     "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
     "fifo_commit": ("tb_fifo_commit_props", FIFO_COMMIT_TB, FIFO_COMMIT_VIOLATIONS),
     "packer": ("tb_packer_props", PACKER_TB, PACKER_VIOLATIONS),
+    "axi_wr": ("tb_axi_wr_props", AXI_WR_TB, AXI_WR_VIOLATIONS),
+    "ring": ("tb_ring_props", RING_TB, RING_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
 }

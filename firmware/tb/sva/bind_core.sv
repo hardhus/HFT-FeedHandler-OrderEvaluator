@@ -115,3 +115,43 @@ bind itch_stats itch_stats_props #(
     .inc      (inc),
     .pend     (pend)
 );
+
+bind event_ring_writer axi_wr_props #(
+    .DATA_W(DATA_W)
+) u_axi_wr_props (
+    .clk    (clk),
+    .rst    (rst),
+    .awaddr (m_axi_hmw_awaddr),
+    .awlen  (m_axi_hmw_awlen),
+    .awsize (m_axi_hmw_awsize),
+    .awburst(m_axi_hmw_awburst),
+    .awvalid(m_axi_hmw_awvalid),
+    .awready(m_axi_hmw_awready),
+    .wdata  (m_axi_hmw_wdata),
+    .wstrb  (m_axi_hmw_wstrb),
+    .wlast  (m_axi_hmw_wlast),
+    .wvalid (m_axi_hmw_wvalid),
+    .wready (m_axi_hmw_wready),
+    .bvalid (m_axi_hmw_bvalid),
+    .bready (m_axi_hmw_bready)
+);
+
+bind event_ring_writer ring_props #(
+    .MAX_OUTSTANDING(MAX_OUTSTANDING),
+    .OUT_W          (OUT_W)
+) u_ring_props (
+    .clk       (clk),
+    .rst       (rst),
+    .enable_q  (running_q),
+    .start     (start),
+    .cfg_cons  (cfg_cons),
+    .take      (take),
+    .fifo_rd_en(fifo_rd_en),
+    .mask_q    (mask_q),
+    .base_q    (base_q),
+    .prod_q    (prod_q),
+    .cons_q    (cons_q),
+    .addr_q    (addr_q),
+    .phase_q   (phase_q),
+    .out_q     (out_q)
+);
