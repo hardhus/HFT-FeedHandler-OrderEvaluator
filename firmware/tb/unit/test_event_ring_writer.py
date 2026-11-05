@@ -656,6 +656,7 @@ def test_event_ring_writer(data_w):
     run(data_w, directed_tests())
 
 
+@pytest.mark.long
 @pytest.mark.parametrize("data_w", sorted(N_LOSSLESS))
 def test_ring_lossless_ordering(data_w):
     run(data_w, "tc_lossless_random")

@@ -20,7 +20,7 @@ jobs:
       matrix:
         # x86_64 (WSL-like) and arm64 (Raspberry Pi 5-like)
         os: [ubuntu-24.04, ubuntu-24.04-arm]
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -58,6 +58,7 @@ jobs:
           name: results-${{ matrix.os }}
           path: |
             build/test-results.xml
+            build/long-results.xml
             build/lint/legacy.log
             build/sim/*/results.xml
           if-no-files-found: ignore

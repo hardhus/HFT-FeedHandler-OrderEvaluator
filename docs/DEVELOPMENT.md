@@ -57,7 +57,8 @@ just lint                 # Verilator -Wall + Verible lint + format check (block
 just fmt                  # format every file under the lint gate in place (not generated files)
 just gen                  # regenerate the CSR outputs (hft_csr.rdl) and the event descriptor outputs (event_desc.toml)
 just gen-check            # fail if a generated file differs from a fresh `just gen` (part of `just ci`)
-just test                 # all cocotb tests, in parallel
+just test                 # the cocotb tests, in parallel, without the long ones
+just test-long            # the long tests only (marker long): minutes each; `just ci` and GitHub run them
 just test-one reset_sync  # tests matching a name (pytest -k)
 just test-one net_model   # golden-model self-tests only (no simulator, seconds)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths
@@ -314,7 +315,7 @@ The project file is generated and never committed. Sources come from the same fi
 | `Wsl/Service/E_UNEXPECTED` during `just test` | The Windows host could not supply the memory the WSL VM asked for during parallel builds. Cap the VM in `%USERPROFILE%\.wslconfig` (`[wsl2]` `memory=3GB`, `swap=4GB`), run `wsl --shutdown`, and/or set `HFT_JOBS=1` |
 | `.venv/bin/python` disappears, builds fail with missing `cocotb/share/...` files | Something on the Windows side touched the repo's `.venv` (it is shared through `/mnt/d`). On WSL set `UV_PROJECT_ENVIRONMENT=/home/<you>/.cache/hft-feedhandler/venv` in `.env.local` and run `just setup`; the venv then lives on ext4, out of Windows' reach |
 | `SRE module mismatch` in a build log | A Verilator helper (`verilator_includer`) ran with another Python than the venv's stdlib on `PYTHONPATH`. The runner sets `PYTHON3` for make to the venv interpreter; keep that when changing the runner |
-| Slow first build on `/mnt/d` | Exclude the repo's `build/` and `.tools/` folders from Windows Defender real-time scanning, or set `HFT_BUILD_DIR` to a WSL path |
+| Slow first build on `/mnt/d` | Exclude the repo's `build/` and `.tools/` folders from Windows Defender real-time scanning, or set `HFT_BUILD_DIR` in `.env.local` to a WSL path (see `.env.example`; run `just clean` from WSL then) |
 | Lint does not flag a signal named `*unused*` | Verilator ignores names matching `--unused-regexp` (`*unused*`) on purpose |
 | `Unsupported arch` | 32-bit Pi OS is not supported. Install the 64-bit image |
 | Wrong `python` inside recipes | Do not source OSS CAD Suite's `environment` script; the justfile only adds its `bin/` to `PATH` |

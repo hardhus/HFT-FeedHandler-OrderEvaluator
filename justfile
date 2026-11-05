@@ -117,6 +117,12 @@ lint-legacy:
 test *ARGS:
     uv run pytest -n auto --dist loadgroup "$@"
 
+# Run the long tests only (marker long): minutes each, part of `just ci`
+[positional-arguments]
+[unix]
+test-long *ARGS:
+    uv run pytest -n auto --dist loadgroup -m long --junitxml=build/long-results.xml "$@"
+
 # Run tests matching NAME (pytest -k)
 [unix]
 test-one NAME *ARGS:
@@ -178,9 +184,9 @@ gen-check:
     done
     [ $fail = 0 ] && echo "gen-check: generated files are up to date" || { echo "gen-check: FAILED (run: just gen)"; exit 1; }
 
-# doctor + gen-check + lint + test
+# doctor + gen-check + lint + test + test-long
 [unix]
-ci: doctor gen-check lint test
+ci: doctor gen-check lint test test-long
 
 # ---------- Windows: forward Linux recipes to WSL ----------
 
@@ -208,6 +214,11 @@ lint-legacy:
 [windows]
 test *ARGS:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just test {{ ARGS }}"
+
+# Run the long tests only in WSL
+[windows]
+test-long *ARGS:
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just test-long {{ ARGS }}"
 
 # Run tests matching NAME in WSL
 [windows]
@@ -244,7 +255,7 @@ gen:
 gen-check:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just gen-check"
 
-# doctor + gen-check + lint + test in WSL
+# doctor + gen-check + lint + test + test-long in WSL
 [windows]
 ci:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just ci"

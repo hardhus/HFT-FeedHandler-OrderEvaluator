@@ -26,4 +26,5 @@ testpaths = ["firmware/tb"]
 pythonpath = ["firmware/tb"]
 python_files = ["test_*.py"]
 # Real-data tests (marker `real`) need the network: only `-m real` (just itch-real) selects them.
-addopts = "-ra --junitxml=build/test-results.xml -m 'not real'"
+# Long tests (marker `long`) run in `just test-long` and `just ci`, not in the daily `just test`.
+addopts = "-ra --junitxml=build/test-results.xml -m 'not real and not long'"
