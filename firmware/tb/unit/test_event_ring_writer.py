@@ -16,9 +16,8 @@ import cocotb
 import pytest
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
-from cocotbext.axi import AxiRamWrite
 
-from common.axi_ram import write_bus
+from common.axi_ram import Ram, write_bus
 from common.coverage import Coverage
 from common.runner import run_cocotb
 from model.desc_gen import ENTRY_BYTES
@@ -28,17 +27,6 @@ PERIOD_NS = 4
 BASE = 0x1234_5678_9ABC_D000
 N_LOSSLESS = {512: 1_000_000, 64: 100_000}  # entries (audit/13 §2.10)
 MEM_SIZE = 1 << 24
-
-
-class Ram(AxiRamWrite):
-    """Host memory. An address in bad_addrs answers SLVERR for its burst."""
-
-    bad_addrs: set[int]
-
-    async def _write(self, address, data):
-        if address in self.bad_addrs:
-            raise OSError("bad address")
-        await super()._write(address, data)
 
 
 def pause(p: float) -> Iterator[bool]:
@@ -73,7 +61,6 @@ class Bench:
         dut.cfg_cons.value = 0
         cocotb.start_soon(Clock(dut.clk, PERIOD_NS, "ns").start())
         self.mem = Ram(write_bus(dut, "m_axi_hmw"), dut.clk, dut.rst, size=MEM_SIZE)
-        self.mem.bad_addrs = set()
         self.mem.log.setLevel(logging.WARNING)  # it logs one line per burst at INFO: 10^6 lines in the long test
         self.ready(p_ready)
         for _ in range(4):

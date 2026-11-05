@@ -23,6 +23,14 @@ event, 2 cycles after its input, are compared with the model. Every snapshot als
 ITCH accounting identities: the ITCH_<class> counters sum to MOLD_MSGS, and ITCH_OUT +
 ITCH_FILTERED + ITCH_MASKED to the ITCH_<class> sum.
 
+Every packet then goes on to the ring path (audit/13 S7): the ring model (model/ring.py) takes the packet
+event and its OUT messages from the chain model. The one input it needs from the bench is which packets did
+not fit: a write attempt in a cycle when the FIFO's own port says full. Every snapshot holds the ring
+identity RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS. A test that
+attaches a RingHost (host memory and the consumer) also reads each entry through the ring protocol and
+compares it, byte by byte, with the model; quiet, RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.
+A test without one leaves the ring off: the FIFO fills and the path counts what it drops.
+
 Every snapshot equals the counters at its acceptance edge (common/csr_env.Snap, fed by the
 receiver's stat_* and moldudp64_rx's packet events and feed state). Between two snapshots in sync
 with no resync in between, the accounting identity of the MoldUDP64 counters holds:
@@ -33,6 +41,7 @@ source (rst_in) goes through one reset_sync per domain.
 """
 
 import json
+import logging
 import os
 import random
 from collections import Counter, deque
@@ -44,6 +53,7 @@ import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 
+from common.axi_ram import Ram, write_bus
 from common.clocks import PROFILES, profile, start_clock
 from common.coverage import Coverage
 from common.csr_env import (
@@ -66,6 +76,8 @@ from model import mold
 from model.csr import OKAY
 from model.itch import N_WORDS, Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
 from model.itch import expect as itch_expect
+from model.desc_gen import FLAG_OVERFLOW_BEFORE, Kind, decode
+from model.itch import DECODED
 from model.mold import ACCEPTED, HDR_LEN, MAX_MSG, SEQ_MOD, FeedConfig, FeedState, MoldResult, MoldStatus
 from model.net import (
     RxConfig,
@@ -80,6 +92,7 @@ from model.net import (
     random_traffic,
     udp_frame,
 )
+from model.ring import PACINGS, RingConsumer, RingPacket, expect_entries, stamp
 
 RUNTIME_PARAMS = ("ratio", "group")
 STAGE_A_BEAT = 4  # eth_ip_udp_rx samples cfg_* (except rx_en) with input beat 4 (09 §2.3)
@@ -97,6 +110,18 @@ RX_PKTS_LO, RX_BYTES_LO = 0x0410, 0x0418
 DROP_LO = {"DISABLED": 0x0420, "FCS": 0x0428, "MAC": 0x0430, "ETHERTYPE": 0x0438, "IP_HDR": 0x0440,
            "FRAG": 0x0448, "PROTO": 0x0450, "FILTER": 0x0458, "LEN": 0x0460}  # fmt: skip
 ID, VERSION = 0x0000, 0x0004
+
+# Hand-written: the RING block (audit/13 S6).
+RING_CTRL, RING_BASE_LO, RING_BASE_HI, RING_SIZE_LOG2, CONS_IDX, PROD_IDX, RING_STATUS = (
+    0x0300, 0x0304, 0x0308, 0x030C, 0x0310, 0x0314, 0x0318)  # fmt: skip
+RING_WRITTEN_LO, RING_BRESP_ERR_LO = 0x0320, 0x0328
+RING_BASE = 0x1234_5678_9ABC_D000  # 4 KiB aligned, high bits set
+RING_MEM = 1 << 24  # bytes of host memory (addresses wrap at this size in the memory model)
+FIFO_ENTRIES = 256  # the commit FIFO of rx_csr_top
+# event_packer's write attempts, from moldudp64_rx's outputs (audit/13 S3): a message + WRITE_MSG, a packet's GAP
+# or EOS entry + WRITE_MSG after its event, an EOS behind a GAP one cycle later.
+WRITE_MSG = ITCH_LATENCY + 1
+N_REPLAY = 10_000  # messages of tc_ring_replay (audit/04 §3.4 scenario 2); do not lower
 
 # The feed tests' network: entry 0 = line A (unicast), entry 1 = line B (multicast), both in the feed
 # mask; entries 2..7 = other feeds.
@@ -170,6 +195,7 @@ class MoldPkt:
     tlast: int = -1  # cycle of the input tlast
     resync_waited: bool = False
     epoch: int = 0  # cfg_epoch at the first beat (the same context)
+    out: list = field(default_factory=list)  # (seq, event) of its OUT messages, for the ring model
 
 
 class System:
@@ -210,6 +236,19 @@ class System:
         self.itch_results: list[tuple[str, Result]] = []  # every result, with its packet's name
         self.itch_events: list[tuple[str, dict[str, int]]] = []  # every event as the DUT gave it
         self.sym_writes: list[int] = []  # cycles in which the decoder took a bitmap write
+        # ring path
+        self.fifo = dut.u_ring_fifo
+        self.ring_attempts: deque[int] = deque()  # cycles of event_packer's write attempts to come
+        self.ring_open: deque[tuple[int, RingPacket]] = deque()  # (cycle of its last write attempt, packet)
+        self.ring_fail = False  # an attempt found the FIFO full since the last packet closed
+        self.ring_pending = False  # a drop whose overflow_before has not gone out
+        self.ring_commit = self.ring_drop_pkts = self.ring_drop_entries = 0  # the model's counters
+        self.ring_want: deque[bytes] = deque()  # model entries not read from the ring yet
+        self.ring_got: deque[tuple[int, bytes]] = deque()  # (index, entry) read, not compared yet
+        self.ring_read = 0  # entries read and compared
+        self.ring_flags: list[int] = []  # indexes of the entries read with overflow_before
+        self.ring_log: list[dict] = []  # entries read, decoded (with keep)
+        self.ring_size_log2 = 0
         cocotb.start_soon(self._monitor())
 
     async def send(self, frame: bytes, tuser: bool = False, gap: int = 0, name: str = "") -> Sent:
@@ -235,7 +274,7 @@ class System:
     async def finish(self, limit: int = 50) -> None:
         for _ in range(limit):
             if not (self.stat_q or self.pay_q or self.in_flight or self.mold_q or self.cur or self.out_q
-                    or self.itch_q or self.fwd_q):  # fmt: skip
+                    or self.itch_q or self.fwd_q or self.ring_open):  # fmt: skip
                 return
             await RisingEdge(self.dut.net_clk)
         raise AssertionError(
@@ -285,6 +324,7 @@ class System:
             if d.m_axis_udp_tvalid.value:
                 self._payload_beat()
             self._sym_port()  # after this cycle's lookups (_mold_msg): READ_FIRST
+            self._ring_net()
 
     def _stat(self) -> None:
         assert self.stat_q, "stat event with no frame outstanding"
@@ -383,6 +423,9 @@ class System:
             f"{name}: seq {seq}: m_msg_ctx {ctx:#x}")
         ev, res = itch_expect(data, p.itch, self.bm)  # the lookup in this cycle: before its write
         self.itch_q.append((self.cycle, ev, res, seq, p.ts, name, p.epoch))
+        if ev is not None:
+            p.out.append((seq, ev))
+            self.ring_attempts.append(self.cycle + WRITE_MSG)
 
     def _mold_pkt(self) -> None:
         d = self.dut
@@ -411,6 +454,13 @@ class System:
             self.mold_done.append(p)
         want_fwd = {k: int(getattr(d, f"m_pkt_{k}").value) for k in FWD_PORTS} | {"epoch": p.epoch}
         self.fwd_q.append((self.cycle, want_fwd))
+        ring = RingPacket(S(status), want_fwd["seq"], w.gap, p.ts, p.epoch, tuple(p.out))
+        last = self.cycle + WRITE_MSG - 1
+        if status in ACCEPTED:
+            for _ in range(int(w.gap != 0) + int(status == S.EOS)):
+                last += 1
+                self.ring_attempts.append(last)
+        self.ring_open.append((max(last, self.cycle + WRITE_MSG + 1), ring))
 
     # ---- itch_decoder: the chain model
     def _itch_out(self) -> None:
@@ -460,6 +510,156 @@ class System:
             self.bm.write(int(u.sym_req_addr.value), int(u.sym_req_wdata.value), int(u.sym_req_wstrb.value))
             self.sym_writes.append(self.cycle)
 
+    # ---- the ring path: the ring model
+    def _ring_net(self) -> None:
+        """event_packer never raises wr_en on a full FIFO, so the attempts come from the model. A packet's attempts
+        end before the next packet's start, so those that found the FIFO full up to its end are that packet's."""
+        while self.ring_open and self.ring_open[0][0] < self.cycle:
+            self._ring_close(self.ring_open.popleft()[1])
+        if self.ring_attempts and self.ring_attempts[0] == self.cycle:
+            self.ring_attempts.popleft()
+            f = self.fifo
+            if f.full.value or f.wr_rst_busy.value:
+                self.ring_fail = True
+
+    def _ring_close(self, pkt: RingPacket) -> None:
+        r = expect_entries([replace(pkt, dropped=self.ring_fail)], self.ring_pending)
+        self.ring_fail, self.ring_pending = False, r.overflow_pending
+        self.ring_commit += len(r.entries)
+        self.ring_drop_pkts += r.drop_pkts
+        self.ring_drop_entries += r.drop_entries
+        self.ring_want.extend(r.entries)
+        self._ring_compare()
+
+    def ring_entry(self, idx: int, entry: bytes) -> None:
+        """An entry the host read from the ring."""
+        self.ring_got.append((idx, entry))
+        self._ring_compare()
+
+    def _ring_compare(self) -> None:
+        while self.ring_want and self.ring_got:
+            idx, entry = self.ring_got.popleft()
+            want = stamp(self.ring_want.popleft(), idx, self.ring_size_log2)
+            assert entry == want, f"ring entry {idx}: {entry.hex()}, model {want.hex()}"
+            self.ring_read += 1
+            got = decode(entry)
+            if got["flags"] & FLAG_OVERFLOW_BEFORE:
+                self.ring_flags.append(idx)
+            if self.keep:
+                self.ring_log.append(got)
+
+    def check_ring_counters(self, v: dict[str, int]) -> None:
+        """A snapshot taken after finish(): the ring counters against the model."""
+        got = (v["RING_COMMIT_ENTRIES"], v["RING_DROP_PKTS"], v["RING_DROP_ENTRIES"])
+        want = (self.ring_commit, self.ring_drop_pkts, self.ring_drop_entries)
+        assert got == want, f"(commit, drop packets, drop entries) {got}, model {want}"
+
+
+class RingHost:
+    """Host memory on m_axi_hmw_* and the host: RING registers through the CSR bus, the model's consumer."""
+
+    def __init__(self, dut, w: Wrap, sysm: System, size_log2: int, base: int = RING_BASE):
+        self.dut, self.w, self.sysm = dut, w, sysm
+        self.mem = Ram(write_bus(dut, "m_axi_hmw"), dut.host_clk, dut.u_wrap.host_rst, size=RING_MEM)
+        self.mem.log.setLevel(logging.WARNING)  # it logs one line per burst at INFO
+        self.size_log2, self.base = size_log2, base
+        self.cons = RingConsumer(self.read, self._post, base, size_log2)
+        self.pacing = PACINGS["fast"]
+        self.hold = False  # the consumer stops reading
+        self.polling = False  # a poll or its CONS_IDX write is under way
+        self.post: int | None = None  # CONS_IDX value to write
+        sysm.ring_size_log2 = size_log2
+        cocotb.start_soon(self._no_underflow())
+
+    def read(self, addr: int, n: int) -> bytes:
+        return self.mem.read(addr % RING_MEM, n)
+
+    def _post(self, idx: int) -> None:
+        self.post = idx
+
+    async def _no_underflow(self) -> None:
+        await RisingEdge(self.dut.ring_fifo_underflow)
+        raise AssertionError("event_ring_writer read the commit FIFO while it was empty")
+
+    async def configure(self) -> None:
+        """The host's bring-up: the region is zero; base, size, CONS_IDX = 0."""
+        for reg, value in ((RING_BASE_LO, self.base & 0xFFFF_FFFF), (RING_BASE_HI, self.base >> 32),
+                           (RING_SIZE_LOG2, self.size_log2), (CONS_IDX, 0)):  # fmt: skip
+            assert await self.w.drv.write(reg, value) == OKAY
+
+    async def enable(self) -> None:
+        await self.configure()
+        assert await self.w.drv.write(RING_CTRL, 1) == OKAY
+        cocotb.start_soon(self._consumer())
+
+    async def _consumer(self) -> None:
+        clk, done = self.dut.host_clk, 0
+        while True:
+            if self.hold:
+                await RisingEdge(clk)
+                continue
+            self.polling = True
+            entry = self.cons.poll()
+            wait = self.pacing.period
+            if entry is not None:
+                self.sysm.ring_entry(self.cons.idx - 1, entry)
+                done += 1
+                wait = self.pacing.wait_after(done)
+            if self.post is not None:
+                idx, self.post = self.post, None
+                assert await self.w.drv.write(CONS_IDX, idx) == OKAY
+            self.polling = False
+            for _ in range(wait):
+                await RisingEdge(clk)
+
+    async def stop(self) -> None:
+        """Stop reading and tell the hardware how far the host got."""
+        self.hold = True
+        while self.polling:
+            await RisingEdge(self.dut.host_clk)
+        self.cons.flush()
+        idx, self.post = self.post, None
+        assert await self.w.drv.write(CONS_IDX, idx) == OKAY
+
+    async def settle(self, cycles: int = 400) -> None:
+        """Long enough for what can move to move: the FIFO pointers, the writer and the memory."""
+        for _ in range(cycles):
+            await RisingEdge(self.dut.host_clk)
+
+    async def live(self, lo: int) -> int:
+        """A live 64-bit counter by the host rule: HI, LO, HI, again if the two HI differ."""
+        drv = self.w.drv
+        while True:
+            hi = (await drv.read(lo + 4))[0]
+            low = (await drv.read(lo))[0]
+            if (await drv.read(lo + 4))[0] == hi:
+                return hi << 32 | low
+
+    async def answered(self) -> int:
+        return await self.live(RING_WRITTEN_LO) + await self.live(RING_BRESP_ERR_LO)
+
+    async def drain(self, limit: int = 2_000_000) -> None:
+        """Read until every committed entry is read and answered: then the ring and the FIFO are empty."""
+        sysm = self.sysm
+        await sysm.finish()
+        self.pacing, self.hold = PACINGS["fast"], False
+        for _ in range(limit):
+            await RisingEdge(self.dut.host_clk)
+            if sysm.ring_read == sysm.ring_commit and await self.answered() == sysm.ring_commit:
+                assert not sysm.ring_want and not sysm.ring_got
+                return
+        raise AssertionError(f"{sysm.ring_read} ring entries read, {sysm.ring_commit} committed")
+
+    async def check_quiet(self, v: dict[str, int]) -> None:
+        """A snapshot taken after drain(): the model's counters and the host side of the identity."""
+        self.sysm.check_ring_counters(v)
+        written, errors = await self.live(RING_WRITTEN_LO), await self.live(RING_BRESP_ERR_LO)
+        assert v["RING_COMMIT_ENTRIES"] == written + errors, (
+            f"RING_COMMIT_ENTRIES {v['RING_COMMIT_ENTRIES']}, RING_WRITTEN {written}, RING_BRESP_ERR {errors}")
+        assert await self.w.drv.read(PROD_IDX) == (self.cons.idx & 0xFFFF_FFFF, OKAY)
+        assert await self.w.drv.read(RING_STATUS) == (0, OKAY)
+
+
 
 async def start(dut) -> tuple[Wrap, System]:
     """Idle inputs, the reset source asserted, both clocks; release the reset and wait until both
@@ -470,6 +670,8 @@ async def start(dut) -> tuple[Wrap, System]:
     for name, v in (("tvalid", 0), ("tdata", 0), ("tkeep", 0), ("tlast", 0), ("tuser", 0)):
         getattr(dut, f"s_axis_rx_{name}").value = v
     dut.ts_now.value = 0
+    for name in ("awready", "wready", "bvalid", "bresp"):  # no host memory until a test attaches a RingHost
+        getattr(dut, f"m_axi_hmw_{name}").value = 0
     dut.rst_in.value = 1
     start_clock(dut.net_clk, net_ps, jit)
     start_clock(dut.host_clk, host_ps, jit)
@@ -525,12 +727,16 @@ def check_itch_identities(values: list[int]) -> None:
     """Both ITCH identities hold in every snapshot (all counters start at 0 with the reset, so a
     snapshot holds them absolutely, and every pair of snapshots holds them for the difference):
     the ITCH_<class> counters sum to MOLD_MSGS (the same committed messages), and the outcome
-    counters sum to the class counters (one class and one outcome per result)."""
+    counters sum to the class counters (one class and one outcome per result). The ring identity too
+    (audit/13 S6): every OUT message, GAP and EOS of an accepted packet is committed or dropped."""
     v = named(values)
     classes = sum(v[f"ITCH_{c.name}"] for c in ItchClass) & MASK64
     outcomes = sum(v[f"ITCH_{o.name}"] for o in Outcome) & MASK64
     assert classes == v["MOLD_MSGS"], f"sum of ITCH_<class> {classes}, MOLD_MSGS {v['MOLD_MSGS']}"
     assert outcomes == classes, f"ITCH_OUT + FILTERED + MASKED {outcomes}, sum of ITCH_<class> {classes}"
+    ring = (v["RING_COMMIT_ENTRIES"] + v["RING_DROP_ENTRIES"]) & MASK64
+    entries = (v["ITCH_OUT"] + v["MOLD_GAP_EVENTS"] + v["MOLD_EOS"]) & MASK64
+    assert ring == entries, f"RING_COMMIT_ENTRIES + RING_DROP_ENTRIES {ring}, ITCH_OUT + GAP_EVENTS + EOS {entries}"
 
 
 def named(values: list[int]) -> dict[str, int]:
@@ -1042,8 +1248,9 @@ async def tc_itch_bring_up(dut):
 ITCH_BINS = [
     *(f"itch_{c.name}_{o.name}" for c in ItchClass for o in Outcome),
     "sym_write_in_traffic", "sym_read", "itch_cfg_commit", "resync", "snapshot_while_traffic", "identities",
-    "feed_identity_checked",
+    "feed_identity_checked", "ring_wrap", "ring_drop", "ring_overflow_flag", "ring_recovered",
 ]  # fmt: skip
+N_RING_RANDOM_LOG2 = 6  # entries of the ring in tc_itch_random, log2: small, so it wraps many times
 N_ITCH = 2000  # frames of tc_itch_random (audit/12 §2.10); do not lower
 N_ITCH_SNAPSHOTS = 5  # snapshots tc_itch_random must take at least (identities in each)
 # ITCH_CTRL (class_en, class_filter) of the FEED commits, from a shuffled bag like tc_feed_random:
@@ -1060,7 +1267,8 @@ async def tc_itch_random(dut):
     and reads it back, resyncs and takes snapshots. The chain model checks every message, result,
     event and packet event (F2 -> F3 -> F4); every snapshot is exact and holds both ITCH
     identities, and consecutive ones the MoldUDP64 identity (FeedIdentity); coverage gate: every
-    class with every outcome."""
+    class with every outcome. The ring path (audit/13 S7): a small ring whose consumer first stops until
+    packets drop, then runs fast, slow and pausing in turn. Each entry read against the model."""
     w, sysm = await start(dut)
     rng = random.Random(random.getrandbits(32))
     cov = Coverage("rx_csr.tc_itch_random", ITCH_BINS)
@@ -1070,6 +1278,19 @@ async def tc_itch_random(dut):
     current = {"itch": ITCH_VARIANTS[0]}
     snapshots = {"n": 0}
     identity = FeedIdentity(w, sysm)
+    host = RingHost(dut, w, sysm, N_RING_RANDOM_LOG2)
+    host.hold = True
+
+    async def pacing() -> None:
+        """The consumer stays stopped until a packet drops (so that bin does not depend on the seed)."""
+        while not int(r.cnt_ring_drop_pkts.value) and not done["traffic"]:
+            await RisingEdge(r.host_clk)
+        host.hold = False
+        while not done["traffic"]:
+            for name in ("fast", "slow", "pausing"):
+                host.pacing = PACINGS[name]
+                for _ in range(20_000):
+                    await RisingEdge(r.host_clk)
 
     def feed(itch: tuple[int, int], **kw) -> FeedCfg:
         return replace(FEED_ON, class_en=itch[0], class_filter=itch[1], **kw)
@@ -1122,6 +1343,7 @@ async def tc_itch_random(dut):
 
     await configure(w, NET_FEED)
     await configure_feed(w, feed(current["itch"]))
+    await host.enable()
     # Initial subscriptions (the first write waits for the sweep after reset): edge words and a few
     # random ones, half of their bits set.
     for word in [0, 1, SYMBOL.entries - 1, *(rng.randrange(SYMBOL.entries) for _ in range(5))]:
@@ -1129,6 +1351,7 @@ async def tc_itch_random(dut):
         assert await w.drv.write(SYMBOL.addr + 4 * word, data) == OKAY
         sw_bm.write(word, data, 0xF)
     task = cocotb.start_soon(software())
+    pace = cocotb.start_soon(pacing())
     stream = itch_stream(rng, ItchConfig(*current["itch"]), sw_bm)
     pkts = mold.random_feed(rng, N_ITCH, FeedConfig(True, True, SESSION, 0x03), msg_source=lambda: next(stream).msg)
     for p in pkts:
@@ -1136,9 +1359,21 @@ async def tc_itch_random(dut):
     await sysm.finish()
     done["traffic"] = True
     await task
+    pace.cancel()
     await w.feed.wait_idle()
     w.feed.check_done()
+    await host.drain()
     await snapshot()
+    v = named(await w.snap.read_counters())
+    await host.check_quiet(v)
+    if host.cons.idx >= 4 << N_RING_RANDOM_LOG2:
+        cov.hit("ring_wrap")
+    if v["RING_DROP_PKTS"]:
+        cov.hit("ring_drop")
+    if sysm.ring_flags:
+        cov.hit("ring_overflow_flag")
+    if sysm.ring_flags and sysm.ring_flags[-1] < host.cons.idx - 1:
+        cov.hit("ring_recovered")
     for _, res in sysm.itch_results:
         cov.hit(f"itch_{res.cls.name}_{res.outcome.name}")
     if snapshots["n"] >= N_ITCH_SNAPSHOTS:
@@ -1147,7 +1382,8 @@ async def tc_itch_random(dut):
         cov.hit("feed_identity_checked")
     dut._log.info(f"{len(sysm.done)} frames, {len(sysm.mold_done)} MoldUDP64 packets, {len(sysm.itch_results)} "
                   f"ITCH results, {len(sysm.itch_events)} events, {len(sysm.sym_writes)} bitmap writes, "
-                  f"{snapshots['n']} snapshots, {identity.checked} feed identity checks")  # fmt: skip
+                  f"{snapshots['n']} snapshots, {identity.checked} feed identity checks, ring: {host.cons.idx} "
+                  f"entries read, {v['RING_DROP_PKTS']} packets dropped, {len(sysm.ring_flags)} overflow flags")  # fmt: skip
     cov.check(Path.cwd())  # the run directory
 
 
@@ -1159,13 +1395,16 @@ async def tc_real_itch(dut):
     between windows is a gap), back to back. FEED with every class enabled and every class but
     ADMIN filtered (the host learns locates from the Stock Directory events), every fourth locate
     subscribed. Every frame, packet, message, result and event by the chain model; at the end the
-    counters against what was sent and the tally, with both identities."""
+    counters against what was sent and the tally, with both identities. Every entry is read back from a
+    host ring and compared with the model; a consumer that keeps up loses nothing (audit/13 S7)."""
     path, windows = Path(os.environ["ITCH_REAL"]), json.loads(os.environ["ITCH_REAL_WINDOWS"])
     w, sysm = await start(dut)
     sysm.keep = False
     C, all_en = ItchClass, (1 << N_CLASS) - 1
     await configure(w, NET_FEED)
     await configure_feed(w, replace(FEED_ON, class_en=all_en, class_filter=all_en & ~bit(C.ADMIN)))
+    host = RingHost(dut, w, sysm, 12)
+    await host.enable()
     for word in range(N_WORDS):
         assert await w.drv.write(SYMBOL.addr + 4 * word, 0x11111111) == OKAY  # locates 0 mod 4
     seq, msgs, pkts, skipped = 1, 0, 0, 0
@@ -1179,15 +1418,247 @@ async def tc_real_itch(dut):
         elif msgs:
             skipped += len(batch)  # a gap for the feed
         seq += len(batch)
-    await sysm.finish()
+    await host.drain()
     v = named(await snapshot_checked(w))
-    dut._log.info(f"{path.name}: {pkts} packets, {msgs} messages, gap {skipped}, results {tally_text(sysm.itch_tally)}")
+    await host.check_quiet(v)
+    assert v["RING_DROP_PKTS"] == 0 and not sysm.ring_flags, "a consumer that keeps up lost a packet"
+    assert v["RING_COMMIT_ENTRIES"] == v["ITCH_OUT"] + v["MOLD_GAP_EVENTS"] == host.cons.idx
+    dut._log.info(f"{path.name}: {pkts} packets, {msgs} messages, gap {skipped}, results {tally_text(sysm.itch_tally)}, "
+                  f"{host.cons.idx} ring entries")  # fmt: skip
     assert (v["MOLD_OK"], v["MOLD_MSGS"], v["MOLD_GAP_MSGS"]) == (pkts, msgs, skipped)
     for c in C:
         assert v[f"ITCH_{c.name}"] == sum(k for r, k in sysm.itch_tally.items() if r.cls == c), c.name
     for o in Outcome:
         assert v[f"ITCH_{o.name}"] == sum(k for r, k in sysm.itch_tally.items() if r.outcome == o), o.name
     assert v["ITCH_OUT"] and v["ITCH_FILTERED"]
+    w.feed.check_done()
+
+
+def order(locate: int, ref: int, stock: str = "AAPL") -> bytes:
+    """An Add Order with fields a test can check by hand."""
+    return encode("A", locate=locate, tracking=7, timestamp=34_200_000_000_000 + ref, order_ref=ref, side="B",
+                  shares=100 + ref, stock=stock.ljust(8), price=1_850_000)  # fmt: skip
+
+
+async def ring_system(dut, size_log2: int, cfg: FeedCfg | None = None) -> tuple[Wrap, System, RingHost]:
+    """A system with NET, the FEED configuration (every class out, nothing filtered, by default) and the ring on."""
+    all_en = (1 << N_CLASS) - 1
+    w, sysm = await start(dut)
+    host = RingHost(dut, w, sysm, size_log2)
+    await configure(w, NET_FEED)
+    await host.enable()
+    await configure_feed(w, cfg or replace(FEED_ON, class_en=all_en))
+    return w, sysm, host
+
+
+async def send_feed(sysm: System, seq: int, msgs: list[bytes], tuser: bool = False, gap: int = 2) -> None:
+    await sysm.send(feed_frame(mold.pack(SESSION, seq, msgs), 0), tuser, gap=gap)
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_bring_up(dut):
+    """audit/04 §3.4 scenario 1: reset, ID and VERSION, ring, filter, symbol, enable. Every field of the entries
+    is checked by hand in host memory, at the address the protocol gives, as software would read it."""
+    C = ItchClass
+    w, sysm = await start(dut)
+    assert await w.drv.read(ID) == (0x48465431, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0003, OKAY)
+    host = RingHost(dut, w, sysm, 4)
+    await host.enable()
+    assert await w.drv.read(RING_BASE_LO) == (RING_BASE & 0xFFFF_FFFF, OKAY)
+    assert await w.drv.read(RING_BASE_HI) == (RING_BASE >> 32, OKAY)
+    assert await w.drv.read(RING_SIZE_LOG2) == (4, OKAY)
+    assert await w.drv.read(RING_CTRL) == (1, OKAY)
+    await configure(w, NET_FEED)
+    assert await w.drv.write(SYMBOL.addr, 1 << 5) == OKAY  # locate 5 subscribed
+    all_en = (1 << N_CLASS) - 1
+    await configure_feed(w, replace(FEED_ON, class_en=all_en, class_filter=bit(C.ORDER)))  # epoch 1
+    admin = encode("S", timestamp=3, event_code="O")
+    await send_feed(sysm, 100, [admin, order(5, 1), order(70, 2, "MSFT"), order(5, 3)])  # MSFT filtered
+    await host.drain()
+    v = named(await snapshot_checked(w))
+    await host.check_quiet(v)
+    assert (v["ITCH_OUT"], v["ITCH_FILTERED"], v["RING_COMMIT_ENTRIES"], v["RING_DROP_PKTS"]) == (3, 1, 3, 0)
+
+    entries = sysm.ring_log
+    assert [e["kind"] for e in entries] == [Kind.ITCH_RAW, Kind.ITCH, Kind.ITCH]
+    assert [e["seq"] for e in entries] == [100, 101, 103], "seq 102 was filtered: the host sees the hole in seq"
+    assert [e["ring_idx"] for e in entries] == [0, 1, 2]
+    assert all(e["cfg_epoch"] == 1 and e["flags"] == 0 for e in entries)
+    sof = entries[0]["sof_ts"]
+    assert all(e["sof_ts"] == sof for e in entries), "one packet, one SOF timestamp"
+    raw = entries[0]
+    assert (raw["itch_class"], raw["len"], raw["raw_lo"][:12]) == (C.ADMIN, 12, admin)
+    assert not any(raw["raw_lo"][12:]) and not any(raw["raw_hi"])
+    add = entries[2]
+    assert (add["itch_class"], add["msg_type"], add["len"]) == (C.ORDER, ord("A"), 36)
+    assert (add["locate"], add["tracking"], add["itch_ts"]) == (5, 7, 34_200_000_000_003)
+    assert (add["order_ref"], add["shares"], add["price"], add["side"]) == (3, 103, 1_850_000, ord("B"))
+    assert add["stock"] == b"AAPL    "
+    in_mem = host.read(RING_BASE + 2 * 128, 128)
+    assert (in_mem[0:8], in_mem[16:20]) == ((103).to_bytes(8, "little"), (2).to_bytes(4, "little"))
+    assert (in_mem[63], in_mem[127]) == (0x81, 0x81), "version 1, phase 1 in both lines"
+    assert not any(host.read(RING_BASE + 3 * 128, 128)), "the next slot is untouched"
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=500, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_replay(dut):
+    """audit/04 §3.4 scenario 2: N_REPLAY messages of every ITCH category in order through a 64-entry ring that wraps
+    many times, read at the host's pace (the test holds the sender while a packet might not fit, as a feed slower
+    than the ring would). Every entry read equals the model, byte by byte; none lost, none repeated, in order."""
+    w, sysm, host = await ring_system(dut, 6)
+    rng = random.Random(random.getrandbits(32))
+    subscribed = Bitmap()  # only the generator's: nothing is filtered, so the decoder's bitmap does not matter
+    subscribed.write(0, 0x5555_5555, 0xF)
+    stream = itch_stream(rng, ItchConfig((1 << N_CLASS) - 1, 0), subscribed)
+    first, seq = 1000, 1000
+    while seq - first < N_REPLAY:
+        msgs = [next(stream).msg for _ in range(rng.randint(1, 20))]
+        while seq - first - host.cons.idx + len(msgs) > FIFO_ENTRIES // 2:
+            await RisingEdge(dut.net_clk)
+        await send_feed(sysm, seq, msgs, gap=rng.choice([0, 1, 3]))
+        seq += len(msgs)
+    await host.drain()
+    v = named(await snapshot_checked(w))
+    await host.check_quiet(v)
+    total = seq - first
+    assert (v["RING_COMMIT_ENTRIES"], v["RING_DROP_PKTS"], v["RING_DROP_ENTRIES"]) == (total, 0, 0)
+    assert v["ITCH_OUT"] == total == host.cons.idx >= 8 << 6
+    assert [e["seq"] for e in sysm.ring_log] == list(range(first, seq))
+    assert not sysm.ring_flags
+    for e in sysm.ring_log:
+        assert e["kind"] == (Kind.ITCH if ItchClass(e["itch_class"]) in DECODED else Kind.ITCH_RAW)
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_gap_recovery(dut):
+    """audit/04 §3.4 scenarios 3 and 7. A gap gives a GAP entry after the packet's messages, also in a heartbeat
+    with no message. A packet with a bad FCS, a duplicate and a packet of another session write nothing. The host
+    resyncs: the new epoch is in the entries from the next packet on. A gap in an end of session gives GAP, then
+    EOS. Kinds, sequence numbers and epochs by hand."""
+    w, sysm, host = await ring_system(dut, 4)  # epoch 1
+    await send_feed(sysm, 100, [order(1, 1), order(1, 2)])  # E = 102
+    await send_feed(sysm, 102, [order(1, 3)], tuser=True)  # bad FCS: nothing
+    await send_feed(sysm, 100, [order(1, 4)])  # duplicate: nothing
+    await sysm.send(feed_frame(mold.pack(b"SESSION002", 102, [order(1, 5)]), 0), gap=2)  # another session: nothing
+    await send_feed(sysm, 110, [order(1, 6)])  # gap 8, E = 111
+    await sysm.send(feed_frame(mold.heartbeat(SESSION, 120), 0), gap=2)  # gap 9, E = 120
+    await host.drain()
+    await configure_feed(w, replace(FEED_ON, class_en=(1 << N_CLASS) - 1, resync_seq=200), resync=True)  # epoch 2
+    await send_feed(sysm, 200, [order(1, 7)])  # E = 201
+    await sysm.send(feed_frame(mold.eos(SESSION, 205), 0), gap=2)  # gap 4
+    await host.drain()
+    v = named(await snapshot_checked(w))
+    await host.check_quiet(v)
+    log = sysm.ring_log
+    got = [(Kind(e["kind"]), e["seq"], e["cfg_epoch"]) for e in log]
+    assert got == [
+        (Kind.ITCH, 100, 1), (Kind.ITCH, 101, 1), (Kind.ITCH, 110, 1), (Kind.GAP, 102, 1), (Kind.GAP, 111, 1),
+        (Kind.ITCH, 200, 2), (Kind.GAP, 201, 2), (Kind.EOS, 205, 2),
+    ], got  # fmt: skip
+    gaps = [(e["first_seq"], e["gap"]) for e in log if e["kind"] == Kind.GAP]
+    assert gaps == [(110, 8), (120, 9), (205, 4)], gaps
+    assert (v["MOLD_GAP_EVENTS"], v["MOLD_EOS"], v["ITCH_OUT"], v["RING_COMMIT_ENTRIES"]) == (3, 1, 4, 8)
+    assert not sysm.ring_flags and v["RING_DROP_PKTS"] == 0
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=50, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_pressure(dut):
+    """audit/04 §3.4 scenario 4. The consumer stops: the ring fills, the writer waits, the FIFO fills, and then whole
+    packets drop and are counted (hand-computed from the sizes: these packets come slower than the writer takes them,
+    so its register is empty when the ring fills and holds no 17th entry). The consumer returns:
+    every committed entry arrives in order and the first one after the loss has overflow_before, only that one.
+    Then a packet that fits only in part drops whole and a smaller one behind it still fits."""
+    w, sysm, host = await ring_system(dut, 4)
+    room = (1 << 4) + FIFO_ENTRIES
+    await host.stop()
+    extra = 30
+    seq = 1000
+    for i in range(room + extra):
+        await send_feed(sysm, seq, [order(1, i)])
+        seq += 1
+    await sysm.finish()
+    await host.settle()
+    assert await w.drv.read(PROD_IDX) == (1 << 4, OKAY), "the writer stops at a full ring"
+    assert await host.live(RING_WRITTEN_LO) == 1 << 4
+    v = named(await snapshot_checked(w))
+    sysm.check_ring_counters(v)
+    assert (v["RING_COMMIT_ENTRIES"], v["RING_DROP_PKTS"], v["RING_DROP_ENTRIES"]) == (room, extra, extra)
+
+    await host.drain()  # the backlog: nothing lost, no flag yet (the flag goes on the next committed entry)
+    assert host.cons.idx == room and not sysm.ring_flags
+    assert [e["seq"] for e in sysm.ring_log] == list(range(1000, 1000 + room))
+    await send_feed(sysm, seq, [order(1, 1)])
+    await send_feed(sysm, seq + 1, [order(1, 2)])
+    seq += 2
+    await host.drain()
+    assert sysm.ring_flags == [room], f"overflow_before on {sysm.ring_flags}"
+    assert sysm.ring_log[room]["seq"] == 1000 + room + extra, "the first entry after the lost packets"
+
+    await host.stop()  # CONS_IDX is up to date: all the room is free again
+    before = named(await snapshot_checked(w))
+    start_idx = host.cons.idx
+    for i in range(room - 2):
+        await send_feed(sysm, seq, [order(1, i)])
+        seq += 1
+    await sysm.finish()
+    await host.settle()
+    await send_feed(sysm, seq, [order(1, i) for i in range(5)])  # 2 fit, the third finds the FIFO full
+    seq += 5
+    await send_feed(sysm, seq, [order(1, 9)])  # room for it: the rollback gave back the 2
+    seq += 1
+    await host.drain()
+    v = named(await snapshot_checked(w))
+    await host.check_quiet(v)
+    assert v["RING_DROP_PKTS"] - before["RING_DROP_PKTS"] == 1
+    assert v["RING_DROP_ENTRIES"] - before["RING_DROP_ENTRIES"] == 5
+    assert v["RING_COMMIT_ENTRIES"] - before["RING_COMMIT_ENTRIES"] == room - 1
+    assert sysm.ring_flags == [room, start_idx + room - 2], f"overflow_before on {sysm.ring_flags}"
+    assert sysm.ring_log[-1]["seq"] == seq - 1
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ring_errors(dut):
+    """The writer's errors as software reads them. An enable with a stale CONS_IDX or a bad size is refused: bit 1 of
+    RING_STATUS, nothing written, and a clean enable clears it. A burst the memory refuses: bit 0, RING_BRESP_ERR,
+    and the identity RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR with an error in it."""
+    w, sysm = await start(dut)
+    host = RingHost(dut, w, sysm, 4)
+    drv = w.drv
+    await configure(w, NET_FEED)
+    await host.configure()
+    await configure_feed(w, replace(FEED_ON, class_en=(1 << N_CLASS) - 1))
+    await send_feed(sysm, 100, [order(1, i) for i in range(4)])
+    await sysm.finish()
+
+    async def refused(reg: int, bad: int, good: int) -> None:
+        assert await drv.write(reg, bad) == OKAY
+        assert await drv.write(RING_CTRL, 1) == OKAY
+        await host.settle(32)
+        assert await drv.read(RING_STATUS) == (0b10, OKAY), f"register {reg:#x} = {bad}"
+        assert await drv.read(PROD_IDX) == (0, OKAY)
+        assert not any(host.read(RING_BASE, 128)), "a refused enable wrote"
+        assert await drv.write(RING_CTRL, 0) == OKAY
+        assert await drv.write(reg, good) == OKAY
+
+    await refused(CONS_IDX, 3, 0)
+    await refused(RING_SIZE_LOG2, 3, 4)
+    await refused(RING_SIZE_LOG2, 21, 4)
+    host.mem.bad_addrs |= {RING_BASE + 128, RING_BASE + 128 + 64}  # both beats of slot 1: the model takes beat by beat
+    assert await drv.write(RING_CTRL, 1) == OKAY
+    await host.settle(64)
+    assert await drv.read(RING_STATUS) == (0b01, OKAY), "the clean enable cleared bit 1; the refused burst set bit 0"
+    assert await drv.read(PROD_IDX) == (4, OKAY)
+    assert await host.live(RING_WRITTEN_LO) == 3
+    assert await host.live(RING_BRESP_ERR_LO) == 1
+    v = named(await snapshot_checked(w))
+    assert v["RING_COMMIT_ENTRIES"] == 4 == 3 + 1
+    assert not any(host.read(RING_BASE + 128, 128)), "the refused burst reached memory"
+    assert host.read(RING_BASE + 2 * 128, 8) == (102).to_bytes(8, "little"), "no retry: the next entry follows"
     w.feed.check_done()
 
 

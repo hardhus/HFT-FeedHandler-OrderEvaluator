@@ -1,18 +1,22 @@
-// rx_csr_top: simulation-only system top: eth_ip_udp_rx, moldudp64_rx and itch_decoder configured
-// and counted through the host CSR block (hft_csr_wrap), with one asynchronous reset source and one
-// reset_sync per clock domain.
-// Clock domain : host_clk (s_axil_*), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*, m_udp_*, m_msg_*,
-//                m_pkt_*, m_ev_*, m_res_*)
-// Latency      : those of hft_csr_wrap, eth_ip_udp_rx, moldudp64_rx and itch_decoder
+// rx_csr_top: simulation-only system top: eth_ip_udp_rx, moldudp64_rx, itch_decoder, event_packer, the commit FIFO
+// and event_ring_writer, configured and counted through the host CSR block (hft_csr_wrap), with one asynchronous
+// reset source and one reset_sync per clock domain.
+// Clock domain : host_clk (s_axil_*, m_axi_hmw_*, ring_fifo_underflow), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*,
+//                m_udp_*, m_msg_*, m_pkt_*, m_ev_*, m_res_*, ring_fifo_overflow)
+// Latency      : those of its blocks
 // ITCH         : moldudp64_rx carries the ITCH config per packet: cfg_msg_ctx = {cfg_epoch, cfg_class_filter,
 //                cfg_class_en}. The counter banks in hft_csr_wrap count itch_decoder's forwarded
 //                packet events and results; m_pkt_* are moldudp64_rx's own,
 //                m_fwd_pkt_* the forwarded ones.
+// Ring         : itch_decoder's events and forwarded packet events go through event_packer and the COMMIT=1 FIFO
+//                to event_ring_writer, which writes host memory through m_axi_hmw_* (audit/13 §2.2).
 // Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
 module rx_csr_top
   import hft_pkg::*;
 #(
-    localparam int unsigned CTX_W = CFG_EPOCH_W + 2 * ITCH_N_CLASS  // {epoch, class_filter, class_en}
+    localparam int unsigned CTX_W           = CFG_EPOCH_W + 2 * ITCH_N_CLASS,  // {epoch, class_filter, class_en}
+    localparam int unsigned RING_DATA_W = 512,
+    localparam int unsigned RING_DEPTH_LOG2 = 8
 ) (
     input logic host_clk,
     input logic net_clk,
@@ -116,11 +120,25 @@ module rx_csr_top
     output logic         [           63:0] m_fwd_pkt_sof_ts,
     output logic         [CFG_EPOCH_W-1:0] m_fwd_pkt_epoch,
 
-    // RING registers: event_ring_writer comes in audit/13 S7
-    output logic        host_ring_enable,
-    output logic [63:0] host_ring_base,
-    output logic [ 4:0] host_ring_size_log2,
-    output logic [31:0] host_ring_cons
+    // Commit FIFO: a write that found it full (event_packer drops the packet), a read of it empty (never)
+    output logic ring_fifo_overflow,
+    output logic ring_fifo_underflow,
+
+    // Host memory
+    output logic [             63:0] m_axi_hmw_awaddr,
+    output logic [              7:0] m_axi_hmw_awlen,
+    output logic [              2:0] m_axi_hmw_awsize,
+    output logic [              1:0] m_axi_hmw_awburst,
+    output logic                     m_axi_hmw_awvalid,
+    input  logic                     m_axi_hmw_awready,
+    output logic [  RING_DATA_W-1:0] m_axi_hmw_wdata,
+    output logic [RING_DATA_W/8-1:0] m_axi_hmw_wstrb,
+    output logic                     m_axi_hmw_wlast,
+    output logic                     m_axi_hmw_wvalid,
+    input  logic                     m_axi_hmw_wready,
+    input  logic [              1:0] m_axi_hmw_bresp,
+    input  logic                     m_axi_hmw_bvalid,
+    output logic                     m_axi_hmw_bready
 );
   localparam int unsigned N_FILTERS = 8;
 
@@ -145,6 +163,14 @@ module rx_csr_top
   logic [10:0] sym_req_addr;
   logic [31:0] sym_req_wdata, sym_rsp_rdata;
   logic [3:0] sym_req_wstrb;
+  logic ring_enable, ring_bresp_err, ring_enable_err;
+  logic [63:0] ring_base, ring_cnt_written, ring_cnt_bresp_err;
+  logic [4:0] ring_size_log2;
+  logic [31:0] ring_cons, ring_prod_idx;
+  logic [63:0] ring_commit_entries, ring_drop_pkts, ring_drop_entries;
+  logic fifo_wr_en, fifo_commit, fifo_rollback, fifo_full, fifo_wr_busy;
+  logic fifo_rd_en, fifo_empty, fifo_rd_busy;
+  logic [event_desc_pkg::DESC_W-1:0] fifo_din, fifo_dout;
 
   reset_sync u_host_rst (
       .clk    (host_clk),
@@ -201,19 +227,18 @@ module rx_csr_top
       .cfg_class_en           (cfg_class_en),
       .cfg_class_filter       (cfg_class_filter),
       .cfg_epoch              (cfg_epoch),
-      // The ring path comes in audit/13 S7.
-      .host_ring_enable       (host_ring_enable),
-      .host_ring_base         (host_ring_base),
-      .host_ring_size_log2    (host_ring_size_log2),
-      .host_ring_cons         (host_ring_cons),
-      .host_ring_prod_idx     ('0),
-      .host_ring_bresp_err    (1'b0),
-      .host_ring_enable_err   (1'b0),
-      .host_ring_cnt_written  ('0),
-      .host_ring_cnt_bresp_err('0),
-      .cnt_ring_commit_entries('0),
-      .cnt_ring_drop_pkts     ('0),
-      .cnt_ring_drop_entries  ('0),
+      .host_ring_enable       (ring_enable),
+      .host_ring_base         (ring_base),
+      .host_ring_size_log2    (ring_size_log2),
+      .host_ring_cons         (ring_cons),
+      .host_ring_prod_idx     (ring_prod_idx),
+      .host_ring_bresp_err    (ring_bresp_err),
+      .host_ring_enable_err   (ring_enable_err),
+      .host_ring_cnt_written  (ring_cnt_written),
+      .host_ring_cnt_bresp_err(ring_cnt_bresp_err),
+      .cnt_ring_commit_entries(ring_commit_entries),
+      .cnt_ring_drop_pkts     (ring_drop_pkts),
+      .cnt_ring_drop_entries  (ring_drop_entries),
       .mpkt_valid             (m_fwd_pkt_valid),
       .mpkt_status            (m_fwd_pkt_status),
       .mpkt_gap               (m_fwd_pkt_gap),
@@ -379,5 +404,102 @@ module rx_csr_top
       .m_pkt_synced_now  (m_fwd_pkt_synced_now),
       .m_pkt_sof_ts      (m_fwd_pkt_sof_ts),
       .m_pkt_epoch       (m_fwd_pkt_epoch)
+  );
+
+  event_packer u_packer (
+      .clk               (net_clk),
+      .rst               (net_rst),
+      .s_ev_valid        (m_ev_valid),
+      .s_ev_class        (m_ev_class),
+      .s_ev_type         (m_ev_type),
+      .s_ev_len          (m_ev_len),
+      .s_ev_seq          (m_ev_seq),
+      .s_ev_sof_ts       (m_ev_sof_ts),
+      .s_ev_epoch        (m_ev_epoch),
+      .s_ev_locate       (m_ev_locate),
+      .s_ev_tracking     (m_ev_tracking),
+      .s_ev_ts           (m_ev_ts),
+      .s_ev_order_ref    (m_ev_order_ref),
+      .s_ev_new_ref      (m_ev_new_ref),
+      .s_ev_shares       (m_ev_shares),
+      .s_ev_price        (m_ev_price),
+      .s_ev_match        (m_ev_match),
+      .s_ev_side         (m_ev_side),
+      .s_ev_stock        (m_ev_stock),
+      .s_ev_attribution  (m_ev_attribution),
+      .s_ev_printable    (m_ev_printable),
+      .s_ev_cross_type   (m_ev_cross_type),
+      .s_ev_raw          (m_ev_raw),
+      .s_pkt_valid       (m_fwd_pkt_valid),
+      .s_pkt_status      (m_fwd_pkt_status),
+      .s_pkt_seq         (m_fwd_pkt_seq),
+      .s_pkt_gap         (m_fwd_pkt_gap),
+      .s_pkt_sof_ts      (m_fwd_pkt_sof_ts),
+      .s_pkt_epoch       (m_fwd_pkt_epoch),
+      .fifo_wr_en        (fifo_wr_en),
+      .fifo_din          (fifo_din),
+      .fifo_commit       (fifo_commit),
+      .fifo_rollback     (fifo_rollback),
+      .fifo_full         (fifo_full),
+      .fifo_wr_busy      (fifo_wr_busy),
+      .cnt_commit_entries(ring_commit_entries),
+      .cnt_drop_pkts     (ring_drop_pkts),
+      .cnt_drop_entries  (ring_drop_entries)
+  );
+
+  cdc_async_fifo #(
+      .WIDTH     (event_desc_pkg::DESC_W),
+      .DEPTH_LOG2(RING_DEPTH_LOG2),
+      .COMMIT    (1'b1)
+  ) u_ring_fifo (
+      .rst        (net_rst),
+      .wr_clk     (net_clk),
+      .wr_en      (fifo_wr_en),
+      .din        (fifo_din),
+      .wr_commit  (fifo_commit),
+      .wr_rollback(fifo_rollback),
+      .full       (fifo_full),
+      .overflow   (ring_fifo_overflow),
+      .wr_rst_busy(fifo_wr_busy),
+      .rd_clk     (host_clk),
+      .rd_en      (fifo_rd_en),
+      .dout       (fifo_dout),
+      .empty      (fifo_empty),
+      .underflow  (ring_fifo_underflow),
+      .rd_rst_busy(fifo_rd_busy)
+  );
+
+  event_ring_writer #(
+      .DATA_W(RING_DATA_W)
+  ) u_ring_writer (
+      .clk              (host_clk),
+      .rst              (host_rst),
+      .fifo_rd_en       (fifo_rd_en),
+      .fifo_dout        (fifo_dout),
+      .fifo_empty       (fifo_empty),
+      .fifo_rd_rst_busy (fifo_rd_busy),
+      .cfg_enable       (ring_enable),
+      .cfg_base         (ring_base),
+      .cfg_size_log2    (ring_size_log2),
+      .cfg_cons         (ring_cons),
+      .prod_idx         (ring_prod_idx),
+      .status_bresp_err (ring_bresp_err),
+      .status_enable_err(ring_enable_err),
+      .m_axi_hmw_awaddr (m_axi_hmw_awaddr),
+      .m_axi_hmw_awlen  (m_axi_hmw_awlen),
+      .m_axi_hmw_awsize (m_axi_hmw_awsize),
+      .m_axi_hmw_awburst(m_axi_hmw_awburst),
+      .m_axi_hmw_awvalid(m_axi_hmw_awvalid),
+      .m_axi_hmw_awready(m_axi_hmw_awready),
+      .m_axi_hmw_wdata  (m_axi_hmw_wdata),
+      .m_axi_hmw_wstrb  (m_axi_hmw_wstrb),
+      .m_axi_hmw_wlast  (m_axi_hmw_wlast),
+      .m_axi_hmw_wvalid (m_axi_hmw_wvalid),
+      .m_axi_hmw_wready (m_axi_hmw_wready),
+      .m_axi_hmw_bresp  (m_axi_hmw_bresp),
+      .m_axi_hmw_bvalid (m_axi_hmw_bvalid),
+      .m_axi_hmw_bready (m_axi_hmw_bready),
+      .cnt_written      (ring_cnt_written),
+      .cnt_bresp_err    (ring_cnt_bresp_err)
   );
 endmodule

@@ -6,7 +6,7 @@ the plan lists them.
 """
 
 from cocotb.types import LogicArray
-from cocotbext.axi import AxiWriteBus
+from cocotbext.axi import AxiRamWrite, AxiWriteBus
 
 
 class TiedSignal:
@@ -20,6 +20,19 @@ class TiedSignal:
 
     def setimmediatevalue(self, value) -> None:
         self.value = value
+
+
+class Ram(AxiRamWrite):
+    """Host memory. A burst to an address in bad_addrs answers SLVERR."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.bad_addrs: set[int] = set()
+        super().__init__(*args, **kwargs)
+
+    async def _write(self, address, data):
+        if address in self.bad_addrs:
+            raise OSError("bad address")
+        await super()._write(address, data)
 
 
 def write_bus(dut, prefix: str) -> AxiWriteBus:
