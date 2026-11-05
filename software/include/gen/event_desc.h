@@ -21,6 +21,8 @@ enum class Kind : std::uint8_t {
   ITCH_RAW = 2,  // ADMIN, AUCTION, UNKNOWN and MALFORMED messages: raw bytes, 0 from len on
   GAP = 3,  // an accepted packet started after the expected sequence number; after its messages
   EOS = 4,  // end of session; after the packet's GAP entry, if any
+  ORDER_SENT = 5,  // an order left on the TX port: written when its first beat is sent
+  RISK_REJECT = 6,  // an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF)
 };
 
 // ORDER and TRADE messages: normalized fields, 0 where they do not apply
@@ -168,6 +170,114 @@ static_assert(offsetof(EosEntry, pad23) == 23);
 static_assert(offsetof(EosEntry, ctrl0) == 63);
 static_assert(offsetof(EosEntry, pad64) == 64);
 static_assert(offsetof(EosEntry, ctrl1) == 127);
+
+// an order left on the TX port: written when its first beat is sent
+struct alignas(128) OrderSentEntry {
+  std::uint64_t seq;  // ITCH, ITCH_RAW: message sequence number; GAP: first missing; EOS: the packet's
+  std::uint64_t sof_ts;  // start of frame timestamp of the packet
+  std::uint32_t ring_idx;  // low 32 bits of the producer index
+  std::uint8_t kind;  // entry kind
+  std::uint8_t flags;  // see flags
+  std::uint8_t cfg_epoch;  // FEED commit count (wraps) in force on the packet's first beat
+  std::uint8_t pad23[1];
+  std::uint32_t user_ref;  // OUCH UserRefNum
+  std::uint8_t source;  // 1 rule (hardware), 2 host (mailbox)
+  std::uint8_t rule;  // rule index 0..7; 0 for host orders
+  std::uint8_t side;  // ASCII: B S
+  std::uint8_t tif;  // ASCII OUCH time in force
+  std::uint16_t locate;  // stock locate checked by risk
+  std::uint8_t pad34[2];
+  std::uint32_t qty;  // shares
+  std::uint32_t price;  // Price(4)
+  std::uint8_t pad44[4];
+  char stock[8];  // OUCH Symbol
+  std::uint8_t pad56[7];
+  std::uint8_t ctrl0;
+  std::uint64_t tx_ts;  // timestamp of the first TX beat
+  char clordid[14];  // OUCH ClOrdID
+  std::uint8_t pad86[41];
+  std::uint8_t ctrl1;
+};
+static_assert(sizeof(OrderSentEntry) == kEntryBytes);
+static_assert(offsetof(OrderSentEntry, seq) == 0);
+static_assert(offsetof(OrderSentEntry, sof_ts) == 8);
+static_assert(offsetof(OrderSentEntry, ring_idx) == 16);
+static_assert(offsetof(OrderSentEntry, kind) == 20);
+static_assert(offsetof(OrderSentEntry, flags) == 21);
+static_assert(offsetof(OrderSentEntry, cfg_epoch) == 22);
+static_assert(offsetof(OrderSentEntry, pad23) == 23);
+static_assert(offsetof(OrderSentEntry, user_ref) == 24);
+static_assert(offsetof(OrderSentEntry, source) == 28);
+static_assert(offsetof(OrderSentEntry, rule) == 29);
+static_assert(offsetof(OrderSentEntry, side) == 30);
+static_assert(offsetof(OrderSentEntry, tif) == 31);
+static_assert(offsetof(OrderSentEntry, locate) == 32);
+static_assert(offsetof(OrderSentEntry, pad34) == 34);
+static_assert(offsetof(OrderSentEntry, qty) == 36);
+static_assert(offsetof(OrderSentEntry, price) == 40);
+static_assert(offsetof(OrderSentEntry, pad44) == 44);
+static_assert(offsetof(OrderSentEntry, stock) == 48);
+static_assert(offsetof(OrderSentEntry, pad56) == 56);
+static_assert(offsetof(OrderSentEntry, ctrl0) == 63);
+static_assert(offsetof(OrderSentEntry, tx_ts) == 64);
+static_assert(offsetof(OrderSentEntry, clordid) == 72);
+static_assert(offsetof(OrderSentEntry, pad86) == 86);
+static_assert(offsetof(OrderSentEntry, ctrl1) == 127);
+
+// an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF)
+struct alignas(128) RiskRejectEntry {
+  std::uint64_t seq;  // ITCH, ITCH_RAW: message sequence number; GAP: first missing; EOS: the packet's
+  std::uint64_t sof_ts;  // start of frame timestamp of the packet
+  std::uint32_t ring_idx;  // low 32 bits of the producer index
+  std::uint8_t kind;  // entry kind
+  std::uint8_t flags;  // see flags
+  std::uint8_t cfg_epoch;  // FEED commit count (wraps) in force on the packet's first beat
+  std::uint8_t pad23[1];
+  std::uint8_t reason;  // risk_reason_e
+  std::uint8_t pad25[3];
+  std::uint8_t source;  // 1 rule (hardware), 2 host (mailbox)
+  std::uint8_t rule;  // rule index 0..7; 0 for host orders
+  std::uint8_t side;  // ASCII side as requested
+  std::uint8_t tif;  // ASCII time in force as requested
+  std::uint16_t locate;  // stock locate
+  std::uint8_t pad34[2];
+  std::uint32_t qty;  // shares
+  std::uint32_t price;  // Price(4); low 32 bits if threshold + offset overflowed
+  std::uint8_t pad44[4];
+  char stock[8];  // symbol
+  std::uint8_t pad56[7];
+  std::uint8_t ctrl0;
+  std::uint64_t reject_ts;  // timestamp of the decision or the cancel
+  char clordid[14];  // host orders: the host's; hardware orders: spaces
+  std::uint8_t pad86[41];
+  std::uint8_t ctrl1;
+};
+static_assert(sizeof(RiskRejectEntry) == kEntryBytes);
+static_assert(offsetof(RiskRejectEntry, seq) == 0);
+static_assert(offsetof(RiskRejectEntry, sof_ts) == 8);
+static_assert(offsetof(RiskRejectEntry, ring_idx) == 16);
+static_assert(offsetof(RiskRejectEntry, kind) == 20);
+static_assert(offsetof(RiskRejectEntry, flags) == 21);
+static_assert(offsetof(RiskRejectEntry, cfg_epoch) == 22);
+static_assert(offsetof(RiskRejectEntry, pad23) == 23);
+static_assert(offsetof(RiskRejectEntry, reason) == 24);
+static_assert(offsetof(RiskRejectEntry, pad25) == 25);
+static_assert(offsetof(RiskRejectEntry, source) == 28);
+static_assert(offsetof(RiskRejectEntry, rule) == 29);
+static_assert(offsetof(RiskRejectEntry, side) == 30);
+static_assert(offsetof(RiskRejectEntry, tif) == 31);
+static_assert(offsetof(RiskRejectEntry, locate) == 32);
+static_assert(offsetof(RiskRejectEntry, pad34) == 34);
+static_assert(offsetof(RiskRejectEntry, qty) == 36);
+static_assert(offsetof(RiskRejectEntry, price) == 40);
+static_assert(offsetof(RiskRejectEntry, pad44) == 44);
+static_assert(offsetof(RiskRejectEntry, stock) == 48);
+static_assert(offsetof(RiskRejectEntry, pad56) == 56);
+static_assert(offsetof(RiskRejectEntry, ctrl0) == 63);
+static_assert(offsetof(RiskRejectEntry, reject_ts) == 64);
+static_assert(offsetof(RiskRejectEntry, clordid) == 72);
+static_assert(offsetof(RiskRejectEntry, pad86) == 86);
+static_assert(offsetof(RiskRejectEntry, ctrl1) == 127);
 
 // A u48 field (little-endian, no native type).
 inline std::uint64_t load_u48(const std::uint8_t (&b)[6]) {

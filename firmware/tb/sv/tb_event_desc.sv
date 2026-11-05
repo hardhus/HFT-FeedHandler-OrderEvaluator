@@ -128,6 +128,64 @@ module tb_event_desc;
     e = desc_pack_eos(.seq(SEQ), .sof_ts(SOF_TS), .flags(8'h01), .cfg_epoch(8'hFF));
     check("EOS", desc_stamp(e, RING_IDX, 1'b1), hex);
 
+    hex = {
+      HEAD,
+      "2423222105003C003433323101074245",  // ring_idx, kind, flags, epoch, pad, user_ref, source .. tif
+      "42410000545352516463626100000000",  // locate, pad, qty, price, pad
+      "4D534654202020200000000000000081",  // stock "MSFT    ", pad, ctrl
+      "78777675747372714857373331333233",  // tx_ts, clordid "HW731323"
+      "33333420202000000000000000000000",  // clordid "334   ", pad
+      ZEROS16,
+      "00000000000000000000000000000081"
+    };
+    e = desc_pack_order_sent(
+        .seq(SEQ),
+        .sof_ts(SOF_TS),
+        .flags(8'h00),
+        .cfg_epoch(8'h3C),
+        .user_ref(32'h3132_3334),
+        .source(8'd1),
+        .rule(8'd7),
+        .side(8'h42),
+        .tif(8'h45),
+        .locate(16'h4142),
+        .qty(32'h5152_5354),
+        .price(32'h6162_6364),
+        .stock(64'h2020_2020_5446_534D),
+        .tx_ts(64'h7172_7374_7576_7778),
+        .clordid(112'h2020_2034_3333_3332_3331_3337_5748)
+    );
+    check("ORDER_SENT", desc_stamp(e, RING_IDX, 1'b1), hex);
+
+    hex = {
+      HEAD,
+      "242322210601C3000900000002005333",  // ring_idx, kind, flags, epoch, pad, reason, pad, source .. tif
+      "FEFF00003F420F009C93357700000000",  // locate, pad, qty, price, pad
+      "41422020202020200000000000000001",  // stock "AB      ", pad, ctrl with phase 0
+      "888786858483828141424378797A2030",  // reject_ts, clordid "ABCxyz 0"
+      "31323320202000000000000000000000",  // clordid "123   ", pad
+      ZEROS16,
+      "00000000000000000000000000000001"
+    };
+    e = desc_pack_risk_reject(
+        .seq(SEQ),
+        .sof_ts(SOF_TS),
+        .flags(8'h01),
+        .cfg_epoch(8'hC3),
+        .reason(8'd9),
+        .source(8'd2),
+        .rule(8'd0),
+        .side(8'h53),
+        .tif(8'h33),
+        .locate(16'hFFFE),
+        .qty(32'd999_999),
+        .price(32'h7735_939C),
+        .stock(64'h2020_2020_2020_4241),
+        .reject_ts(64'h8182_8384_8586_8788),
+        .clordid(112'h2020_2033_3231_3020_7A79_7843_4241)
+    );
+    check("RISK_REJECT", desc_stamp(e, RING_IDX, 1'b0), hex);
+
     if (errors == 0) begin
       $display("HFT_TB_RESULT: PASS");
     end else begin

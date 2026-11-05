@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from desc_hand import HAND_EOS, HAND_GAP, HAND_ITCH, HAND_RAW
+from desc_hand import HAND_EOS, HAND_GAP, HAND_ITCH, HAND_ORDER_SENT, HAND_RAW, HAND_RISK_REJECT
 
 from model import desc_gen
 from model.desc_gen import Kind
@@ -37,8 +37,20 @@ LAYOUT = {
     "ITCH_RAW": {**COMMON, **CTRL, "itch_class": (23, 1), "len": (24, 1), "raw_lo": (25, 38), "raw_hi": (64, 26)},
     "GAP": {**COMMON, **CTRL, "first_seq": (24, 8), "gap": (32, 8)},
     "EOS": {**COMMON, **CTRL},
+    "ORDER_SENT": {
+        **COMMON, **CTRL, "user_ref": (24, 4), "source": (28, 1), "rule": (29, 1), "side": (30, 1), "tif": (31, 1),
+        "locate": (32, 2), "qty": (36, 4), "price": (40, 4), "stock": (48, 8), "tx_ts": (64, 8), "clordid": (72, 14),
+    },
+    "RISK_REJECT": {
+        **COMMON, **CTRL, "reason": (24, 1), "source": (28, 1), "rule": (29, 1), "side": (30, 1), "tif": (31, 1),
+        "locate": (32, 2), "qty": (36, 4), "price": (40, 4), "stock": (48, 8), "reject_ts": (64, 8),
+        "clordid": (72, 14),
+    },
 }  # fmt: skip
-CPP_STRUCT = {"ITCH": "ItchEntry", "ITCH_RAW": "ItchRawEntry", "GAP": "GapEntry", "EOS": "EosEntry"}
+CPP_STRUCT = {
+    "ITCH": "ItchEntry", "ITCH_RAW": "ItchRawEntry", "GAP": "GapEntry", "EOS": "EosEntry",
+    "ORDER_SENT": "OrderSentEntry", "RISK_REJECT": "RiskRejectEntry",
+}  # fmt: skip
 
 HEAD_VALUES = {"seq": 0x0102030405060708, "sof_ts": 0x1112131415161718, "ring_idx": 0x21222324}
 ITCH_VALUES = {
@@ -55,11 +67,23 @@ GAP_VALUES = {
     **HEAD_VALUES, "cfg_epoch": 7, "first_seq": 0xA1A2A3A4A5A6A7A8, "gap": 0xB1B2B3B4B5B6B7B8, "ctrl0": 1, "ctrl1": 1,
 }  # fmt: skip
 EOS_VALUES = {**HEAD_VALUES, "flags": 1, "cfg_epoch": 0xFF, "ctrl0": 0x81, "ctrl1": 0x81}
+ORDER_SENT_VALUES = {
+    **HEAD_VALUES, "cfg_epoch": 0x3C, "user_ref": 0x31323334, "source": 1, "rule": 7, "side": 0x42, "tif": 0x45,
+    "locate": 0x4142, "qty": 0x51525354, "price": 0x61626364, "stock": b"MSFT    ", "tx_ts": 0x7172737475767778,
+    "clordid": b"HW731323334   ", "ctrl0": 0x81, "ctrl1": 0x81,
+}  # fmt: skip
+RISK_REJECT_VALUES = {
+    **HEAD_VALUES, "flags": 1, "cfg_epoch": 0xC3, "reason": 9, "source": 2, "side": 0x53, "tif": 0x33,
+    "locate": 0xFFFE, "qty": 999_999, "price": 0x7735939C, "stock": b"AB      ", "reject_ts": 0x8182838485868788,
+    "clordid": b"ABCxyz 0123   ", "ctrl0": 1, "ctrl1": 1,
+}  # fmt: skip
 HAND = [
     (Kind.ITCH, ITCH_VALUES, HAND_ITCH),
     (Kind.ITCH_RAW, RAW_VALUES, HAND_RAW),
     (Kind.GAP, GAP_VALUES, HAND_GAP),
     (Kind.EOS, EOS_VALUES, HAND_EOS),
+    (Kind.ORDER_SENT, ORDER_SENT_VALUES, HAND_ORDER_SENT),
+    (Kind.RISK_REJECT, RISK_REJECT_VALUES, HAND_RISK_REJECT),
 ]
 
 
@@ -86,7 +110,9 @@ def test_constants_are_the_hand_written_ones():
     assert (desc_gen.VERSION, desc_gen.ENTRY_BYTES, desc_gen.LINE_BYTES) == (1, 128, 64)
     assert desc_gen.CTRL_BYTES == (63, 127)
     assert (desc_gen.CTRL_PHASE, desc_gen.CTRL_VERSION_MASK, desc_gen.FLAG_OVERFLOW_BEFORE) == (0x80, 0x0F, 0x01)
-    assert {k.name: int(k) for k in Kind} == {"ITCH": 1, "ITCH_RAW": 2, "GAP": 3, "EOS": 4}
+    assert {k.name: int(k) for k in Kind} == {
+        "ITCH": 1, "ITCH_RAW": 2, "GAP": 3, "EOS": 4, "ORDER_SENT": 5, "RISK_REJECT": 6,
+    }  # fmt: skip
 
 
 def test_encode_refuses_what_does_not_fit():

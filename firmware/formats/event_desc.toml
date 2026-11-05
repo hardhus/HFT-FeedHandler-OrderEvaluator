@@ -116,3 +116,42 @@ name = "EOS"
 code = 4
 desc = "end of session; after the packet's GAP entry, if any"
 fields = []
+
+# Order entries (F7) are written between packets, each committed on its own. Hardware orders carry
+# the triggering message's seq and its packet's sof_ts and cfg_epoch; host orders carry 0, 0 and the
+# cfg_epoch in force at the risk decision.
+[[kind]]
+name = "ORDER_SENT"
+code = 5
+desc = "an order left on the TX port: written when its first beat is sent"
+fields = [
+  { name = "user_ref", byte = 24, size = 4, type = "u32", desc = "OUCH UserRefNum" },
+  { name = "source", byte = 28, size = 1, type = "u8", desc = "1 rule (hardware), 2 host (mailbox)" },
+  { name = "rule", byte = 29, size = 1, type = "u8", desc = "rule index 0..7; 0 for host orders" },
+  { name = "side", byte = 30, size = 1, type = "u8", desc = "ASCII: B S" },
+  { name = "tif", byte = 31, size = 1, type = "u8", desc = "ASCII OUCH time in force" },
+  { name = "locate", byte = 32, size = 2, type = "u16", desc = "stock locate checked by risk" },
+  { name = "qty", byte = 36, size = 4, type = "u32", desc = "shares" },
+  { name = "price", byte = 40, size = 4, type = "u32", desc = "Price(4)" },
+  { name = "stock", byte = 48, size = 8, type = "alpha", desc = "OUCH Symbol" },
+  { name = "tx_ts", byte = 64, size = 8, type = "u64", desc = "timestamp of the first TX beat" },
+  { name = "clordid", byte = 72, size = 14, type = "alpha", desc = "OUCH ClOrdID" },
+]
+
+[[kind]]
+name = "RISK_REJECT"
+code = 6
+desc = "an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF)"
+fields = [
+  { name = "reason", byte = 24, size = 1, type = "u8", desc = "risk_reason_e" },
+  { name = "source", byte = 28, size = 1, type = "u8", desc = "1 rule (hardware), 2 host (mailbox)" },
+  { name = "rule", byte = 29, size = 1, type = "u8", desc = "rule index 0..7; 0 for host orders" },
+  { name = "side", byte = 30, size = 1, type = "u8", desc = "ASCII side as requested" },
+  { name = "tif", byte = 31, size = 1, type = "u8", desc = "ASCII time in force as requested" },
+  { name = "locate", byte = 32, size = 2, type = "u16", desc = "stock locate" },
+  { name = "qty", byte = 36, size = 4, type = "u32", desc = "shares" },
+  { name = "price", byte = 40, size = 4, type = "u32", desc = "Price(4); low 32 bits if threshold + offset overflowed" },
+  { name = "stock", byte = 48, size = 8, type = "alpha", desc = "symbol" },
+  { name = "reject_ts", byte = 64, size = 8, type = "u64", desc = "timestamp of the decision or the cancel" },
+  { name = "clordid", byte = 72, size = 14, type = "alpha", desc = "host orders: the host's; hardware orders: spaces" },
+]

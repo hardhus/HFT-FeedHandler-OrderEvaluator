@@ -10,6 +10,9 @@ Rules, packet by packet:
 - dropped: an accepted packet that did not fit writes nothing, is counted whole, and the next
   entry that is committed carries overflow_before. A packet that would have been rolled back
   anyway is no loss: it is not counted and sets no flag, even if it did not fit.
+- order entries (ORDER_SENT, RISK_REJECT; audit/14 §2.7, P8): written between packets, each one its
+  own unit. One that did not fit is counted in drop_orders (RING_DROP_ORDERS) and sets
+  overflow_before on the next committed entry, like a dropped packet.
 
 Ring protocol: entry i goes to base + (i mod N) * 128 with phase ~bit(i, log2 N), so the first pass
 has phase 1 and memory that starts at 0 is not valid. Producer and consumer indexes wrap at 2**32
@@ -26,6 +29,8 @@ from model.itch import DECODED, Event
 from model.mold import ACCEPTED, SEQ_MOD, UDP_PAYLOAD_MAX, MoldStatus
 from model.mold import HDR_LEN as MOLD_HDR_LEN
 from model.mold import MIN_LEN as MOLD_MIN_LEN
+from model.order import OrderReq, Source, hw_clordid
+from model.risk import Reason
 
 IDX_MOD = 1 << 32
 RAW_LO = 38  # message bytes in ITCH_RAW line 0; the rest are in line 1
@@ -45,15 +50,28 @@ class RingPacket:
     dropped: bool = False  # did not fit in the commit FIFO (from the test's timeline)
 
 
+@dataclass(frozen=True)
+class RingOrder:
+    """An ORDER_SENT (reason NONE: user_ref and ts = tx_ts) or RISK_REJECT (ts = reject_ts) entry."""
+
+    req: OrderReq
+    reason: Reason = Reason.NONE
+    user_ref: int = 0
+    ts: int = 0
+    dropped: bool = False  # did not fit in the commit FIFO (from the test's timeline)
+
+
 @dataclass
 class RingExpect:
     """entries: what reaches the commit FIFO's reader, without ring_idx and ctrl (stamp() fills them).
-    drop_msgs: the message entries inside drop_entries, for the identity with ITCH_OUT."""
+    drop_msgs: the message entries inside drop_entries, for the identity with ITCH_OUT.
+    drop_orders: order entries that did not fit (RING_DROP_ORDERS)."""
 
     entries: list[bytes]
     drop_pkts: int = 0
     drop_entries: int = 0
     drop_msgs: int = 0
+    drop_orders: int = 0
     overflow_pending: bool = False
 
 
@@ -91,11 +109,34 @@ def packet_entries(pkt: RingPacket, flags: int) -> list[bytes]:
     return out
 
 
-def expect_entries(packets: list[RingPacket], overflow_pending: bool = False) -> RingExpect:
-    """Reference output of event_packer for a run of packets. overflow_pending: a drop before this
-    run whose flag has not gone out yet; the result holds the value for the next run."""
+def order_entry(o: RingOrder, flags: int) -> bytes:
+    req = o.req
+    common = {
+        "seq": req.seq, "sof_ts": req.sof_ts, "flags": flags, "cfg_epoch": req.epoch, "source": int(req.source),
+        "rule": req.rule, "side": req.side, "tif": req.tif, "locate": req.locate, "qty": req.qty,
+        "price": req.price % (1 << 32), "stock": req.stock,
+    }  # fmt: skip
+    if o.reason == Reason.NONE:
+        clordid = req.clordid if req.source == Source.HOST else hw_clordid(req.rule, o.user_ref)
+        return desc_gen.encode(Kind.ORDER_SENT, **common, user_ref=o.user_ref, tx_ts=o.ts, clordid=clordid)
+    clordid = req.clordid if req.source == Source.HOST else b" " * 14
+    return desc_gen.encode(Kind.RISK_REJECT, **common, reason=int(o.reason), reject_ts=o.ts, clordid=clordid)
+
+
+def expect_entries(items: list[RingPacket | RingOrder], overflow_pending: bool = False) -> RingExpect:
+    """Reference output of event_packer for a run of packets and order entries, in the order the
+    packer takes them. overflow_pending: a drop before this run whose flag has not gone out yet;
+    the result holds the value for the next run."""
     result = RingExpect([], overflow_pending=overflow_pending)
-    for pkt in packets:
+    for pkt in items:
+        if isinstance(pkt, RingOrder):
+            if pkt.dropped:
+                result.drop_orders += 1
+                result.overflow_pending = True
+            else:
+                result.entries.append(order_entry(pkt, FLAG_OVERFLOW_BEFORE if result.overflow_pending else 0))
+                result.overflow_pending = False
+            continue
         if pkt.status not in ACCEPTED:
             continue
         flags = FLAG_OVERFLOW_BEFORE if result.overflow_pending else 0

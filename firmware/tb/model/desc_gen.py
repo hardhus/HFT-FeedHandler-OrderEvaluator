@@ -20,6 +20,8 @@ class Kind(IntEnum):
     ITCH_RAW = 2  # ADMIN, AUCTION, UNKNOWN and MALFORMED messages: raw bytes, 0 from len on
     GAP = 3  # an accepted packet started after the expected sequence number; after its messages
     EOS = 4  # end of session; after the packet's GAP entry, if any
+    ORDER_SENT = 5  # an order left on the TX port: written when its first beat is sent
+    RISK_REJECT = 6  # an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF)
 
 
 # Kind -> field name -> (byte, size, type). Ctrl bytes included, padding not.
@@ -86,12 +88,56 @@ FIELDS: dict[Kind, dict[str, tuple[int, int, str]]] = {
         "ctrl0": (63, 1, "u8"),
         "ctrl1": (127, 1, "u8"),
     },
+    Kind.ORDER_SENT: {
+        "seq": (0, 8, "u64"),
+        "sof_ts": (8, 8, "u64"),
+        "ring_idx": (16, 4, "u32"),
+        "kind": (20, 1, "u8"),
+        "flags": (21, 1, "u8"),
+        "cfg_epoch": (22, 1, "u8"),
+        "user_ref": (24, 4, "u32"),
+        "source": (28, 1, "u8"),
+        "rule": (29, 1, "u8"),
+        "side": (30, 1, "u8"),
+        "tif": (31, 1, "u8"),
+        "locate": (32, 2, "u16"),
+        "qty": (36, 4, "u32"),
+        "price": (40, 4, "u32"),
+        "stock": (48, 8, "alpha"),
+        "ctrl0": (63, 1, "u8"),
+        "tx_ts": (64, 8, "u64"),
+        "clordid": (72, 14, "alpha"),
+        "ctrl1": (127, 1, "u8"),
+    },
+    Kind.RISK_REJECT: {
+        "seq": (0, 8, "u64"),
+        "sof_ts": (8, 8, "u64"),
+        "ring_idx": (16, 4, "u32"),
+        "kind": (20, 1, "u8"),
+        "flags": (21, 1, "u8"),
+        "cfg_epoch": (22, 1, "u8"),
+        "reason": (24, 1, "u8"),
+        "source": (28, 1, "u8"),
+        "rule": (29, 1, "u8"),
+        "side": (30, 1, "u8"),
+        "tif": (31, 1, "u8"),
+        "locate": (32, 2, "u16"),
+        "qty": (36, 4, "u32"),
+        "price": (40, 4, "u32"),
+        "stock": (48, 8, "alpha"),
+        "ctrl0": (63, 1, "u8"),
+        "reject_ts": (64, 8, "u64"),
+        "clordid": (72, 14, "alpha"),
+        "ctrl1": (127, 1, "u8"),
+    },
 }
 _FORMAT = {
     Kind.ITCH: struct.Struct("<QQIBBBBBBHH6sBBB1xI4sQ7xBQQQ8s31xB"),
     Kind.ITCH_RAW: struct.Struct("<QQIBBBBB38sB26s37xB"),
     Kind.GAP: struct.Struct("<QQIBBB1xQQ23xB63xB"),
     Kind.EOS: struct.Struct("<QQIBBB40xB63xB"),
+    Kind.ORDER_SENT: struct.Struct("<QQIBBB1xIBBBBH2xII4x8s7xBQ14s41xB"),
+    Kind.RISK_REJECT: struct.Struct("<QQIBBB1xB3xBBBBH2xII4x8s7xBQ14s41xB"),
 }
 
 

@@ -8,12 +8,14 @@ import random
 from pathlib import Path
 
 import pytest
-from desc_hand import HAND_ITCH, HAND_RAW
+from desc_hand import HAND_ITCH, HAND_ORDER_SENT, HAND_RAW, HAND_RISK_REJECT
 
 from model import desc_gen
 from model.desc_gen import FLAG_OVERFLOW_BEFORE, Kind
 from model.itch import Bitmap, Event, ItchClass, ItchConfig, Outcome, encode, expect, random_itch, wire
 from model.mold import ACCEPTED, MoldStatus
+from model.order import OrderReq, Source
+from model.risk import Reason
 from model.ring import (
     MAX_PKT_ENTRIES,
     PACINGS,
@@ -21,6 +23,7 @@ from model.ring import (
     RingConsumer,
     RingError,
     RingMemory,
+    RingOrder,
     RingPacket,
     expect_entries,
     phase_of,
@@ -253,6 +256,73 @@ def test_random_run_keeps_the_identities():
         pending = pending and n == 0
     assert flags(r) == expected_flags
     assert pending == r.overflow_pending
+
+
+# ---- Order entries (audit/14 §2.7, P8)
+
+HW_ORDER = OrderReq(
+    Source.RULE, ord("B"), 0x51525354, 0x61626364, 0x4142, b"MSFT    ", ord("E"), rule=7, seq=0x0102030405060708,
+    sof_ts=0x1112131415161718, epoch=0x3C,
+)  # fmt: skip
+HOST_ORDER = OrderReq(
+    Source.HOST, ord("S"), 999_999, 0x7735939C, 0xFFFE, b"AB      ", ord("3"), clordid=b"ABCxyz 0123   ",
+    seq=0x0102030405060708, sof_ts=0x1112131415161718, epoch=0xC3,
+)  # fmt: skip
+
+
+def test_a_sent_hardware_order_gives_the_hand_written_entry():
+    o = RingOrder(HW_ORDER, user_ref=0x31323334, ts=0x7172737475767778)
+    assert stamp(expect_entries([o]).entries[0], 0x21222324, 30) == HAND_ORDER_SENT
+
+
+def test_a_rejected_host_order_gives_the_hand_written_entry():
+    o = RingOrder(HOST_ORDER, Reason.TX_BUSY, ts=0x8182838485868788)
+    entry = expect_entries([o], overflow_pending=True).entries[0]
+    assert stamp(entry, 0x21222324, 2) == HAND_RISK_REJECT
+
+
+def test_a_sent_host_order_carries_the_host_clordid():
+    d = decoded(expect_entries([RingOrder(HOST_ORDER, user_ref=5)]))[0]
+    assert (d["kind"], d["source"], d["rule"], d["user_ref"], d["clordid"]) == (
+        Kind.ORDER_SENT, 2, 0, 5, b"ABCxyz 0123   ",
+    )  # fmt: skip
+
+
+def test_a_rejected_hardware_order_has_a_blank_clordid():
+    d = decoded(expect_entries([RingOrder(HW_ORDER, Reason.KILL, ts=3)]))[0]
+    assert (d["kind"], d["reason"], d["rule"], d["clordid"], d["reject_ts"]) == (
+        Kind.RISK_REJECT, int(Reason.KILL), 7, b" " * 14, 3,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(("price", "want"), [((1 << 32) + 5, 5), (-1, 0xFFFFFFFF), (0, 0)])
+def test_a_rejected_price_keeps_its_low_32_bits(price, want):
+    o = RingOrder(OrderReq(**{**HW_ORDER.__dict__, "price": price}), Reason.INVALID)
+    assert decoded(expect_entries([o]))[0]["price"] == want
+
+
+def test_order_entries_stay_between_packets_in_order():
+    r = expect_entries([pkt(seq=100, n=2), RingOrder(HW_ORDER, user_ref=1), pkt(seq=102, n=1),
+                        RingOrder(HOST_ORDER, Reason.RATE)])  # fmt: skip
+    assert kinds(r) == [Kind.ITCH, Kind.ITCH, Kind.ORDER_SENT, Kind.ITCH, Kind.RISK_REJECT]
+
+
+def test_a_dropped_order_entry_is_counted_and_flags_the_next_entry():
+    r = expect_entries([RingOrder(HW_ORDER, user_ref=1, dropped=True), pkt(n=2), RingOrder(HOST_ORDER, Reason.RATE)])
+    assert (r.drop_orders, r.drop_pkts, r.drop_entries, r.drop_msgs) == (1, 0, 0, 0)
+    assert flags(r) == [FLAG_OVERFLOW_BEFORE, 0, 0]
+
+
+def test_an_order_entry_takes_the_flag_of_a_dropped_packet():
+    r = expect_entries([pkt(n=2, dropped=True), RingOrder(HOST_ORDER, Reason.RATE), pkt(n=1)])
+    assert (r.drop_pkts, r.drop_entries, r.drop_orders) == (1, 2, 0)
+    assert kinds(r) == [Kind.RISK_REJECT, Kind.ITCH] and flags(r) == [FLAG_OVERFLOW_BEFORE, 0]
+    assert not r.overflow_pending
+
+
+def test_a_dropped_order_at_the_end_leaves_the_flag_pending():
+    r = expect_entries([pkt(n=1), RingOrder(HW_ORDER, Reason.KILL, dropped=True)])
+    assert r.overflow_pending and r.drop_orders == 1
 
 
 # ---- Ring protocol

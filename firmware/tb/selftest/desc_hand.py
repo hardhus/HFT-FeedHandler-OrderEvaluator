@@ -32,3 +32,19 @@ HAND_GAP = bytes.fromhex(
     + _zeros(63) + "01"
 )  # fmt: skip
 HAND_EOS = bytes.fromhex(HEAD + "04 01 FF 00" + _zeros(39) + "81" + _zeros(63) + "81")
+HAND_ORDER_SENT = bytes.fromhex(
+    HEAD + "05 00 3C 00"  # kind, flags, cfg_epoch, pad
+    "34 33 32 31  01 07 42 45  42 41 00 00"  # user_ref, source rule, rule 7, side B, tif E, locate, pad
+    "54 53 52 51  64 63 62 61  00 00 00 00"  # qty, price, pad
+    "4D 53 46 54 20 20 20 20" + _zeros(7) + "81"  # stock "MSFT    ", pad, ctrl
+    "78 77 76 75 74 73 72 71"  # tx_ts
+    "48 57 37 33 31 33 32 33 33 33 34 20 20 20" + _zeros(41) + "81"  # clordid "HW731323334   ", pad, ctrl
+)  # fmt: skip
+HAND_RISK_REJECT = bytes.fromhex(
+    HEAD + "06 01 C3 00"  # kind, flags, cfg_epoch, pad
+    "09 00 00 00  02 00 53 33  FE FF 00 00"  # reason, pad, source host, rule 0, side S, tif 3, locate, pad
+    "3F 42 0F 00  9C 93 35 77  00 00 00 00"  # qty 999999, price 199999.9900, pad
+    "41 42 20 20 20 20 20 20" + _zeros(7) + "01"  # stock "AB      ", pad, ctrl phase 0
+    "88 87 86 85 84 83 82 81"  # reject_ts
+    "41 42 43 78 79 7A 20 30 31 32 33 20 20 20" + _zeros(41) + "01"  # clordid "ABCxyz 0123   ", pad, ctrl
+)  # fmt: skip

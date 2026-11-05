@@ -13,7 +13,9 @@ package event_desc_pkg;
     DESC_KIND_ITCH = 8'd1,  // ORDER and TRADE messages: normalized fields, 0 where they do not apply
     DESC_KIND_ITCH_RAW = 8'd2,  // ADMIN, AUCTION, UNKNOWN and MALFORMED messages: raw bytes, 0 from len on
     DESC_KIND_GAP = 8'd3,  // an accepted packet started after the expected sequence number; after its messages
-    DESC_KIND_EOS = 8'd4  // end of session; after the packet's GAP entry, if any
+    DESC_KIND_EOS = 8'd4,  // end of session; after the packet's GAP entry, if any
+    DESC_KIND_ORDER_SENT = 8'd5,  // an order left on the TX port: written when its first beat is sent
+    DESC_KIND_RISK_REJECT = 8'd6  // an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF)
   } desc_kind_e;
 
   // ITCH, ITCH_RAW: message sequence number; GAP: first missing; EOS: the packet's
@@ -97,6 +99,72 @@ package event_desc_pkg;
   // GAP: messages skipped
   localparam int unsigned DESC_GAP_GAP_OFS = 32;
   localparam int unsigned DESC_GAP_GAP_SIZE = 8;
+  // ORDER_SENT: OUCH UserRefNum
+  localparam int unsigned DESC_ORDER_SENT_USER_REF_OFS = 24;
+  localparam int unsigned DESC_ORDER_SENT_USER_REF_SIZE = 4;
+  // ORDER_SENT: 1 rule (hardware), 2 host (mailbox)
+  localparam int unsigned DESC_ORDER_SENT_SOURCE_OFS = 28;
+  localparam int unsigned DESC_ORDER_SENT_SOURCE_SIZE = 1;
+  // ORDER_SENT: rule index 0..7; 0 for host orders
+  localparam int unsigned DESC_ORDER_SENT_RULE_OFS = 29;
+  localparam int unsigned DESC_ORDER_SENT_RULE_SIZE = 1;
+  // ORDER_SENT: ASCII: B S
+  localparam int unsigned DESC_ORDER_SENT_SIDE_OFS = 30;
+  localparam int unsigned DESC_ORDER_SENT_SIDE_SIZE = 1;
+  // ORDER_SENT: ASCII OUCH time in force
+  localparam int unsigned DESC_ORDER_SENT_TIF_OFS = 31;
+  localparam int unsigned DESC_ORDER_SENT_TIF_SIZE = 1;
+  // ORDER_SENT: stock locate checked by risk
+  localparam int unsigned DESC_ORDER_SENT_LOCATE_OFS = 32;
+  localparam int unsigned DESC_ORDER_SENT_LOCATE_SIZE = 2;
+  // ORDER_SENT: shares
+  localparam int unsigned DESC_ORDER_SENT_QTY_OFS = 36;
+  localparam int unsigned DESC_ORDER_SENT_QTY_SIZE = 4;
+  // ORDER_SENT: Price(4)
+  localparam int unsigned DESC_ORDER_SENT_PRICE_OFS = 40;
+  localparam int unsigned DESC_ORDER_SENT_PRICE_SIZE = 4;
+  // ORDER_SENT: OUCH Symbol
+  localparam int unsigned DESC_ORDER_SENT_STOCK_OFS = 48;
+  localparam int unsigned DESC_ORDER_SENT_STOCK_SIZE = 8;
+  // ORDER_SENT: timestamp of the first TX beat
+  localparam int unsigned DESC_ORDER_SENT_TX_TS_OFS = 64;
+  localparam int unsigned DESC_ORDER_SENT_TX_TS_SIZE = 8;
+  // ORDER_SENT: OUCH ClOrdID
+  localparam int unsigned DESC_ORDER_SENT_CLORDID_OFS = 72;
+  localparam int unsigned DESC_ORDER_SENT_CLORDID_SIZE = 14;
+  // RISK_REJECT: risk_reason_e
+  localparam int unsigned DESC_RISK_REJECT_REASON_OFS = 24;
+  localparam int unsigned DESC_RISK_REJECT_REASON_SIZE = 1;
+  // RISK_REJECT: 1 rule (hardware), 2 host (mailbox)
+  localparam int unsigned DESC_RISK_REJECT_SOURCE_OFS = 28;
+  localparam int unsigned DESC_RISK_REJECT_SOURCE_SIZE = 1;
+  // RISK_REJECT: rule index 0..7; 0 for host orders
+  localparam int unsigned DESC_RISK_REJECT_RULE_OFS = 29;
+  localparam int unsigned DESC_RISK_REJECT_RULE_SIZE = 1;
+  // RISK_REJECT: ASCII side as requested
+  localparam int unsigned DESC_RISK_REJECT_SIDE_OFS = 30;
+  localparam int unsigned DESC_RISK_REJECT_SIDE_SIZE = 1;
+  // RISK_REJECT: ASCII time in force as requested
+  localparam int unsigned DESC_RISK_REJECT_TIF_OFS = 31;
+  localparam int unsigned DESC_RISK_REJECT_TIF_SIZE = 1;
+  // RISK_REJECT: stock locate
+  localparam int unsigned DESC_RISK_REJECT_LOCATE_OFS = 32;
+  localparam int unsigned DESC_RISK_REJECT_LOCATE_SIZE = 2;
+  // RISK_REJECT: shares
+  localparam int unsigned DESC_RISK_REJECT_QTY_OFS = 36;
+  localparam int unsigned DESC_RISK_REJECT_QTY_SIZE = 4;
+  // RISK_REJECT: Price(4); low 32 bits if threshold + offset overflowed
+  localparam int unsigned DESC_RISK_REJECT_PRICE_OFS = 40;
+  localparam int unsigned DESC_RISK_REJECT_PRICE_SIZE = 4;
+  // RISK_REJECT: symbol
+  localparam int unsigned DESC_RISK_REJECT_STOCK_OFS = 48;
+  localparam int unsigned DESC_RISK_REJECT_STOCK_SIZE = 8;
+  // RISK_REJECT: timestamp of the decision or the cancel
+  localparam int unsigned DESC_RISK_REJECT_REJECT_TS_OFS = 64;
+  localparam int unsigned DESC_RISK_REJECT_REJECT_TS_SIZE = 8;
+  // RISK_REJECT: host orders: the host's; hardware orders: spaces
+  localparam int unsigned DESC_RISK_REJECT_CLORDID_OFS = 72;
+  localparam int unsigned DESC_RISK_REJECT_CLORDID_SIZE = 14;
 
   // ORDER and TRADE messages: normalized fields, 0 where they do not apply. ring_idx and the ctrl bytes are 0: see desc_stamp.
   function automatic logic [DESC_W-1:0] desc_pack_itch(
@@ -207,6 +275,84 @@ package event_desc_pkg;
     e[8*DESC_KIND_OFS+:8*DESC_KIND_SIZE] = DESC_KIND_EOS;
     e[8*DESC_FLAGS_OFS+:8*DESC_FLAGS_SIZE] = flags;
     e[8*DESC_CFG_EPOCH_OFS+:8*DESC_CFG_EPOCH_SIZE] = cfg_epoch;
+    return e;
+  endfunction
+
+  // an order left on the TX port: written when its first beat is sent. ring_idx and the ctrl bytes are 0: see desc_stamp.
+  function automatic logic [DESC_W-1:0] desc_pack_order_sent(
+    input logic [63:0] seq,
+    input logic [63:0] sof_ts,
+    input logic [7:0] flags,
+    input logic [7:0] cfg_epoch,
+    input logic [31:0] user_ref,
+    input logic [7:0] source,
+    input logic [7:0] rule,
+    input logic [7:0] side,
+    input logic [7:0] tif,
+    input logic [15:0] locate,
+    input logic [31:0] qty,
+    input logic [31:0] price,
+    input logic [63:0] stock,
+    input logic [63:0] tx_ts,
+    input logic [111:0] clordid
+  );
+    logic [DESC_W-1:0] e;
+    e = '0;
+    e[8*DESC_SEQ_OFS+:8*DESC_SEQ_SIZE] = seq;
+    e[8*DESC_SOF_TS_OFS+:8*DESC_SOF_TS_SIZE] = sof_ts;
+    e[8*DESC_KIND_OFS+:8*DESC_KIND_SIZE] = DESC_KIND_ORDER_SENT;
+    e[8*DESC_FLAGS_OFS+:8*DESC_FLAGS_SIZE] = flags;
+    e[8*DESC_CFG_EPOCH_OFS+:8*DESC_CFG_EPOCH_SIZE] = cfg_epoch;
+    e[8*DESC_ORDER_SENT_USER_REF_OFS+:8*DESC_ORDER_SENT_USER_REF_SIZE] = user_ref;
+    e[8*DESC_ORDER_SENT_SOURCE_OFS+:8*DESC_ORDER_SENT_SOURCE_SIZE] = source;
+    e[8*DESC_ORDER_SENT_RULE_OFS+:8*DESC_ORDER_SENT_RULE_SIZE] = rule;
+    e[8*DESC_ORDER_SENT_SIDE_OFS+:8*DESC_ORDER_SENT_SIDE_SIZE] = side;
+    e[8*DESC_ORDER_SENT_TIF_OFS+:8*DESC_ORDER_SENT_TIF_SIZE] = tif;
+    e[8*DESC_ORDER_SENT_LOCATE_OFS+:8*DESC_ORDER_SENT_LOCATE_SIZE] = locate;
+    e[8*DESC_ORDER_SENT_QTY_OFS+:8*DESC_ORDER_SENT_QTY_SIZE] = qty;
+    e[8*DESC_ORDER_SENT_PRICE_OFS+:8*DESC_ORDER_SENT_PRICE_SIZE] = price;
+    e[8*DESC_ORDER_SENT_STOCK_OFS+:8*DESC_ORDER_SENT_STOCK_SIZE] = stock;
+    e[8*DESC_ORDER_SENT_TX_TS_OFS+:8*DESC_ORDER_SENT_TX_TS_SIZE] = tx_ts;
+    e[8*DESC_ORDER_SENT_CLORDID_OFS+:8*DESC_ORDER_SENT_CLORDID_SIZE] = clordid;
+    return e;
+  endfunction
+
+  // an order that did not leave: rejected by risk_check, or cancelled in the TX queue (TX_OFF). ring_idx and the ctrl bytes are 0: see desc_stamp.
+  function automatic logic [DESC_W-1:0] desc_pack_risk_reject(
+    input logic [63:0] seq,
+    input logic [63:0] sof_ts,
+    input logic [7:0] flags,
+    input logic [7:0] cfg_epoch,
+    input logic [7:0] reason,
+    input logic [7:0] source,
+    input logic [7:0] rule,
+    input logic [7:0] side,
+    input logic [7:0] tif,
+    input logic [15:0] locate,
+    input logic [31:0] qty,
+    input logic [31:0] price,
+    input logic [63:0] stock,
+    input logic [63:0] reject_ts,
+    input logic [111:0] clordid
+  );
+    logic [DESC_W-1:0] e;
+    e = '0;
+    e[8*DESC_SEQ_OFS+:8*DESC_SEQ_SIZE] = seq;
+    e[8*DESC_SOF_TS_OFS+:8*DESC_SOF_TS_SIZE] = sof_ts;
+    e[8*DESC_KIND_OFS+:8*DESC_KIND_SIZE] = DESC_KIND_RISK_REJECT;
+    e[8*DESC_FLAGS_OFS+:8*DESC_FLAGS_SIZE] = flags;
+    e[8*DESC_CFG_EPOCH_OFS+:8*DESC_CFG_EPOCH_SIZE] = cfg_epoch;
+    e[8*DESC_RISK_REJECT_REASON_OFS+:8*DESC_RISK_REJECT_REASON_SIZE] = reason;
+    e[8*DESC_RISK_REJECT_SOURCE_OFS+:8*DESC_RISK_REJECT_SOURCE_SIZE] = source;
+    e[8*DESC_RISK_REJECT_RULE_OFS+:8*DESC_RISK_REJECT_RULE_SIZE] = rule;
+    e[8*DESC_RISK_REJECT_SIDE_OFS+:8*DESC_RISK_REJECT_SIDE_SIZE] = side;
+    e[8*DESC_RISK_REJECT_TIF_OFS+:8*DESC_RISK_REJECT_TIF_SIZE] = tif;
+    e[8*DESC_RISK_REJECT_LOCATE_OFS+:8*DESC_RISK_REJECT_LOCATE_SIZE] = locate;
+    e[8*DESC_RISK_REJECT_QTY_OFS+:8*DESC_RISK_REJECT_QTY_SIZE] = qty;
+    e[8*DESC_RISK_REJECT_PRICE_OFS+:8*DESC_RISK_REJECT_PRICE_SIZE] = price;
+    e[8*DESC_RISK_REJECT_STOCK_OFS+:8*DESC_RISK_REJECT_STOCK_SIZE] = stock;
+    e[8*DESC_RISK_REJECT_REJECT_TS_OFS+:8*DESC_RISK_REJECT_REJECT_TS_SIZE] = reject_ts;
+    e[8*DESC_RISK_REJECT_CLORDID_OFS+:8*DESC_RISK_REJECT_CLORDID_SIZE] = clordid;
     return e;
   endfunction
 
