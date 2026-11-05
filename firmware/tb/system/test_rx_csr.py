@@ -1366,9 +1366,24 @@ async def tc_itch_random(dut):
     done["traffic"] = True
     await task
     pace.cancel()
+    await host.drain()
+
+    def recovered() -> bool:
+        return bool(sysm.ring_flags) and sysm.ring_flags[-1] < host.cons.idx - 1
+
+    # Top-up: when the last loss falls at the end of the run, no entry follows it (HFT_SEED=1887017098, jitter). Two
+    # packets with every class out, after a resync to the expected seq, while the consumer keeps up: the first carries
+    # the flag if it is still pending, the second comes after it. Each is checked like the rest.
+    if not recovered():
+        e = sysm.state.expected
+        await configure_feed(w, feed((0x3F, 0x00), resync_seq=e), resync=True)
+        for _ in range(2):
+            msgs = [next(stream).msg for _ in range(3)]
+            await sysm.send(feed_frame(mold.pack(SESSION, e, msgs), 0), gap=2)
+            e += len(msgs)
+        await host.drain()
     await w.feed.wait_idle()
     w.feed.check_done()
-    await host.drain()
     await snapshot()
     v = named(await w.snap.read_counters())
     await host.check_quiet(v)
