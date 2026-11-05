@@ -37,28 +37,38 @@ def test_reset_state_rejects_with_kill():
     assert r.decide(req(), 0, tx) == Reason.KILL
 
 
-# Each case breaks exactly one check of an otherwise open path.
+# Each case breaks exactly one check of an otherwise open path. The setups are looked up by name:
+# a function in the parameters would put its address in the test id, which differs between xdist
+# workers (the loadgroup id carries the parameters' repr).
+SETUPS = {
+    "kill": lambda r, tx: setattr(r, "kill", True),
+    "tx_off": lambda r, tx: setattr(r, "tx_en", False),
+    "refs_exhausted": lambda r, tx: tx.write_user_ref_next(USER_REF_MAX + 1),
+    "budget": lambda r, tx: setattr(r, "budget", 0),
+    "rate": lambda r, tx: setattr(r, "tokens", 0),
+    "tx_busy": lambda r, tx: [tx.accept(req()) for _ in range(8)],
+}
 SINGLE = [
-    ("kill", lambda r, tx: setattr(r, "kill", True), {}, Reason.KILL),
-    ("tx_off", lambda r, tx: setattr(r, "tx_en", False), {}, Reason.TX_OFF),
-    ("invalid_price", None, {"price": 0}, Reason.INVALID),
-    ("invalid_side", None, {"side": ord("T")}, Reason.INVALID),
-    ("invalid_clordid", None, {"clordid": b"C-1           "}, Reason.INVALID),
-    ("refs_exhausted", lambda r, tx: tx.write_user_ref_next(USER_REF_MAX + 1), {}, Reason.INVALID),
-    ("locate", None, {"locate": LOC + 1}, Reason.LOCATE),
-    ("qty", None, {"qty": 1001}, Reason.QTY),
-    ("notional", None, {"qty": 1000, "price": 2_000_001}, Reason.NOTIONAL),
-    ("budget", lambda r, tx: setattr(r, "budget", 0), {}, Reason.BUDGET),
-    ("rate", lambda r, tx: setattr(r, "tokens", 0), {}, Reason.RATE),
-    ("tx_busy", lambda r, tx: [tx.accept(req()) for _ in range(8)], {}, Reason.TX_BUSY),
+    ("kill", {}, Reason.KILL),
+    ("tx_off", {}, Reason.TX_OFF),
+    ("invalid_price", {"price": 0}, Reason.INVALID),
+    ("invalid_side", {"side": ord("T")}, Reason.INVALID),
+    ("invalid_clordid", {"clordid": b"C-1           "}, Reason.INVALID),
+    ("refs_exhausted", {}, Reason.INVALID),
+    ("locate", {"locate": LOC + 1}, Reason.LOCATE),
+    ("qty", {"qty": 1001}, Reason.QTY),
+    ("notional", {"qty": 1000, "price": 2_000_001}, Reason.NOTIONAL),
+    ("budget", {}, Reason.BUDGET),
+    ("rate", {}, Reason.RATE),
+    ("tx_busy", {}, Reason.TX_BUSY),
 ]
 
 
-@pytest.mark.parametrize(("name", "setup", "change", "want"), SINGLE, ids=[c[0] for c in SINGLE])
-def test_each_reason_alone(name, setup, change, want):
+@pytest.mark.parametrize(("name", "change", "want"), SINGLE, ids=[c[0] for c in SINGLE])
+def test_each_reason_alone(name, change, want):
     r, tx = open_risk(), TxPort(CFG)
-    if setup:
-        setup(r, tx)
+    if name in SETUPS:
+        SETUPS[name](r, tx)
     assert r.decide(req(**change), 0, tx) == want
     assert r.rejects[want] == 1 and r.accepted == 0
 
