@@ -18,9 +18,9 @@ Don't override. Generated from: hft_csr
 |0x0000|  GLOBAL  |     Global     |
 |0x0100|    NET   | Network receive|
 |0x0200|   FEED   | MoldUDP64 feed |
-|0x0300|   RING   | Host event ring|
 |0x0400|   STATS  |   Statistics   |
 |0x0600|   ITCH   |ITCH 5.0 decoder|
+|0x0800|   RING   | Host event ring|
 |0x8000|  SYMBOL  |  Symbol bitmap |
 
 ## GLOBAL register file
@@ -1421,327 +1421,6 @@ Don't override. Generated from: hft_csr
 
 <p>Counter bits [63:32] at the last snapshot.</p>
 
-## RING register file
-
-- Absolute Address: 0x300
-- Base Offset: 0x300
-- Size: 0x58
-
-<p>event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.</p>
-
-|Offset|     Identifier    |          Name         |
-|------|-------------------|-----------------------|
-| 0x00 |     RING_CTRL     |      Ring control     |
-| 0x04 |    RING_BASE_LO   | Ring base address, low|
-| 0x08 |    RING_BASE_HI   |Ring base address, high|
-| 0x0C |   RING_SIZE_LOG2  |       Ring size       |
-| 0x10 |      CONS_IDX     |     Consumer index    |
-| 0x14 |      PROD_IDX     |     Producer index    |
-| 0x18 |    RING_STATUS    |      Ring status      |
-| 0x20 |    RING_WRITTEN   |  64-bit live counter  |
-| 0x28 |   RING_BRESP_ERR  |  64-bit live counter  |
-| 0x40 |RING_COMMIT_ENTRIES|     64-bit counter    |
-| 0x48 |   RING_DROP_PKTS  |     64-bit counter    |
-| 0x50 | RING_DROP_ENTRIES |     64-bit counter    |
-
-### RING_CTRL register
-
-- Absolute Address: 0x300
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|  0 |  enable  |  rw  | 0x0 |  — |
-
-#### enable field
-
-<p>Writer enabled. A rising edge with CONS_IDX = 0 and RING_SIZE_LOG2 in 4..20 sets PROD_IDX to 0, takes RING_BASE_* and RING_SIZE_LOG2 (ignored until the next rising edge) and clears RING_STATUS; any other rising edge is refused. To retry after a refusal: write 0, then 1. Falling edge: bursts in flight finish, no new entry starts.</p>
-
-### RING_BASE_LO register
-
-- Absolute Address: 0x304
-- Base Offset: 0x4
-- Size: 0x4
-
-| Bits|Identifier|Access|Reset|Name|
-|-----|----------|------|-----|----|
-|31:12|   base   |  rw  | 0x0 |  — |
-
-#### base field
-
-<p>Base address bits [31:12]; the region is 4 KiB aligned and bits [11:0] read 0.</p>
-
-### RING_BASE_HI register
-
-- Absolute Address: 0x308
-- Base Offset: 0x8
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   base   |  rw  | 0x0 |  — |
-
-#### base field
-
-<p>Base address bits [63:32].</p>
-
-### RING_SIZE_LOG2 register
-
-- Absolute Address: 0x30C
-- Base Offset: 0xC
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-| 4:0| size_log2|  rw  | 0x0 |  — |
-
-#### size_log2 field
-
-<p>log2 of the number of entries, 4..20. Any other value makes the next enable refused.</p>
-
-### CONS_IDX register
-
-- Absolute Address: 0x310
-- Base Offset: 0x10
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   cons   |  rw  | 0x0 |  — |
-
-#### cons field
-
-<p>Entries the host has consumed: a wrapping 32-bit count, the same arithmetic as PROD_IDX. PROD_IDX - CONS_IDX = 2^RING_SIZE_LOG2 means full, and the writer waits. It must be 0 at each enable and must never pass PROD_IDX.</p>
-
-### PROD_IDX register
-
-- Absolute Address: 0x314
-- Base Offset: 0x14
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   prod   |   r  |  —  |  — |
-
-#### prod field
-
-<p>Bursts started since the last accepted enable, live, wrapping. An entry counted here may still be on its way: the phase bits tell which entries are in memory.</p>
-
-### RING_STATUS register
-
-- Absolute Address: 0x318
-- Base Offset: 0x18
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|  0 | bresp_err|   r  |  —  |  — |
-|  1 |enable_err|   r  |  —  |  — |
-
-#### bresp_err field
-
-<p>A write answered with a BRESP other than OKAY since the last accepted enable. The write is not retried; RING_BRESP_ERR counts them.</p>
-
-#### enable_err field
-
-<p>The last rising edge of RING_CTRL.enable was refused: CONS_IDX was not 0 or RING_SIZE_LOG2 was not in 4..20. Stays set until an accepted enable.</p>
-
-## RING_WRITTEN register file
-
-- Absolute Address: 0x320
-- Base Offset: 0x20
-- Size: 0x8
-
-|Offset|Identifier|   Name  |
-|------|----------|---------|
-|  0x0 |    LO    | Low word|
-|  0x4 |    HI    |High word|
-
-### LO register
-
-- Absolute Address: 0x320
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.</p>
-
-### HI register
-
-- Absolute Address: 0x324
-- Base Offset: 0x4
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [63:32], live.</p>
-
-## RING_BRESP_ERR register file
-
-- Absolute Address: 0x328
-- Base Offset: 0x28
-- Size: 0x8
-
-|Offset|Identifier|   Name  |
-|------|----------|---------|
-|  0x0 |    LO    | Low word|
-|  0x4 |    HI    |High word|
-
-### LO register
-
-- Absolute Address: 0x328
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.</p>
-
-### HI register
-
-- Absolute Address: 0x32C
-- Base Offset: 0x4
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [63:32], live.</p>
-
-## RING_COMMIT_ENTRIES register file
-
-- Absolute Address: 0x340
-- Base Offset: 0x40
-- Size: 0x8
-
-|Offset|Identifier|   Name  |
-|------|----------|---------|
-|  0x0 |    LO    | Low word|
-|  0x4 |    HI    |High word|
-
-### LO register
-
-- Absolute Address: 0x340
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [31:0] at the last snapshot.</p>
-
-### HI register
-
-- Absolute Address: 0x344
-- Base Offset: 0x4
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [63:32] at the last snapshot.</p>
-
-## RING_DROP_PKTS register file
-
-- Absolute Address: 0x348
-- Base Offset: 0x48
-- Size: 0x8
-
-|Offset|Identifier|   Name  |
-|------|----------|---------|
-|  0x0 |    LO    | Low word|
-|  0x4 |    HI    |High word|
-
-### LO register
-
-- Absolute Address: 0x348
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [31:0] at the last snapshot.</p>
-
-### HI register
-
-- Absolute Address: 0x34C
-- Base Offset: 0x4
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [63:32] at the last snapshot.</p>
-
-## RING_DROP_ENTRIES register file
-
-- Absolute Address: 0x350
-- Base Offset: 0x50
-- Size: 0x8
-
-|Offset|Identifier|   Name  |
-|------|----------|---------|
-|  0x0 |    LO    | Low word|
-|  0x4 |    HI    |High word|
-
-### LO register
-
-- Absolute Address: 0x350
-- Base Offset: 0x0
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [31:0] at the last snapshot.</p>
-
-### HI register
-
-- Absolute Address: 0x354
-- Base Offset: 0x4
-- Size: 0x4
-
-|Bits|Identifier|Access|Reset|Name|
-|----|----------|------|-----|----|
-|31:0|   value  |   r  |  —  |  — |
-
-#### value field
-
-<p>Counter bits [63:32] at the last snapshot.</p>
-
 ## STATS register file
 
 - Absolute Address: 0x400
@@ -2603,6 +2282,327 @@ Don't override. Generated from: hft_csr
 ### HI register
 
 - Absolute Address: 0x684
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RING register file
+
+- Absolute Address: 0x800
+- Base Offset: 0x800
+- Size: 0x58
+
+<p>event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.</p>
+
+|Offset|     Identifier    |          Name         |
+|------|-------------------|-----------------------|
+| 0x00 |     RING_CTRL     |      Ring control     |
+| 0x04 |    RING_BASE_LO   | Ring base address, low|
+| 0x08 |    RING_BASE_HI   |Ring base address, high|
+| 0x0C |   RING_SIZE_LOG2  |       Ring size       |
+| 0x10 |      CONS_IDX     |     Consumer index    |
+| 0x14 |      PROD_IDX     |     Producer index    |
+| 0x18 |    RING_STATUS    |      Ring status      |
+| 0x20 |    RING_WRITTEN   |  64-bit live counter  |
+| 0x28 |   RING_BRESP_ERR  |  64-bit live counter  |
+| 0x40 |RING_COMMIT_ENTRIES|     64-bit counter    |
+| 0x48 |   RING_DROP_PKTS  |     64-bit counter    |
+| 0x50 | RING_DROP_ENTRIES |     64-bit counter    |
+
+### RING_CTRL register
+
+- Absolute Address: 0x800
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  enable  |  rw  | 0x0 |  — |
+
+#### enable field
+
+<p>Writer enabled. A rising edge with CONS_IDX = 0 and RING_SIZE_LOG2 in 4..20 sets PROD_IDX to 0, takes RING_BASE_* and RING_SIZE_LOG2 (ignored until the next rising edge) and clears RING_STATUS; any other rising edge is refused. To retry after a refusal: write 0, then 1. Falling edge: bursts in flight finish, no new entry starts.</p>
+
+### RING_BASE_LO register
+
+- Absolute Address: 0x804
+- Base Offset: 0x4
+- Size: 0x4
+
+| Bits|Identifier|Access|Reset|Name|
+|-----|----------|------|-----|----|
+|31:12|   base   |  rw  | 0x0 |  — |
+
+#### base field
+
+<p>Base address bits [31:12]; the region is 4 KiB aligned and bits [11:0] read 0.</p>
+
+### RING_BASE_HI register
+
+- Absolute Address: 0x808
+- Base Offset: 0x8
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   base   |  rw  | 0x0 |  — |
+
+#### base field
+
+<p>Base address bits [63:32].</p>
+
+### RING_SIZE_LOG2 register
+
+- Absolute Address: 0x80C
+- Base Offset: 0xC
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 4:0| size_log2|  rw  | 0x0 |  — |
+
+#### size_log2 field
+
+<p>log2 of the number of entries, 4..20. Any other value makes the next enable refused.</p>
+
+### CONS_IDX register
+
+- Absolute Address: 0x810
+- Base Offset: 0x10
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   cons   |  rw  | 0x0 |  — |
+
+#### cons field
+
+<p>Entries the host has consumed: a wrapping 32-bit count, the same arithmetic as PROD_IDX. PROD_IDX - CONS_IDX = 2^RING_SIZE_LOG2 means full, and the writer waits. It must be 0 at each enable and must never pass PROD_IDX.</p>
+
+### PROD_IDX register
+
+- Absolute Address: 0x814
+- Base Offset: 0x14
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   prod   |   r  |  —  |  — |
+
+#### prod field
+
+<p>Bursts started since the last accepted enable, live, wrapping. An entry counted here may still be on its way: the phase bits tell which entries are in memory.</p>
+
+### RING_STATUS register
+
+- Absolute Address: 0x818
+- Base Offset: 0x18
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 | bresp_err|   r  |  —  |  — |
+|  1 |enable_err|   r  |  —  |  — |
+
+#### bresp_err field
+
+<p>A write answered with a BRESP other than OKAY since the last accepted enable. The write is not retried; RING_BRESP_ERR counts them.</p>
+
+#### enable_err field
+
+<p>The last rising edge of RING_CTRL.enable was refused: CONS_IDX was not 0 or RING_SIZE_LOG2 was not in 4..20. Stays set until an accepted enable.</p>
+
+## RING_WRITTEN register file
+
+- Absolute Address: 0x820
+- Base Offset: 0x20
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x820
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.</p>
+
+### HI register
+
+- Absolute Address: 0x824
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32], live.</p>
+
+## RING_BRESP_ERR register file
+
+- Absolute Address: 0x828
+- Base Offset: 0x28
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x828
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.</p>
+
+### HI register
+
+- Absolute Address: 0x82C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32], live.</p>
+
+## RING_COMMIT_ENTRIES register file
+
+- Absolute Address: 0x840
+- Base Offset: 0x40
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x840
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x844
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RING_DROP_PKTS register file
+
+- Absolute Address: 0x848
+- Base Offset: 0x48
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x848
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x84C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RING_DROP_ENTRIES register file
+
+- Absolute Address: 0x850
+- Base Offset: 0x50
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x850
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x854
 - Base Offset: 0x4
 - Size: 0x4
 

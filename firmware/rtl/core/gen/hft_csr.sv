@@ -347,35 +347,6 @@ module hft_csr (
             } MOLD_GAP_MSGS;
         } FEED;
         struct {
-            logic RING_CTRL;
-            logic RING_BASE_LO;
-            logic RING_BASE_HI;
-            logic RING_SIZE_LOG2;
-            logic CONS_IDX;
-            logic PROD_IDX;
-            logic RING_STATUS;
-            struct {
-                logic LO;
-                logic HI;
-            } RING_WRITTEN;
-            struct {
-                logic LO;
-                logic HI;
-            } RING_BRESP_ERR;
-            struct {
-                logic LO;
-                logic HI;
-            } RING_COMMIT_ENTRIES;
-            struct {
-                logic LO;
-                logic HI;
-            } RING_DROP_PKTS;
-            struct {
-                logic LO;
-                logic HI;
-            } RING_DROP_ENTRIES;
-        } RING;
-        struct {
             logic STATS_CTRL;
             logic STATS_SEQ;
             struct {
@@ -462,6 +433,35 @@ module hft_csr (
                 logic HI;
             } ITCH_MASKED;
         } ITCH;
+        struct {
+            logic RING_CTRL;
+            logic RING_BASE_LO;
+            logic RING_BASE_HI;
+            logic RING_SIZE_LOG2;
+            logic CONS_IDX;
+            logic PROD_IDX;
+            logic RING_STATUS;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_WRITTEN;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_BRESP_ERR;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_COMMIT_ENTRIES;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_DROP_PKTS;
+            struct {
+                logic LO;
+                logic HI;
+            } RING_DROP_ENTRIES;
+        } RING;
         logic SYMBOL;
     } decoded_reg_strb_t;
     decoded_reg_strb_t decoded_reg_strb;
@@ -642,57 +642,6 @@ module hft_csr (
         decoded_reg_strb.FEED.MOLD_GAP_MSGS.HI = cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h2bc);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h2bc) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_CTRL = cpuif_req_masked & (cpuif_addr == 16'h300);
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h300);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h300);
-        decoded_reg_strb.RING.RING_BASE_LO = cpuif_req_masked & (cpuif_addr == 16'h304);
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h304);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h304);
-        decoded_reg_strb.RING.RING_BASE_HI = cpuif_req_masked & (cpuif_addr == 16'h308);
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h308);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h308);
-        decoded_reg_strb.RING.RING_SIZE_LOG2 = cpuif_req_masked & (cpuif_addr == 16'h30c);
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h30c);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h30c);
-        decoded_reg_strb.RING.CONS_IDX = cpuif_req_masked & (cpuif_addr == 16'h310);
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h310);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h310);
-        decoded_reg_strb.RING.PROD_IDX = cpuif_req_masked & (cpuif_addr == 16'h314) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h314);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h314) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_STATUS = cpuif_req_masked & (cpuif_addr == 16'h318) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h318);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h318) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_WRITTEN.LO = cpuif_req_masked & (cpuif_addr == 16'h320) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h320);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h320) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_WRITTEN.HI = cpuif_req_masked & (cpuif_addr == 16'h324) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h324);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h324) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_BRESP_ERR.LO = cpuif_req_masked & (cpuif_addr == 16'h328) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h328);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h328) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_BRESP_ERR.HI = cpuif_req_masked & (cpuif_addr == 16'h32c) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h32c);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h32c) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h340) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h340);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h340) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h344) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h344);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h344) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_DROP_PKTS.LO = cpuif_req_masked & (cpuif_addr == 16'h348) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h348);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h348) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_DROP_PKTS.HI = cpuif_req_masked & (cpuif_addr == 16'h34c) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h34c);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h34c) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_DROP_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h350) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h350);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h350) & !cpuif_req_is_wr;
-        decoded_reg_strb.RING.RING_DROP_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h354) & !cpuif_req_is_wr;
-        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h354);
-        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h354) & !cpuif_req_is_wr;
         decoded_reg_strb.STATS.STATS_CTRL = cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h400);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h400) & cpuif_req_is_wr;
@@ -822,6 +771,57 @@ module hft_csr (
         decoded_reg_strb.ITCH.ITCH_MASKED.HI = cpuif_req_masked & (cpuif_addr == 16'h684) & !cpuif_req_is_wr;
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h684);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h684) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_CTRL = cpuif_req_masked & (cpuif_addr == 16'h800);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h800);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h800);
+        decoded_reg_strb.RING.RING_BASE_LO = cpuif_req_masked & (cpuif_addr == 16'h804);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h804);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h804);
+        decoded_reg_strb.RING.RING_BASE_HI = cpuif_req_masked & (cpuif_addr == 16'h808);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h808);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h808);
+        decoded_reg_strb.RING.RING_SIZE_LOG2 = cpuif_req_masked & (cpuif_addr == 16'h80c);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h80c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h80c);
+        decoded_reg_strb.RING.CONS_IDX = cpuif_req_masked & (cpuif_addr == 16'h810);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h810);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h810);
+        decoded_reg_strb.RING.PROD_IDX = cpuif_req_masked & (cpuif_addr == 16'h814) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h814);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h814) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_STATUS = cpuif_req_masked & (cpuif_addr == 16'h818) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h818);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h818) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_WRITTEN.LO = cpuif_req_masked & (cpuif_addr == 16'h820) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h820);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h820) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_WRITTEN.HI = cpuif_req_masked & (cpuif_addr == 16'h824) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h824);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h824) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_BRESP_ERR.LO = cpuif_req_masked & (cpuif_addr == 16'h828) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h828);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h828) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_BRESP_ERR.HI = cpuif_req_masked & (cpuif_addr == 16'h82c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h82c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h82c) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h840) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h840);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h840) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_COMMIT_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h844) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h844);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h844) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_PKTS.LO = cpuif_req_masked & (cpuif_addr == 16'h848) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h848);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h848) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_PKTS.HI = cpuif_req_masked & (cpuif_addr == 16'h84c) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h84c);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h84c) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_ENTRIES.LO = cpuif_req_masked & (cpuif_addr == 16'h850) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h850);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h850) & !cpuif_req_is_wr;
+        decoded_reg_strb.RING.RING_DROP_ENTRIES.HI = cpuif_req_masked & (cpuif_addr == 16'h854) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h854);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h854) & !cpuif_req_is_wr;
         decoded_reg_strb.SYMBOL = cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
         is_external |= cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
         is_valid_addr |= cpuif_req_masked & (cpuif_addr >= 16'h8000) & (cpuif_addr <= 16'h8000 + 16'h1fff);
@@ -978,6 +978,34 @@ module hft_csr (
                 struct {
                     logic next;
                     logic load_next;
+                } snapshot;
+            } STATS_CTRL;
+            struct {
+                struct {
+                    logic [31:0] next;
+                    logic load_next;
+                    logic incrthreshold;
+                    logic overflow;
+                } seq;
+            } STATS_SEQ;
+        } STATS;
+        struct {
+            struct {
+                struct {
+                    logic [5:0] next;
+                    logic load_next;
+                } class_en;
+                struct {
+                    logic [5:0] next;
+                    logic load_next;
+                } class_filter;
+            } ITCH_CTRL;
+        } ITCH;
+        struct {
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
                 } enable;
             } RING_CTRL;
             struct {
@@ -1005,34 +1033,6 @@ module hft_csr (
                 } cons;
             } CONS_IDX;
         } RING;
-        struct {
-            struct {
-                struct {
-                    logic next;
-                    logic load_next;
-                } snapshot;
-            } STATS_CTRL;
-            struct {
-                struct {
-                    logic [31:0] next;
-                    logic load_next;
-                    logic incrthreshold;
-                    logic overflow;
-                } seq;
-            } STATS_SEQ;
-        } STATS;
-        struct {
-            struct {
-                struct {
-                    logic [5:0] next;
-                    logic load_next;
-                } class_en;
-                struct {
-                    logic [5:0] next;
-                    logic load_next;
-                } class_filter;
-            } ITCH_CTRL;
-        } ITCH;
     } field_combo_t;
     field_combo_t field_combo;
 
@@ -1137,6 +1137,28 @@ module hft_csr (
             struct {
                 struct {
                     logic value;
+                } snapshot;
+            } STATS_CTRL;
+            struct {
+                struct {
+                    logic [31:0] value;
+                } seq;
+            } STATS_SEQ;
+        } STATS;
+        struct {
+            struct {
+                struct {
+                    logic [5:0] value;
+                } class_en;
+                struct {
+                    logic [5:0] value;
+                } class_filter;
+            } ITCH_CTRL;
+        } ITCH;
+        struct {
+            struct {
+                struct {
+                    logic value;
                 } enable;
             } RING_CTRL;
             struct {
@@ -1160,28 +1182,6 @@ module hft_csr (
                 } cons;
             } CONS_IDX;
         } RING;
-        struct {
-            struct {
-                struct {
-                    logic value;
-                } snapshot;
-            } STATS_CTRL;
-            struct {
-                struct {
-                    logic [31:0] value;
-                } seq;
-            } STATS_SEQ;
-        } STATS;
-        struct {
-            struct {
-                struct {
-                    logic [5:0] value;
-                } class_en;
-                struct {
-                    logic [5:0] value;
-                } class_filter;
-            } ITCH_CTRL;
-        } ITCH;
     } field_storage_t;
     field_storage_t field_storage;
 
@@ -1656,6 +1656,105 @@ module hft_csr (
         end
     end
     assign hwif_out.FEED.FEED_COMMIT.resync.value = field_storage.FEED.FEED_COMMIT.resync.value;
+    // Field: hft_csr.STATS.STATS_CTRL.snapshot
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.STATS.STATS_CTRL.snapshot.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.STATS.STATS_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.STATS.STATS_CTRL.snapshot.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end else begin // singlepulse clears back to 0
+            next_c = '0;
+            load_next_c = '1;
+        end
+        field_combo.STATS.STATS_CTRL.snapshot.next = next_c;
+        field_combo.STATS.STATS_CTRL.snapshot.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.STATS.STATS_CTRL.snapshot.value <= 1'h0;
+        end else begin
+            if(field_combo.STATS.STATS_CTRL.snapshot.load_next) begin
+                field_storage.STATS.STATS_CTRL.snapshot.value <= field_combo.STATS.STATS_CTRL.snapshot.next;
+            end
+        end
+    end
+    assign hwif_out.STATS.STATS_CTRL.snapshot.value = field_storage.STATS.STATS_CTRL.snapshot.value;
+    // Field: hft_csr.STATS.STATS_SEQ.seq
+    always_comb begin
+        automatic logic [31:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.STATS.STATS_SEQ.seq.value;
+        load_next_c = '0;
+        
+        if(hwif_in.STATS.STATS_SEQ.seq.incr) begin // increment
+            field_combo.STATS.STATS_SEQ.seq.overflow = (((33)'(next_c) + 32'h1) > 33'hffffffff);
+            next_c = next_c + 32'h1;
+            load_next_c = '1;
+        end else begin
+            field_combo.STATS.STATS_SEQ.seq.overflow = '0;
+        end
+        field_combo.STATS.STATS_SEQ.seq.incrthreshold = (field_storage.STATS.STATS_SEQ.seq.value >= 32'hffffffff);
+        field_combo.STATS.STATS_SEQ.seq.next = next_c;
+        field_combo.STATS.STATS_SEQ.seq.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.STATS.STATS_SEQ.seq.value <= 32'h0;
+        end else begin
+            if(field_combo.STATS.STATS_SEQ.seq.load_next) begin
+                field_storage.STATS.STATS_SEQ.seq.value <= field_combo.STATS.STATS_SEQ.seq.next;
+            end
+        end
+    end
+    // Field: hft_csr.ITCH.ITCH_CTRL.class_en
+    always_comb begin
+        automatic logic [5:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.ITCH.ITCH_CTRL.class_en.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.ITCH.ITCH_CTRL.class_en.value & ~decoded_wr_biten[5:0]) | (decoded_wr_data[5:0] & decoded_wr_biten[5:0]);
+            load_next_c = '1;
+        end
+        field_combo.ITCH.ITCH_CTRL.class_en.next = next_c;
+        field_combo.ITCH.ITCH_CTRL.class_en.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.ITCH.ITCH_CTRL.class_en.value <= 6'h0;
+        end else begin
+            if(field_combo.ITCH.ITCH_CTRL.class_en.load_next) begin
+                field_storage.ITCH.ITCH_CTRL.class_en.value <= field_combo.ITCH.ITCH_CTRL.class_en.next;
+            end
+        end
+    end
+    assign hwif_out.ITCH.ITCH_CTRL.class_en.value = field_storage.ITCH.ITCH_CTRL.class_en.value;
+    // Field: hft_csr.ITCH.ITCH_CTRL.class_filter
+    always_comb begin
+        automatic logic [5:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.ITCH.ITCH_CTRL.class_filter.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.ITCH.ITCH_CTRL.class_filter.value & ~decoded_wr_biten[13:8]) | (decoded_wr_data[13:8] & decoded_wr_biten[13:8]);
+            load_next_c = '1;
+        end
+        field_combo.ITCH.ITCH_CTRL.class_filter.next = next_c;
+        field_combo.ITCH.ITCH_CTRL.class_filter.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.ITCH.ITCH_CTRL.class_filter.value <= 6'h0;
+        end else begin
+            if(field_combo.ITCH.ITCH_CTRL.class_filter.load_next) begin
+                field_storage.ITCH.ITCH_CTRL.class_filter.value <= field_combo.ITCH.ITCH_CTRL.class_filter.next;
+            end
+        end
+    end
+    assign hwif_out.ITCH.ITCH_CTRL.class_filter.value = field_storage.ITCH.ITCH_CTRL.class_filter.value;
     // Field: hft_csr.RING.RING_CTRL.enable
     always_comb begin
         automatic logic [0:0] next_c;
@@ -1771,105 +1870,6 @@ module hft_csr (
         end
     end
     assign hwif_out.RING.CONS_IDX.cons.value = field_storage.RING.CONS_IDX.cons.value;
-    // Field: hft_csr.STATS.STATS_CTRL.snapshot
-    always_comb begin
-        automatic logic [0:0] next_c;
-        automatic logic load_next_c;
-        next_c = field_storage.STATS.STATS_CTRL.snapshot.value;
-        load_next_c = '0;
-        if(decoded_reg_strb.STATS.STATS_CTRL && decoded_req_is_wr) begin // SW write
-            next_c = (field_storage.STATS.STATS_CTRL.snapshot.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
-            load_next_c = '1;
-        end else begin // singlepulse clears back to 0
-            next_c = '0;
-            load_next_c = '1;
-        end
-        field_combo.STATS.STATS_CTRL.snapshot.next = next_c;
-        field_combo.STATS.STATS_CTRL.snapshot.load_next = load_next_c;
-    end
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            field_storage.STATS.STATS_CTRL.snapshot.value <= 1'h0;
-        end else begin
-            if(field_combo.STATS.STATS_CTRL.snapshot.load_next) begin
-                field_storage.STATS.STATS_CTRL.snapshot.value <= field_combo.STATS.STATS_CTRL.snapshot.next;
-            end
-        end
-    end
-    assign hwif_out.STATS.STATS_CTRL.snapshot.value = field_storage.STATS.STATS_CTRL.snapshot.value;
-    // Field: hft_csr.STATS.STATS_SEQ.seq
-    always_comb begin
-        automatic logic [31:0] next_c;
-        automatic logic load_next_c;
-        next_c = field_storage.STATS.STATS_SEQ.seq.value;
-        load_next_c = '0;
-        
-        if(hwif_in.STATS.STATS_SEQ.seq.incr) begin // increment
-            field_combo.STATS.STATS_SEQ.seq.overflow = (((33)'(next_c) + 32'h1) > 33'hffffffff);
-            next_c = next_c + 32'h1;
-            load_next_c = '1;
-        end else begin
-            field_combo.STATS.STATS_SEQ.seq.overflow = '0;
-        end
-        field_combo.STATS.STATS_SEQ.seq.incrthreshold = (field_storage.STATS.STATS_SEQ.seq.value >= 32'hffffffff);
-        field_combo.STATS.STATS_SEQ.seq.next = next_c;
-        field_combo.STATS.STATS_SEQ.seq.load_next = load_next_c;
-    end
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            field_storage.STATS.STATS_SEQ.seq.value <= 32'h0;
-        end else begin
-            if(field_combo.STATS.STATS_SEQ.seq.load_next) begin
-                field_storage.STATS.STATS_SEQ.seq.value <= field_combo.STATS.STATS_SEQ.seq.next;
-            end
-        end
-    end
-    // Field: hft_csr.ITCH.ITCH_CTRL.class_en
-    always_comb begin
-        automatic logic [5:0] next_c;
-        automatic logic load_next_c;
-        next_c = field_storage.ITCH.ITCH_CTRL.class_en.value;
-        load_next_c = '0;
-        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
-            next_c = (field_storage.ITCH.ITCH_CTRL.class_en.value & ~decoded_wr_biten[5:0]) | (decoded_wr_data[5:0] & decoded_wr_biten[5:0]);
-            load_next_c = '1;
-        end
-        field_combo.ITCH.ITCH_CTRL.class_en.next = next_c;
-        field_combo.ITCH.ITCH_CTRL.class_en.load_next = load_next_c;
-    end
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            field_storage.ITCH.ITCH_CTRL.class_en.value <= 6'h0;
-        end else begin
-            if(field_combo.ITCH.ITCH_CTRL.class_en.load_next) begin
-                field_storage.ITCH.ITCH_CTRL.class_en.value <= field_combo.ITCH.ITCH_CTRL.class_en.next;
-            end
-        end
-    end
-    assign hwif_out.ITCH.ITCH_CTRL.class_en.value = field_storage.ITCH.ITCH_CTRL.class_en.value;
-    // Field: hft_csr.ITCH.ITCH_CTRL.class_filter
-    always_comb begin
-        automatic logic [5:0] next_c;
-        automatic logic load_next_c;
-        next_c = field_storage.ITCH.ITCH_CTRL.class_filter.value;
-        load_next_c = '0;
-        if(decoded_reg_strb.ITCH.ITCH_CTRL && decoded_req_is_wr) begin // SW write
-            next_c = (field_storage.ITCH.ITCH_CTRL.class_filter.value & ~decoded_wr_biten[13:8]) | (decoded_wr_data[13:8] & decoded_wr_biten[13:8]);
-            load_next_c = '1;
-        end
-        field_combo.ITCH.ITCH_CTRL.class_filter.next = next_c;
-        field_combo.ITCH.ITCH_CTRL.class_filter.load_next = load_next_c;
-    end
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            field_storage.ITCH.ITCH_CTRL.class_filter.value <= 6'h0;
-        end else begin
-            if(field_combo.ITCH.ITCH_CTRL.class_filter.load_next) begin
-                field_storage.ITCH.ITCH_CTRL.class_filter.value <= field_combo.ITCH.ITCH_CTRL.class_filter.next;
-            end
-        end
-    end
-    assign hwif_out.ITCH.ITCH_CTRL.class_filter.value = field_storage.ITCH.ITCH_CTRL.class_filter.value;
     // External region: hft_csr.SYMBOL
     assign hwif_out.SYMBOL.req = decoded_reg_strb.SYMBOL;
     assign hwif_out.SYMBOL.addr = decoded_addr[12:0];
@@ -2098,58 +2098,6 @@ module hft_csr (
         if(ad_low(rd_mux_addr) == ad_low(16'h2bc)) begin
             readback_data_var[ad_hi(16'h2bc)][31:0] = hwif_in.FEED.MOLD_GAP_MSGS.HI.value.next;
         end
-        if(ad_low(rd_mux_addr) == ad_low(16'h300)) begin
-            readback_data_var[ad_hi(16'h300)][0] = field_storage.RING.RING_CTRL.enable.value;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h304)) begin
-            readback_data_var[ad_hi(16'h304)][31:12] = field_storage.RING.RING_BASE_LO.base.value;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h308)) begin
-            readback_data_var[ad_hi(16'h308)][31:0] = field_storage.RING.RING_BASE_HI.base.value;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h30c)) begin
-            readback_data_var[ad_hi(16'h30c)][4:0] = field_storage.RING.RING_SIZE_LOG2.size_log2.value;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h310)) begin
-            readback_data_var[ad_hi(16'h310)][31:0] = field_storage.RING.CONS_IDX.cons.value;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h314)) begin
-            readback_data_var[ad_hi(16'h314)][31:0] = hwif_in.RING.PROD_IDX.prod.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h318)) begin
-            readback_data_var[ad_hi(16'h318)][0] = hwif_in.RING.RING_STATUS.bresp_err.next;
-            readback_data_var[ad_hi(16'h318)][1] = hwif_in.RING.RING_STATUS.enable_err.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h320)) begin
-            readback_data_var[ad_hi(16'h320)][31:0] = hwif_in.RING.RING_WRITTEN.LO.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h324)) begin
-            readback_data_var[ad_hi(16'h324)][31:0] = hwif_in.RING.RING_WRITTEN.HI.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h328)) begin
-            readback_data_var[ad_hi(16'h328)][31:0] = hwif_in.RING.RING_BRESP_ERR.LO.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h32c)) begin
-            readback_data_var[ad_hi(16'h32c)][31:0] = hwif_in.RING.RING_BRESP_ERR.HI.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h340)) begin
-            readback_data_var[ad_hi(16'h340)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.LO.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h344)) begin
-            readback_data_var[ad_hi(16'h344)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.HI.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h348)) begin
-            readback_data_var[ad_hi(16'h348)][31:0] = hwif_in.RING.RING_DROP_PKTS.LO.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h34c)) begin
-            readback_data_var[ad_hi(16'h34c)][31:0] = hwif_in.RING.RING_DROP_PKTS.HI.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h350)) begin
-            readback_data_var[ad_hi(16'h350)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.LO.value.next;
-        end
-        if(ad_low(rd_mux_addr) == ad_low(16'h354)) begin
-            readback_data_var[ad_hi(16'h354)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.HI.value.next;
-        end
         if(ad_low(rd_mux_addr) == ad_low(16'h404)) begin
             readback_data_var[ad_hi(16'h404)][31:0] = field_storage.STATS.STATS_SEQ.seq.value;
         end
@@ -2276,6 +2224,58 @@ module hft_csr (
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h684)) begin
             readback_data_var[ad_hi(16'h684)][31:0] = hwif_in.ITCH.ITCH_MASKED.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h800)) begin
+            readback_data_var[ad_hi(16'h800)][0] = field_storage.RING.RING_CTRL.enable.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h804)) begin
+            readback_data_var[ad_hi(16'h804)][31:12] = field_storage.RING.RING_BASE_LO.base.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h808)) begin
+            readback_data_var[ad_hi(16'h808)][31:0] = field_storage.RING.RING_BASE_HI.base.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h80c)) begin
+            readback_data_var[ad_hi(16'h80c)][4:0] = field_storage.RING.RING_SIZE_LOG2.size_log2.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h810)) begin
+            readback_data_var[ad_hi(16'h810)][31:0] = field_storage.RING.CONS_IDX.cons.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h814)) begin
+            readback_data_var[ad_hi(16'h814)][31:0] = hwif_in.RING.PROD_IDX.prod.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h818)) begin
+            readback_data_var[ad_hi(16'h818)][0] = hwif_in.RING.RING_STATUS.bresp_err.next;
+            readback_data_var[ad_hi(16'h818)][1] = hwif_in.RING.RING_STATUS.enable_err.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h820)) begin
+            readback_data_var[ad_hi(16'h820)][31:0] = hwif_in.RING.RING_WRITTEN.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h824)) begin
+            readback_data_var[ad_hi(16'h824)][31:0] = hwif_in.RING.RING_WRITTEN.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h828)) begin
+            readback_data_var[ad_hi(16'h828)][31:0] = hwif_in.RING.RING_BRESP_ERR.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h82c)) begin
+            readback_data_var[ad_hi(16'h82c)][31:0] = hwif_in.RING.RING_BRESP_ERR.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h840)) begin
+            readback_data_var[ad_hi(16'h840)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h844)) begin
+            readback_data_var[ad_hi(16'h844)][31:0] = hwif_in.RING.RING_COMMIT_ENTRIES.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h848)) begin
+            readback_data_var[ad_hi(16'h848)][31:0] = hwif_in.RING.RING_DROP_PKTS.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h84c)) begin
+            readback_data_var[ad_hi(16'h84c)][31:0] = hwif_in.RING.RING_DROP_PKTS.HI.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h850)) begin
+            readback_data_var[ad_hi(16'h850)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h854)) begin
+            readback_data_var[ad_hi(16'h854)][31:0] = hwif_in.RING.RING_DROP_ENTRIES.HI.value.next;
         end
         readback_data_rt_c = readback_data_var;
     end

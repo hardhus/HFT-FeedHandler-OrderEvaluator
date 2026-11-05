@@ -340,7 +340,7 @@ addrmap hft_csr {
         counter64 RING_COMMIT_ENTRIES @ 0x40;  // entries committed to the FIFO, GAP and EOS included
         counter64 RING_DROP_PKTS      @ 0x48;  // accepted packets that did not fit the FIFO
         counter64 RING_DROP_ENTRIES   @ 0x50;  // their entries, GAP and EOS included
-    } RING @ 0x0300;
+    } RING @ 0x0800;
 
     regfile {
         name = "Statistics";

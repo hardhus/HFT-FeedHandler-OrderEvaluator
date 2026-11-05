@@ -219,6 +219,61 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t MOLD_GAP_MSGS;
 } hft_csr__FEED_t;
 
+// reg - hft_csr::STATS::STATS_CTRL
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bw 1
+#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_reset 0x0
+
+// reg - hft_csr::STATS::STATS_SEQ
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bm 0xffffffff
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bp 0
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_bw 32
+#define HFT_CSR__STATS__STATS_SEQ__SEQ_reset 0x0
+
+// regfile - hft_csr::STATS
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t STATS_CTRL;
+    uint32_t STATS_SEQ;
+    uint8_t RESERVED_8_f[0x8];
+    hft_csr__counter64_t RX_PKTS;
+    hft_csr__counter64_t RX_BYTES;
+    hft_csr__counter64_t DROP_DISABLED;
+    hft_csr__counter64_t DROP_FCS;
+    hft_csr__counter64_t DROP_MAC;
+    hft_csr__counter64_t DROP_ETHERTYPE;
+    hft_csr__counter64_t DROP_IP_HDR;
+    hft_csr__counter64_t DROP_FRAG;
+    hft_csr__counter64_t DROP_PROTO;
+    hft_csr__counter64_t DROP_FILTER;
+    hft_csr__counter64_t DROP_LEN;
+} hft_csr__STATS_t;
+
+// reg - hft_csr::ITCH::ITCH_CTRL
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bm 0x3f
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bp 0
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bw 6
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_reset 0x0
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bm 0x3f00
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bp 8
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bw 6
+#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_reset 0x0
+
+// regfile - hft_csr::ITCH
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t ITCH_CTRL;
+    uint8_t RESERVED_4_3f[0x3c];
+    hft_csr__counter64_t ITCH_ORDER;
+    hft_csr__counter64_t ITCH_TRADE;
+    hft_csr__counter64_t ITCH_ADMIN;
+    hft_csr__counter64_t ITCH_AUCTION;
+    hft_csr__counter64_t ITCH_UNKNOWN;
+    hft_csr__counter64_t ITCH_MALFORMED;
+    hft_csr__counter64_t ITCH_OUT;
+    hft_csr__counter64_t ITCH_FILTERED;
+    hft_csr__counter64_t ITCH_MASKED;
+} hft_csr__ITCH_t;
+
 // reg - hft_csr::RING::RING_CTRL
 #define HFT_CSR__RING__RING_CTRL__ENABLE_bm 0x1
 #define HFT_CSR__RING__RING_CTRL__ENABLE_bp 0
@@ -296,61 +351,6 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t RING_DROP_ENTRIES;
 } hft_csr__RING_t;
 
-// reg - hft_csr::STATS::STATS_CTRL
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bm 0x1
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bp 0
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_bw 1
-#define HFT_CSR__STATS__STATS_CTRL__SNAPSHOT_reset 0x0
-
-// reg - hft_csr::STATS::STATS_SEQ
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bm 0xffffffff
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bp 0
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_bw 32
-#define HFT_CSR__STATS__STATS_SEQ__SEQ_reset 0x0
-
-// regfile - hft_csr::STATS
-typedef struct __attribute__ ((__packed__)) {
-    uint32_t STATS_CTRL;
-    uint32_t STATS_SEQ;
-    uint8_t RESERVED_8_f[0x8];
-    hft_csr__counter64_t RX_PKTS;
-    hft_csr__counter64_t RX_BYTES;
-    hft_csr__counter64_t DROP_DISABLED;
-    hft_csr__counter64_t DROP_FCS;
-    hft_csr__counter64_t DROP_MAC;
-    hft_csr__counter64_t DROP_ETHERTYPE;
-    hft_csr__counter64_t DROP_IP_HDR;
-    hft_csr__counter64_t DROP_FRAG;
-    hft_csr__counter64_t DROP_PROTO;
-    hft_csr__counter64_t DROP_FILTER;
-    hft_csr__counter64_t DROP_LEN;
-} hft_csr__STATS_t;
-
-// reg - hft_csr::ITCH::ITCH_CTRL
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bm 0x3f
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bp 0
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_bw 6
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_EN_reset 0x0
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bm 0x3f00
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bp 8
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_bw 6
-#define HFT_CSR__ITCH__ITCH_CTRL__CLASS_FILTER_reset 0x0
-
-// regfile - hft_csr::ITCH
-typedef struct __attribute__ ((__packed__)) {
-    uint32_t ITCH_CTRL;
-    uint8_t RESERVED_4_3f[0x3c];
-    hft_csr__counter64_t ITCH_ORDER;
-    hft_csr__counter64_t ITCH_TRADE;
-    hft_csr__counter64_t ITCH_ADMIN;
-    hft_csr__counter64_t ITCH_AUCTION;
-    hft_csr__counter64_t ITCH_UNKNOWN;
-    hft_csr__counter64_t ITCH_MALFORMED;
-    hft_csr__counter64_t ITCH_OUT;
-    hft_csr__counter64_t ITCH_FILTERED;
-    hft_csr__counter64_t ITCH_MASKED;
-} hft_csr__ITCH_t;
-
 // mem - hft_csr::SYMBOL
 typedef struct __attribute__ ((__packed__)) {
     uint32_t mem[2048];
@@ -363,13 +363,13 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__NET_t NET;
     uint8_t RESERVED_160_1ff[0xa0];
     hft_csr__FEED_t FEED;
-    uint8_t RESERVED_2c0_2ff[0x40];
-    hft_csr__RING_t RING;
-    uint8_t RESERVED_358_3ff[0xa8];
+    uint8_t RESERVED_2c0_3ff[0x140];
     hft_csr__STATS_t STATS;
     uint8_t RESERVED_468_5ff[0x198];
     hft_csr__ITCH_t ITCH;
-    uint8_t RESERVED_688_7fff[0x7978];
+    uint8_t RESERVED_688_7ff[0x178];
+    hft_csr__RING_t RING;
+    uint8_t RESERVED_858_7fff[0x77a8];
     hft_csr__SYMBOL_t SYMBOL;
 } hft_csr_t;
 

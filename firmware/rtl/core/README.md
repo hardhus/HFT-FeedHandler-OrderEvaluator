@@ -501,10 +501,10 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 | `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0002`), `SCRATCH` (RW) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
-| `0x0300` | RING | reserved (F6) |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
 | `0x0500` | RISK | reserved (F7) |
 | `0x0600` | ITCH | Shadow (carried by `FEED_COMMIT`): `ITCH_CTRL` (`class_en` bits 5:0, `class_filter` bits 13:8; bit = `itch_class_e` code). Snapshot: `ITCH_<class>` at `0x0640 + 8 × class`, then `ITCH_OUT`, `ITCH_FILTERED`, `ITCH_MASKED` at `0x0670`, `0x0678`, `0x0680` |
+| `0x0800` | RING | Alone in its 512-byte read window, for the read path's timing (audit/13 S8); registers in the RDL |
 | `0x1000`+ | STRATEGY, TX | reserved (F7) |
 | `0x8000` | SYMBOL | Memory, 2048 × 32 bit, RW: bit i of word w = stock locate 32w + i (1 = subscribed) |
 

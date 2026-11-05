@@ -84,6 +84,41 @@ package hft_csr_pkg;
     } hft_csr__FEED__in_t;
 
     typedef struct {
+        logic incr;
+    } hft_csr__STATS__STATS_SEQ__seq__in_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_SEQ__seq__in_t seq;
+    } hft_csr__STATS__STATS_SEQ__in_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_SEQ__in_t STATS_SEQ;
+        hft_csr__counter64__in_t RX_PKTS;
+        hft_csr__counter64__in_t RX_BYTES;
+        hft_csr__counter64__in_t DROP_DISABLED;
+        hft_csr__counter64__in_t DROP_FCS;
+        hft_csr__counter64__in_t DROP_MAC;
+        hft_csr__counter64__in_t DROP_ETHERTYPE;
+        hft_csr__counter64__in_t DROP_IP_HDR;
+        hft_csr__counter64__in_t DROP_FRAG;
+        hft_csr__counter64__in_t DROP_PROTO;
+        hft_csr__counter64__in_t DROP_FILTER;
+        hft_csr__counter64__in_t DROP_LEN;
+    } hft_csr__STATS__in_t;
+
+    typedef struct {
+        hft_csr__counter64__in_t ITCH_ORDER;
+        hft_csr__counter64__in_t ITCH_TRADE;
+        hft_csr__counter64__in_t ITCH_ADMIN;
+        hft_csr__counter64__in_t ITCH_AUCTION;
+        hft_csr__counter64__in_t ITCH_UNKNOWN;
+        hft_csr__counter64__in_t ITCH_MALFORMED;
+        hft_csr__counter64__in_t ITCH_OUT;
+        hft_csr__counter64__in_t ITCH_FILTERED;
+        hft_csr__counter64__in_t ITCH_MASKED;
+    } hft_csr__ITCH__in_t;
+
+    typedef struct {
         logic [31:0] next;
     } hft_csr__RING__PROD_IDX__prod__in_t;
 
@@ -136,41 +171,6 @@ package hft_csr_pkg;
     } hft_csr__RING__in_t;
 
     typedef struct {
-        logic incr;
-    } hft_csr__STATS__STATS_SEQ__seq__in_t;
-
-    typedef struct {
-        hft_csr__STATS__STATS_SEQ__seq__in_t seq;
-    } hft_csr__STATS__STATS_SEQ__in_t;
-
-    typedef struct {
-        hft_csr__STATS__STATS_SEQ__in_t STATS_SEQ;
-        hft_csr__counter64__in_t RX_PKTS;
-        hft_csr__counter64__in_t RX_BYTES;
-        hft_csr__counter64__in_t DROP_DISABLED;
-        hft_csr__counter64__in_t DROP_FCS;
-        hft_csr__counter64__in_t DROP_MAC;
-        hft_csr__counter64__in_t DROP_ETHERTYPE;
-        hft_csr__counter64__in_t DROP_IP_HDR;
-        hft_csr__counter64__in_t DROP_FRAG;
-        hft_csr__counter64__in_t DROP_PROTO;
-        hft_csr__counter64__in_t DROP_FILTER;
-        hft_csr__counter64__in_t DROP_LEN;
-    } hft_csr__STATS__in_t;
-
-    typedef struct {
-        hft_csr__counter64__in_t ITCH_ORDER;
-        hft_csr__counter64__in_t ITCH_TRADE;
-        hft_csr__counter64__in_t ITCH_ADMIN;
-        hft_csr__counter64__in_t ITCH_AUCTION;
-        hft_csr__counter64__in_t ITCH_UNKNOWN;
-        hft_csr__counter64__in_t ITCH_MALFORMED;
-        hft_csr__counter64__in_t ITCH_OUT;
-        hft_csr__counter64__in_t ITCH_FILTERED;
-        hft_csr__counter64__in_t ITCH_MASKED;
-    } hft_csr__ITCH__in_t;
-
-    typedef struct {
         logic rd_ack;
         logic [31:0] rd_data;
         logic wr_ack;
@@ -179,9 +179,9 @@ package hft_csr_pkg;
     typedef struct {
         hft_csr__NET__in_t NET;
         hft_csr__FEED__in_t FEED;
-        hft_csr__RING__in_t RING;
         hft_csr__STATS__in_t STATS;
         hft_csr__ITCH__in_t ITCH;
+        hft_csr__RING__in_t RING;
         hft_csr__SYMBOL__external__in_t SYMBOL;
     } hft_csr__in_t;
 
@@ -345,6 +345,35 @@ package hft_csr_pkg;
 
     typedef struct {
         logic value;
+    } hft_csr__STATS__STATS_CTRL__snapshot__out_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_CTRL__snapshot__out_t snapshot;
+    } hft_csr__STATS__STATS_CTRL__out_t;
+
+    typedef struct {
+        hft_csr__STATS__STATS_CTRL__out_t STATS_CTRL;
+    } hft_csr__STATS__out_t;
+
+    typedef struct {
+        logic [5:0] value;
+    } hft_csr__ITCH__ITCH_CTRL__class_en__out_t;
+
+    typedef struct {
+        logic [5:0] value;
+    } hft_csr__ITCH__ITCH_CTRL__class_filter__out_t;
+
+    typedef struct {
+        hft_csr__ITCH__ITCH_CTRL__class_en__out_t class_en;
+        hft_csr__ITCH__ITCH_CTRL__class_filter__out_t class_filter;
+    } hft_csr__ITCH__ITCH_CTRL__out_t;
+
+    typedef struct {
+        hft_csr__ITCH__ITCH_CTRL__out_t ITCH_CTRL;
+    } hft_csr__ITCH__out_t;
+
+    typedef struct {
+        logic value;
     } hft_csr__RING__RING_CTRL__enable__out_t;
 
     typedef struct {
@@ -392,35 +421,6 @@ package hft_csr_pkg;
     } hft_csr__RING__out_t;
 
     typedef struct {
-        logic value;
-    } hft_csr__STATS__STATS_CTRL__snapshot__out_t;
-
-    typedef struct {
-        hft_csr__STATS__STATS_CTRL__snapshot__out_t snapshot;
-    } hft_csr__STATS__STATS_CTRL__out_t;
-
-    typedef struct {
-        hft_csr__STATS__STATS_CTRL__out_t STATS_CTRL;
-    } hft_csr__STATS__out_t;
-
-    typedef struct {
-        logic [5:0] value;
-    } hft_csr__ITCH__ITCH_CTRL__class_en__out_t;
-
-    typedef struct {
-        logic [5:0] value;
-    } hft_csr__ITCH__ITCH_CTRL__class_filter__out_t;
-
-    typedef struct {
-        hft_csr__ITCH__ITCH_CTRL__class_en__out_t class_en;
-        hft_csr__ITCH__ITCH_CTRL__class_filter__out_t class_filter;
-    } hft_csr__ITCH__ITCH_CTRL__out_t;
-
-    typedef struct {
-        hft_csr__ITCH__ITCH_CTRL__out_t ITCH_CTRL;
-    } hft_csr__ITCH__out_t;
-
-    typedef struct {
         logic req;
         logic [12:0] addr;
         logic req_is_wr;
@@ -431,9 +431,9 @@ package hft_csr_pkg;
     typedef struct {
         hft_csr__NET__out_t NET;
         hft_csr__FEED__out_t FEED;
-        hft_csr__RING__out_t RING;
         hft_csr__STATS__out_t STATS;
         hft_csr__ITCH__out_t ITCH;
+        hft_csr__RING__out_t RING;
         hft_csr__SYMBOL__external__out_t SYMBOL;
     } hft_csr__out_t;
 endpackage

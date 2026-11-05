@@ -9,6 +9,7 @@ just gen-check.
 import re
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -85,23 +86,23 @@ EXPECTED = {
     "FEED.MOLD_GAP_EVENTS.HI": 0x02B4,
     "FEED.MOLD_GAP_MSGS.LO": 0x02B8,
     "FEED.MOLD_GAP_MSGS.HI": 0x02BC,
-    "RING.RING_CTRL": 0x0300,
-    "RING.RING_BASE_LO": 0x0304,
-    "RING.RING_BASE_HI": 0x0308,
-    "RING.RING_SIZE_LOG2": 0x030C,
-    "RING.CONS_IDX": 0x0310,
-    "RING.PROD_IDX": 0x0314,
-    "RING.RING_STATUS": 0x0318,
-    "RING.RING_WRITTEN.LO": 0x0320,
-    "RING.RING_WRITTEN.HI": 0x0324,
-    "RING.RING_BRESP_ERR.LO": 0x0328,
-    "RING.RING_BRESP_ERR.HI": 0x032C,
-    "RING.RING_COMMIT_ENTRIES.LO": 0x0340,
-    "RING.RING_COMMIT_ENTRIES.HI": 0x0344,
-    "RING.RING_DROP_PKTS.LO": 0x0348,
-    "RING.RING_DROP_PKTS.HI": 0x034C,
-    "RING.RING_DROP_ENTRIES.LO": 0x0350,
-    "RING.RING_DROP_ENTRIES.HI": 0x0354,
+    "RING.RING_CTRL": 0x0800,
+    "RING.RING_BASE_LO": 0x0804,
+    "RING.RING_BASE_HI": 0x0808,
+    "RING.RING_SIZE_LOG2": 0x080C,
+    "RING.CONS_IDX": 0x0810,
+    "RING.PROD_IDX": 0x0814,
+    "RING.RING_STATUS": 0x0818,
+    "RING.RING_WRITTEN.LO": 0x0820,
+    "RING.RING_WRITTEN.HI": 0x0824,
+    "RING.RING_BRESP_ERR.LO": 0x0828,
+    "RING.RING_BRESP_ERR.HI": 0x082C,
+    "RING.RING_COMMIT_ENTRIES.LO": 0x0840,
+    "RING.RING_COMMIT_ENTRIES.HI": 0x0844,
+    "RING.RING_DROP_PKTS.LO": 0x0848,
+    "RING.RING_DROP_PKTS.HI": 0x084C,
+    "RING.RING_DROP_ENTRIES.LO": 0x0850,
+    "RING.RING_DROP_ENTRIES.HI": 0x0854,
     "STATS.STATS_CTRL": 0x0400,
     "STATS.STATS_SEQ": 0x0404,
     "STATS.RX_PKTS.LO": 0x0410,
@@ -149,9 +150,11 @@ EXPECTED = {
 # Every memory of the map: path -> (address, entries, width).
 EXPECTED_MEMS = {"SYMBOL": (0x8000, 2048, 32)}
 
+MAX_READ_WINDOW_REGS = 43  # registers in one 512-byte read window (see test_read_windows_stay_small)
+
 # Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved
 # (RISK 0x0500, STRATEGY 0x1000, TX 0x2000) except the SYMBOL memory at 0x8000.
-BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "RING": (0x0300, 0x0400),
+BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "RING": (0x0800, 0x0900),
           "STATS": (0x0400, 0x0500),
           "ITCH": (0x0600, 0x0700)}  # fmt: skip
 
@@ -159,6 +162,14 @@ BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 
 def test_every_register_at_its_address():
     got = {r.path: r.addr for r in csr_map()}
     assert got == EXPECTED
+
+
+def test_read_windows_stay_small():
+    """The generated read mux (--rt-read-fanin) has one register stage per 512-byte window, and the logic in front of
+    it grows with the registers in that window. RING at 0x0300, sharing FEED's window with 60 registers, failed the A7
+    125 MHz gate by 0.234 ns; alone at 0x0800 it passes (audit/13 S8). A new block goes in a window with room."""
+    windows = Counter(r.addr >> 9 for r in csr_map())
+    assert max(windows.values()) <= MAX_READ_WINDOW_REGS, dict(windows)
 
 
 def test_constants():

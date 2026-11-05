@@ -113,8 +113,8 @@ ID, VERSION = 0x0000, 0x0004
 
 # Hand-written: the RING block (audit/13 S6).
 RING_CTRL, RING_BASE_LO, RING_BASE_HI, RING_SIZE_LOG2, CONS_IDX, PROD_IDX, RING_STATUS = (
-    0x0300, 0x0304, 0x0308, 0x030C, 0x0310, 0x0314, 0x0318)  # fmt: skip
-RING_WRITTEN_LO, RING_BRESP_ERR_LO = 0x0320, 0x0328
+    0x0800, 0x0804, 0x0808, 0x080C, 0x0810, 0x0814, 0x0818)  # fmt: skip
+RING_WRITTEN_LO, RING_BRESP_ERR_LO = 0x0820, 0x0828
 RING_BASE = 0x1234_5678_9ABC_D000  # 4 KiB aligned, high bits set
 RING_MEM = 1 << 24  # bytes of host memory (addresses wrap at this size in the memory model)
 FIFO_ENTRIES = 256  # the commit FIFO of rx_csr_top
