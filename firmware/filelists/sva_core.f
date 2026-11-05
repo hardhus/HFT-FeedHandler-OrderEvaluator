@@ -8,4 +8,6 @@
 ../tb/sva/packer_props.sv
 ../tb/sva/ring_props.sv
 ../tb/sva/axi_wr_props.sv
+../tb/sva/strategy_props.sv
+../tb/sva/risk_props.sv
 ../tb/sva/bind_core.sv

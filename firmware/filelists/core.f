@@ -11,3 +11,6 @@
 ../rtl/core/itch_stats.sv
 ../rtl/core/event_packer.sv
 ../rtl/core/event_ring_writer.sv
+../rtl/core/strategy_engine.sv
+../rtl/core/risk_check.sv
+../rtl/core/order_tx_builder.sv
