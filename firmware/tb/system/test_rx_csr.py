@@ -121,6 +121,7 @@ FIFO_ENTRIES = 256  # the commit FIFO of rx_csr_top
 # event_packer's write attempts, from moldudp64_rx's outputs (audit/13 S3): a message + WRITE_MSG, a packet's GAP
 # or EOS entry + WRITE_MSG after its event, an EOS behind a GAP one cycle later.
 WRITE_MSG = ITCH_LATENCY + 1
+ANSWER_POLLS = 20  # reads of the answer counters after the last entry is read (each takes tens of cycles)
 N_REPLAY = 10_000  # messages of tc_ring_replay (audit/04 §3.4 scenario 2); do not lower
 
 # The feed tests' network: entry 0 = line A (unicast), entry 1 = line B (multicast), both in the feed
@@ -645,10 +646,15 @@ class RingHost:
         self.pacing, self.hold = PACINGS["fast"], False
         for _ in range(limit):
             await RisingEdge(self.dut.host_clk)
-            if sysm.ring_read == sysm.ring_commit and await self.answered() == sysm.ring_commit:
-                assert not sysm.ring_want and not sysm.ring_got
+            if sysm.ring_read == sysm.ring_commit:
+                break
+        else:
+            raise AssertionError(f"{sysm.ring_read} ring entries read, {sysm.ring_commit} committed")
+        assert not sysm.ring_want and not sysm.ring_got
+        for _ in range(ANSWER_POLLS):  # an entry read is in memory: its answer is a few cycles away
+            if (answered := await self.answered()) == sysm.ring_commit:
                 return
-        raise AssertionError(f"{sysm.ring_read} ring entries read, {sysm.ring_commit} committed")
+        raise AssertionError(f"{sysm.ring_commit} entries committed and read, the counters answer for {answered}")
 
     async def check_quiet(self, v: dict[str, int]) -> None:
         """A snapshot taken after drain(): the model's counters and the host side of the identity."""
