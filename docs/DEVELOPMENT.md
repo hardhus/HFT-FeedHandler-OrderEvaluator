@@ -80,7 +80,8 @@ just itch-real-rtl        # real Nasdaq data through itch_decoder and the system
 
 The list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
 
-Build outputs go to `build/`:
+Build outputs go to `build/` (the simulator builds to `$HFT_BUILD_DIR` if `.env.local` sets it; on WSL a path on
+the WSL disk is much faster than `/mnt/d`, see `.env.example`):
 - `build/sim/<top>_<hash>/` holds one cocotb build per configuration, with one `run_<hash>/` per runtime environment;
 - `build/svtb/` holds SV-testbench builds;
 - `build/test-results.xml` is the JUnit report.
@@ -109,6 +110,13 @@ Build outputs go to `build/`:
   `eth_ip_udp_rx` (about 110 s), `tc_rx_csr_random`, `tc_feed_random` and `tc_itch_random` (2000 frames each, 75
   to 95 s per run); the ITCH unit test `tc_random_golden` (10⁵ messages) takes about 50 s. A change to
   `sva_core.f` or `core.f` rebuilds every core build: about 30 minutes for the whole suite on WSL.
+  After F6 (643 tests and 2 `long` ones): on the Raspberry Pi 5 `just ci` runs the tests in 19.5 minutes and the
+  long tests in 11.4; on GitHub the x64 job takes about 23 minutes. The two `test_ring_lossless_ordering` entries
+  (10⁶ and 10⁵ entries, 800 and 350 s on WSL) are the `long` tests: `just test` leaves them out, `just test-long`
+  and `just ci` run them. The longest daily entries are the `hft_csr_wrap` directed groups (60 to 100 s per
+  profile), `tc_itch_random` with the ring (55 to 60 s per run), `tc_rx_csr_random` and the system directed group
+  (about 55 s, with the 10⁴-message ring replay). Builds in the WSL home: a cold `rx_csr_top` build and a
+  `tc_itch_random` run together took 150 s.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a
@@ -316,6 +324,7 @@ The project file is generated and never committed. Sources come from the same fi
 | `.venv/bin/python` disappears, builds fail with missing `cocotb/share/...` files | Something on the Windows side touched the repo's `.venv` (it is shared through `/mnt/d`). On WSL set `UV_PROJECT_ENVIRONMENT=/home/<you>/.cache/hft-feedhandler/venv` in `.env.local` and run `just setup`; the venv then lives on ext4, out of Windows' reach |
 | `SRE module mismatch` in a build log | A Verilator helper (`verilator_includer`) ran with another Python than the venv's stdlib on `PYTHONPATH`. The runner sets `PYTHON3` for make to the venv interpreter; keep that when changing the runner |
 | Slow first build on `/mnt/d` | Exclude the repo's `build/` and `.tools/` folders from Windows Defender real-time scanning, or set `HFT_BUILD_DIR` in `.env.local` to a WSL path (see `.env.example`; run `just clean` from WSL then) |
+| `just test ... -k 'a and b'` from Windows runs no test | The Windows recipes forward their arguments to WSL through `bash -lc "..."`, which drops the quotes. Run a `-k` with spaces from WSL |
 | Lint does not flag a signal named `*unused*` | Verilator ignores names matching `--unused-regexp` (`*unused*`) on purpose |
 | `Unsupported arch` | 32-bit Pi OS is not supported. Install the 64-bit image |
 | Wrong `python` inside recipes | Do not source OSS CAD Suite's `environment` script; the justfile only adds its `bin/` to `PATH` |

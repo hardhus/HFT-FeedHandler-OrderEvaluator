@@ -6,8 +6,8 @@ they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`
 [`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis harnesses in
 [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The CSR blocks are in
 [`filelists/csr.f`](../../filelists/csr.f) (assertions [`sva_csr.f`](../../filelists/sva_csr.f), harness
-[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3 and F4
-plans (audit 09, 10, 11, 12); this file is the contract.
+[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3, F4 and
+F6 plans (audit 09, 10, 11, 12, 13); this file is the contract.
 
 ## Catalog
 
@@ -17,11 +17,14 @@ plans (audit 09, 10, 11, 12); this file is the contract.
 | `eth_ip_udp_rx` | Ethernet/IPv4/UDP receive filter: header checks, 8-entry (IP, port) filter table, UDP payload realigned to byte 0 | F2 |
 | `moldudp64_rx` | MoldUDP64 de-framer: one 64-B message vector per cycle, sequence tracking (gap, duplicate, A/B lines, heartbeat, end of session, resync), one event per packet | F3 |
 | `itch_decoder` | ITCH 5.0 classifier and field decoder, stock-locate filter (`symbol_filter`: 64 Kbit bitmap), packet events forwarded | F4 |
-| `gen/hft_csr` | AXI4-Lite register block, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL) | F5, F3 |
+| `event_packer` | Turns `itch_decoder`'s output messages and packet events into 128-byte ring entries and delivers them whole per packet through a `COMMIT=1` `cdc_async_fifo` | F6 |
+| `event_ring_writer` | Writes the committed entries into the host RAM ring, one 128-byte AXI4 burst each, in order; lossless while enabled | F6 |
+| `gen/event_desc_pkg` | Ring entry layout and pack functions, generated from `firmware/formats/event_desc.toml` | F6 |
+| `gen/hft_csr` | AXI4-Lite register block, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL) | F5, F3, F4, F6 |
 | `rx_stats` | Receive counters: packets, bytes, one drop counter per reason (64 bit) | F5 |
 | `mold_stats` | Feed counters: one per packet status, plus messages, duplicate, oversize and gap counts (64 bit) | F3 |
 | `itch_stats` | ITCH counters of committed messages: one per class and one per outcome (64 bit) | F4 |
-| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot | F5, F3, F4 |
+| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot, RING block and ring counters, `cfg_epoch` | F5, F3, F4, F6 |
 
 ## `eth_ip_udp_rx`
 
@@ -467,9 +470,138 @@ Most FFs are output registers (`m_ev_raw` alone is 512).
 
 ### Out of scope
 
-The order book (order_ref → price, side, shares, for E/X/D/U) is a separate decision before F7. The 64-B host
-descriptor is F6's (the ring writer fills it from `m_ev_*`). Filtering by symbol name: the host maps names to
+The order book (order_ref → price, side, shares, for E/X/D/U) is a separate decision before F7. The host ring
+entry is `event_packer`'s (below). Filtering by symbol name: the host maps names to
 locates (Stock Directory messages or Nasdaq's daily locate files) and writes the bitmap. Field content validation.
+
+## Host event ring: `event_packer`, `cdc_async_fifo` (`COMMIT=1`), `event_ring_writer`
+
+```
+itch_decoder (net_clk) --m_ev_*, m_pkt_*--> event_packer (net_clk) --1024-bit entries, commit / rollback-->
+  cdc_async_fifo COMMIT=1 (256 entries) --> event_ring_writer (host_clk) --m_axi_hmw_* (AXI4 write)--> host RAM ring
+```
+
+The host gets every output event in host memory, in order, whole per packet, without reading a register per event
+(legacy K9, M1). Entries of a packet become visible only when the packet is accepted (store and forward: at most one
+packet time, about 1.2 µs for 1472 B, on the host path; the order logic of F7 does not take this path). The system
+top `tb/system/rx_csr_top.sv` joins the whole chain.
+
+### Entry format
+
+128 bytes, little-endian, two 64-byte lines. The last byte of each line (63, 127) is a `ctrl` byte with the same
+value in both: bits 3:0 the format version (1), bit 7 the phase. The layout has one source,
+[`firmware/formats/event_desc.toml`](../../formats/event_desc.toml); `just gen` writes `gen/event_desc_pkg.sv` (pack
+functions), [`software/include/gen/event_desc.h`](../../../software/include/gen/event_desc.h) (C++ structs with
+`static_assert` on every offset) and the Python model `tb/model/desc_gen.py`, and checks the schema rules (fields
+inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Every entry has `seq`, `sof_ts`,
+`ring_idx`, `kind`, `flags` and `cfg_epoch`.
+
+| `kind` | When | Content |
+|--------|------|---------|
+| `ITCH` (1) | An ORDER or TRADE message, outcome OUT | `itch_decoder`'s normalized fields (0 where they do not apply), alpha fields in wire order |
+| `ITCH_RAW` (2) | An ADMIN, AUCTION, UNKNOWN or MALFORMED message, outcome OUT | The message bytes as received, 0 from `len` on |
+| `GAP` (3) | An accepted packet with `gap` > 0 | `seq` = first missing, `first_seq` = the packet's, `gap` |
+| `EOS` (4) | An accepted packet with status `EOS` | The packet's `seq` |
+
+`flags.overflow_before` (bit 0): packets were lost between the previous committed entry and this one.
+
+### Commit rules (`event_packer`)
+
+- Only OUT messages make entries; FILTERED and MASKED ones are counted in the ITCH counters only.
+- An accepted packet (`OK`, `HEARTBEAT`, `EOS`): its message entries, then a GAP entry if its gap is not 0, then an
+  EOS entry if its status is `EOS`, then `fifo_commit`. A heartbeat with a gap writes only its GAP entry. Any other
+  status: `fifo_rollback`, and nothing is counted (the `itch_stats` rule).
+- **Drop, one place:** a full ring stops the writer, the FIFO fills, and a write that finds it full (or in reset)
+  drops the packet: nothing more of it is written and it rolls back at its end. An accepted packet is then counted
+  whole (`RING_DROP_PKTS`, `RING_DROP_ENTRIES`, GAP and EOS included) and the next committed entry carries
+  `overflow_before`. A rejected packet that did not fit is no loss: not counted, no flag.
+- **Capacity:** a packet has at most `RING_MAX_PKT_ENTRIES` = 183 entries (1472-byte payload, 20-byte header, at
+  least 2 + 6 bytes per message: 181, plus GAP and EOS). The FIFO (256) holds one, so a packet always fits an empty
+  FIFO. With the writer stopped the path holds the ring plus 256 entries (one more while the FIFO is backlogged:
+  the writer keeps one entry in its register); `tc_ring_pressure` checks the count.
+
+### Ring protocol (`event_ring_writer`)
+
+- Entry `prod` goes to `base + (prod mod N) × 128` with `ring_idx` = `prod` and phase = `~bit(prod, log2 N)`: 1 on
+  the first pass, so memory that starts at 0 holds no valid entry (the NVMe pattern).
+- `prod` and `CONS_IDX` are 32-bit wrapping counts compared by difference: `prod − CONS_IDX = N` means full, and the
+  writer waits; nothing is dropped at the ring.
+- One AXI4 INCR burst per entry: `AWLEN` = 1024/`DATA_W` − 1, `AWSIZE` = log2(`DATA_W`/8), `WSTRB` all ones. AW and
+  W go on their own; at most `MAX_OUTSTANDING` (4) bursts wait for their answer. The base is 4 KiB aligned, so no
+  burst crosses 4 KiB.
+- A BRESP other than OKAY counts in `RING_BRESP_ERR` and sets `RING_STATUS.bresp_err`; the write is not retried.
+- Rate: one entry every 1024/`DATA_W` `host_clk` cycles while the ring has room (no gap in W), if the memory has
+  AWREADY and WREADY high and answers in time; `tc_rate_contract` checks it.
+
+### Host rules
+
+1. The region is 2^`RING_SIZE_LOG2` entries of 128 bytes, `RING_SIZE_LOG2` in 4..20, aligned to 4 KiB (a hugepage in
+   practice). Before **every** enable the host fills it with zeros and writes `CONS_IDX` = 0, then `RING_BASE_*`,
+   `RING_SIZE_LOG2` and `RING_CTRL.enable` = 1. A rising edge of `enable` with `CONS_IDX` ≠ 0 or the size out of
+   range is refused: `RING_STATUS.enable_err`, nothing is written; write 0, then 1 to retry. Base and size are taken
+   on the accepted edge and ignored until the next one.
+2. To read: poll the next slot; an entry is there when **both** `ctrl` bytes show the expected phase (PCIe does not
+   order the bytes of one write in host memory). Read the `ctrl` bytes with acquire, then the fields; `ring_idx` is a
+   further check.
+3. Write `CONS_IDX` now and then (a posted write, e.g. every N/4 entries), never past `PROD_IDX`.
+4. `overflow_before` on an entry: whole packets were lost before it, `RING_DROP_PKTS` and `RING_DROP_ENTRIES` count
+   them. A GAP entry is a gap of the feed, not a loss of the ring.
+5. `RING_WRITTEN` and `RING_BRESP_ERR` are live 64-bit counters in two registers: read HI, LO, HI and repeat if the
+   two HI differ. The snapshot counters need no such rule.
+6. A disable lets the bursts in flight finish and starts no new entry; the FIFO may fill meanwhile and drop.
+7. `cfg_epoch` of an entry is the FEED commit count of its packet's first beat (see FEED): the host keeps the same
+   count and so knows which configuration made each entry.
+
+### Identities
+
+In every snapshot `RING_COMMIT_ENTRIES` + `RING_DROP_ENTRIES` = `ITCH_OUT` + `MOLD_GAP_EVENTS` + `MOLD_EOS`. When the
+FIFO and the bursts in flight are empty, `RING_COMMIT_ENTRIES` = `RING_WRITTEN` + `RING_BRESP_ERR` and `PROD_IDX` =
+the entries written since the enable. The system tests check both.
+
+### Latency
+
+`event_packer`: `s_ev_valid` → `fifo_wr_en` 1 cycle; packet event → `fifo_commit` or `fifo_rollback` 1 cycle (2 with
+GAP and EOS); counters 3 cycles after the event. FIFO: see its commit latency
+([`../common/README.md`](../common/README.md)). `event_ring_writer`: FIFO pop → AWVALID and WVALID 2 cycles.
+
+### Reset
+
+`event_packer` and the FIFO's write side reset with `net_rst`, the writer with `host_rst` (AWVALID and WVALID go
+low; reset the memory side with it). The entries of a packet cut by a reset are gone; the counters start again from
+0.
+
+### Verification
+
+| What | Where |
+|------|-------|
+| Schema rules, hand-written hex entries of every kind, the C++ header compiled with `static_assert`s | `tb/selftest/test_event_desc.py`, `desc_hand.py`, `event_desc_check.cpp` |
+| Ring model: `expect_entries` (commit, rollback, GAP and EOS order, drop and `overflow_before`, epoch), `RingConsumer` (both phases, `ctrl`, `ring_idx`), pacings | `tb/model/ring.py`, `tb/selftest/test_ring_model.py` |
+| `COMMIT=1` FIFO at every clock profile: random commit and rollback, the reader sees only committed words, rollback at the full boundary, reset in the middle | `tb/unit/test_cdc_async_fifo_commit.py` |
+| `event_packer`: every class × outcome, every status, GAP and EOS order, whole-packet drop, busy as full, `overflow_before`, largest packet into an empty FIFO, reset mid-packet; exact cycles of every write and end; 10⁵ random messages with a coverage gate | `tb/unit/test_event_packer.py` |
+| `event_ring_writer` (`DATA_W` 64, 128, 256, 512): hand stamp, wrap and phase, full ring, indexes past 2³², enable rules and refusals, BRESP error, rate contract, outstanding limit, reset mid-burst; 10⁶ entries (`DATA_W` 512) and 10⁵ (64) lossless in order (`long`, K9) | `tb/unit/test_event_ring_writer.py` |
+| Assertions (`packer_props` 8, `ring_props` 9, `axi_wr_props` 8: 4 KiB, beat count, channel stability, B after AW, VALID low after reset), each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
+| System: every entry read back from host memory through the ring protocol against the chain model, byte by byte; the ring identity in every snapshot; bring-up, 10⁴-message replay, gap and recovery, ring pressure, refused enable and BRESP error; `tc_itch_random` with a 64-entry ring and a consumer that stops, runs, slows and pauses; real Nasdaq windows with no loss (M1) | `tb/system/test_rx_csr.py` |
+| 25 mutants of the ring path, all caught | `audit/f6-mutasyon/s9_mut.py` |
+
+### Synthesis (OOC, `just synth-ooc-on <part> event_path_ooc <profile> core.f synth_ooc_core.f impl`, placed and routed)
+
+Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer, `COMMIT=1` FIFO of 256 entries, writer; inputs
+registered).
+
+| Part | net / host clock | `DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
+|------|------------------|----------|-----|--------|----|------|----------|----------|------|
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 2211 | 3672 | 4653 | 0 | +0.855 (synthesis +2.058) | +0.011 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 2206 | 4740 | 4683 | 0 | +0.353 (synthesis +1.207) | +0.053 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 125 MHz | 128 | 2590 | 4740 | 4697 | 0 | +0.219 (synthesis +1.207) | +0.053 | PASS |
+
+The FIFO is LUTRAM (`ram_style = "distributed"`, about a fifth of the Artix-7's memory LUTs), no BRAM. The host
+side's worst path is the LUTRAM read into the writer's input register, so the writer stamps the word only after
+that register. `report_cdc`: CDC-6 and CDC-15 (the FIFO's data, constrained), no critical finding.
+
+### Out of scope
+
+An interrupt (`irq`) is F8's. Line-rate stress with IPG 0 and the clock ratio matrix of audit/04 §3.4 (scenarios 8
+and 9) are left for the platform phases.
 
 ## CSR block: `hft_csr`, `hft_csr_wrap`, `rx_stats`, `mold_stats`, `itch_stats`
 
@@ -498,13 +630,13 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 
 | Base | Block | Registers |
 |------|-------|-----------|
-| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0002`), `SCRATCH` (RW) |
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0003`), `SCRATCH` (RW) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
 | `0x0500` | RISK | reserved (F7) |
 | `0x0600` | ITCH | Shadow (carried by `FEED_COMMIT`): `ITCH_CTRL` (`class_en` bits 5:0, `class_filter` bits 13:8; bit = `itch_class_e` code). Snapshot: `ITCH_<class>` at `0x0640 + 8 × class`, then `ITCH_OUT`, `ITCH_FILTERED`, `ITCH_MASKED` at `0x0670`, `0x0678`, `0x0680` |
-| `0x0800` | RING | Alone in its 512-byte read window, for the read path's timing (audit/13 S8); registers in the RDL |
+| `0x0800` | RING | Host domain, no commit: `RING_CTRL` (`enable`), `RING_BASE_LO` (bits 31:12), `RING_BASE_HI`, `RING_SIZE_LOG2`, `CONS_IDX` (RW), `PROD_IDX` (RO, live), `RING_STATUS` (RO: `bresp_err` bit 0, `enable_err` bit 1), live counters `RING_WRITTEN` at `0x0820` and `RING_BRESP_ERR` at `0x0828`. Snapshot: `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS`, `RING_DROP_ENTRIES` from `0x0840`. Alone in its 512-byte read window (read path timing, audit/13 S8). See Host event ring |
 | `0x1000`+ | STRATEGY, TX | reserved (F7) |
 | `0x8000` | SYMBOL | Memory, 2048 × 32 bit, RW: bit i of word w = stock locate 32w + i (1 = subscribed) |
 
@@ -515,7 +647,11 @@ For the same reason the resync value (`RESYNC_SEQ`, written by software) and the
 
 `VERSION` is major.minor: a minor step only adds registers (software written for an older minor still works), a
 major step changes existing ones. The F3 FEED block made it `0x0005_0001`, the F4 ITCH block and SYMBOL
-`0x0005_0002`.
+`0x0005_0002`, the F6 RING block `0x0005_0003`.
+
+The generated read mux has one register stage per 512-byte window (`--rt-read-fanin`), and the logic in front of it
+grows with the registers in that window: RING at `0x0300`, in FEED's window, failed the Artix-7 125 MHz gate. A new
+block goes in a window with room; `test_read_windows_stay_small` allows at most 43 registers in one.
 
 ### Config commit (NET)
 
@@ -537,7 +673,7 @@ the first commit; the receiver drops every frame as `DISABLED` until then.
 ### Config commit and resync (FEED)
 
 The FEED registers (`FEED_CTRL`, `SESSION_*`, `RESYNC_SEQ_*`) and `ITCH_CTRL` are a shadow like NET, with their
-own commit buffer and `cdc_handshake` (168 bits). `FEED_COMMIT.commit` sends them; `moldudp64_rx` takes its `cfg_*`
+own commit buffer and `cdc_handshake` (176 bits, with `cfg_epoch`). `FEED_COMMIT.commit` sends them; `moldudp64_rx` takes its `cfg_*`
 at the first beat of each packet and carries `ITCH_CTRL` with the packet's messages (`cfg_msg_ctx`), so a packet
 sees the old or the new configuration as a whole, in both blocks. `FEED_STATUS.commit_busy`, coalescing and
 latency are as for NET. After reset `cfg_feed_en`, `cfg_session_check` and `cfg_class_en` are 0 until the first
@@ -553,6 +689,11 @@ commit; the feed counts every packet as `DISABLED` and the decoder every message
   packets or after the packet in progress (see its resync rules).
 
 Software that wants two separate resyncs waits for `commit_busy` = 0 between them.
+
+**`cfg_epoch`.** Every `FEED_COMMIT` write with `commit` or `resync` set adds 1 to an 8-bit count (wrapping), kept in
+the FEED configuration: it changes with the other FEED `cfg_*`, and `moldudp64_rx` carries it with each packet
+(`cfg_msg_ctx`) into every ring entry. Every write counts, also two in consecutive bus cycles and commits that
+coalesce; a write with byte 0 disabled does not (user decision, audit/13 S6). The host keeps the same count.
 
 ### Counters and snapshot (STATS)
 
@@ -593,12 +734,23 @@ pending counts (one per class and per outcome); the forwarded packet event adds 
 `HEARTBEAT` and `EOS` and drops them otherwise. A result in the same cycle as a packet event belongs to the next
 packet. A packet has fewer than 2¹⁶ messages (at most 181 in a 1472-byte payload); an assertion
 (`itch_stats_props`) checks the pending limit. The ITCH counters are in the same snapshot. Both counter banks count
-the packet events `itch_decoder` forwards (2 cycles after `moldudp64_rx`'s), so `FEED_DELAY` is 4. In every
+the packet events `itch_decoder` forwards (2 cycles after `moldudp64_rx`'s), so `FEED_DELAY` was 4 (F4; F6 makes it 6, below). In every
 snapshot:
 
 Σ `ITCH_<class>` = `MOLD_MSGS`, and `ITCH_OUT` + `ITCH_FILTERED` + `ITCH_MASKED` = Σ `ITCH_<class>`
 
 (the system test checks both in every snapshot).
+
+The ring counters `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS` and `RING_DROP_ENTRIES` (`event_packer`, net clock) are in
+the same snapshot. `event_packer` moves them 3 cycles after the forwarded packet event, so the wrapper delays the
+packet events and results by `STATS_DELAY` = 2 cycles before `mold_stats` and `itch_stats`, and `feed_*` by
+`FEED_DELAY` = 6: in every snapshot every bank and the feed state belong to the same packet events (user decision,
+audit/13 S6). Only the counter inputs are delayed, not the data path. In every snapshot:
+
+`RING_COMMIT_ENTRIES` + `RING_DROP_ENTRIES` = `ITCH_OUT` + `MOLD_GAP_EVENTS` + `MOLD_EOS`
+
+(every OUT message, GAP and EOS of an accepted packet is committed or dropped; the system tests check it in every
+snapshot).
 
 ### Symbol bitmap (SYMBOL)
 
@@ -619,7 +771,7 @@ least).
 
 A reset (power-on, and later a platform or PCIe reset; host and net reset together) returns the whole
 configuration to its reset values: `rx_en` = 0, `feed_en` = 0, `class_en` = 0, every shadow register to its
-reset value, and the SYMBOL bitmap to 0 (the sweep). Until software configures the device again, the receiver
+reset value, the ring off (`RING_CTRL.enable` = 0), and the SYMBOL bitmap to 0 (the sweep). Until software configures the device again, the receiver
 drops every frame (`DISABLED`), the feed counts every packet as `DISABLED`, and no ITCH message is output; a
 filtered class would drop its messages without an error, counted only in `ITCH_FILTERED`. The counters start
 again from 0.
@@ -633,8 +785,10 @@ after every reset, in this order:
 1. checks `ID` and `VERSION`;
 2. writes the NET shadow and `NET_COMMIT`;
 3. writes all 2048 `SYMBOL` words, the unsubscribed ones included (the first write waits until the sweep is done);
-4. writes the FEED shadow with `ITCH_CTRL` and `FEED_COMMIT`, with a resync if needed;
-5. waits for `commit_busy` = 0 after each commit.
+4. sets up the ring by the host rules of the Host event ring (zeroed region, base, size, `CONS_IDX` = 0, enable)
+   and resets its own consumer index and epoch count;
+5. writes the FEED shadow with `ITCH_CTRL` and `FEED_COMMIT`, with a resync if needed;
+6. waits for `commit_busy` = 0 after each commit.
 
 How the host learns about a reset (a platform reset notification, or a reset counter register) is F8's.
 
@@ -643,8 +797,8 @@ How the host learns about a reset (a platform reset notification, or a reset cou
 Two domains: `host_clk`/`host_rst` (bus, register block, commit buffers) and `net_clk`/`net_rst` (`cfg_*`,
 `rx_stats`, `mold_stats`, `itch_stats`, the symbol command port). Both resets come from one source through one
 `reset_sync` per domain and are asserted together (`cdc_handshake` contract). The only crossings are six
-`cdc_handshake` instances: NET config (442 bits, host → net), FEED config with `ITCH_CTRL` (168 bits, host → net),
-snapshot request (1 bit, host → net), snapshot (2370 bits, net → host: 11 + 16 + 9 counters, expected `seq`,
+`cdc_handshake` instances: NET config (442 bits, host → net), FEED config with `ITCH_CTRL` and `cfg_epoch` (176 bits, host → net),
+snapshot request (1 bit, host → net), snapshot (2562 bits, net → host: 11 + 16 + 9 + 3 counters, expected `seq`,
 `synced`, `eos`), symbol request (48 bits, host → net) and symbol response (32 bits, net → host).
 
 In simulation, `assert_arm` (bound to `hft_csr`) keeps every assertion off until the first reset has been seen
@@ -666,6 +820,7 @@ their own first reset; regblock's generated assertions are not.
 | Commit and snapshot at five clock/jitter profiles: exact latencies, atomicity monitor on every net edge, coalescing, snapshot = counters of its acceptance edge, K5 writes while snapshots land, LO/HI past 2³² | `tb/unit/test_hft_csr_wrap.py` (harness `tb/common/csr_env.py`) |
 | FEED at the same five profiles: commit latency and atomicity (also a shadow written while a commit waits, `ITCH_CTRL` included), resync requests merged and never lost (also one made while a commit waits), a held singlepulse gives one resync, reset during a commit, feed state aligned with the counters in every snapshot phase | `tb/unit/test_hft_csr_wrap.py` (`tc_feed_*`, `tc_itch_ctrl_feed_commit`, `tc_snapshot_feed_aligned`) |
 | SYMBOL at the same five profiles, against a model of the decoder's command port with backpressure: every access reaches the port once, in order, unchanged; exact latencies; BRESP after the write is in effect; waiting during the sweep; resets while a command waits and in flight (10 each) | `tb/unit/test_hft_csr_wrap.py` (`tc_sym_*`) |
+| RING (F6): every register through the bus, `PROD_IDX`, status and live counters following their inputs; the ring counters aligned with the ITCH and MOLD counters at every cycle around a packet event; `cfg_epoch` against hand-written counts (consecutive writes, coalesced commits, a held pulse, a write of 0, reset) | `tb/unit/test_hft_csr_wrap.py` |
 | System: `eth_ip_udp_rx` + `moldudp64_rx` + `itch_decoder` + `hft_csr_wrap`, each frame against the F2 model, each payload against the MoldUDP64 model and each message against the ITCH model under the configuration it used; 2000 random frames with random commits and snapshots, 2000 feed frames with resyncs and the accounting identity, 2000 ITCH frames with bitmap and `ITCH_CTRL` changes and the ITCH identities | `tb/system/test_rx_csr.py` |
 
 ### Synthesis (`just synth-csr`, OOC place & route)
@@ -675,15 +830,17 @@ gates are placed and routed out of context (no board or pins); the table also gi
 
 | Part | net / host clock | Flow | LUT | FF | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|------|-----|----|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 3428 | 10699 | +0.566 (synthesis +1.858) | +0.023 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 3426 | 10697 | +0.154 (synthesis +0.422) | +0.090 | PASS |
-| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 3428 | 10697 | −2.843 | +0.164 | information only |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 3641 | 11838 | +0.767 (synthesis +1.607) | +0.042 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 3639 | 11836 | +0.129 (synthesis +0.422) | +0.090 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 3644 | 11836 | −3.532 | +0.164 | information only |
 
 F5 alone was 1329 LUT, 4349 FF (Artix-7 margin +0.324 ns); the F3 FEED block made it 2460 / 8405, the F4 ITCH block,
-SYMBOL path and 2370-bit snapshot 3426 / 10697. The Artix-7 host read path is the limit (the SYMBOL read mux did not
-change it); regblock `--rt-read-response` is the next step if it fails.
+SYMBOL path and 2370-bit snapshot 3426 / 10697, the F6 RING block, ring counters and the counter alignment 3639 /
+11836. The Artix-7 host read path is the limit: RING in FEED's read window failed it by 0.234 ns, alone in its own
+window it passes (above, Map). regblock `--rt-read-response` does not help this path (it ends before the read mux's
+register).
 
 `report_cdc`: CDC-3 (synchronizers, 12) and CDC-15 (handshake data captured with an enable, constrained by
-`cdc.tcl`, 3060 bits), no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
+`cdc.tcl`, 3260 bits), no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
 user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
 read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.

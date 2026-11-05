@@ -29,7 +29,7 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, CSR block and counters; DMA engine, book and rules planned |
+| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), CSR block and counters; book and rules planned |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
@@ -110,6 +110,20 @@ for the RTL rules.
     README.
   - Placed and routed out of context at 156.25 MHz on Artix-7 and Kintex UltraScale+.
   - Checked on real Nasdaq data as well (next section).
+- **F6, host event ring:** `event_packer` and `event_ring_writer` in
+  [`firmware/rtl/core/`](firmware/rtl/core/README.md#host-event-ring-event_packer-cdc_async_fifo-commit1-event_ring_writer).
+  - Every output message, and a GAP or EOS entry where the feed has one, becomes a 128-byte entry in a host memory
+    ring, written by an AXI4 master in one burst per entry. A packet's entries arrive whole or not at all: a packet
+    the feed rejects writes nothing (legacy: events read from one register and overwritten, K9; MMIO polling, M1).
+  - The host polls a phase bit in both 64-byte lines of an entry and hands back slots through `CONS_IDX`. A full
+    ring makes the writer wait; a loss happens only when the commit FIFO is full too, of whole packets, counted and
+    flagged on the next entry. The host's rules are in the core README.
+  - The entry layout has one source (a TOML schema) that generates the SV package, the C++ header and the Python
+    model. The ring counters sit in the same snapshot as the feed and ITCH counters, with one more identity.
+  - Every entry is read back from host memory and compared byte by byte with a pure-Python model: 10⁶ entries in
+    order with no loss at the writer, 10⁵ random messages at the packer, and in the system test bring-up, replay,
+    gap recovery, ring pressure and real Nasdaq windows. 25 mutants of the path, all caught.
+  - Placed and routed out of context on Artix-7 and Kintex UltraScale+, the register block included.
 
 ## Real-data check
 
@@ -123,7 +137,7 @@ never cached or uploaded.
 
 | Source (first 128 MiB) | Messages | Until | Types | Model | `itch_decoder` | System test |
 |---|---|---|---|---|---|---|
-| 2019-12-30 | 10 403 622 | 09:32:30 | 17 | pass | every message, pass | 2100 packets (79 816 messages) at the 09:30 open, pass |
+| 2019-12-30 | 10 403 622 | 09:32:30 | 17 | pass | every message, pass | 2100 packets (79 816 messages) at the 09:30 open, 22 629 ring entries, pass |
 | 2025-12-08 | 10 916 110 | 07:10:27 | 13 | pass | every message, pass | 2100 packets (95 301 messages) at the 04:00 pre-market open, pass |
 
 - **Model** (`just itch-real`, every push): every message is a known type of its specification length; timestamps
@@ -135,8 +149,8 @@ never cached or uploaded.
 - **RTL** (`just itch-real-rtl`, the manual `itch-real-rtl` workflow, once per phase): `itch_decoder` takes every
   message of each range at line rate in its real packets, with the symbol filter on and the host subscribing to
   symbols as their Stock Directory messages pass; every result and event is checked against the model. The system
-  test sends windows of each range through the receiver, `moldudp64_rx` and `itch_decoder` and checks every
-  counter in the snapshot.
+  test sends windows of each range through the receiver, `moldudp64_rx`, `itch_decoder` and the host ring, checks
+  every counter in the snapshot and reads every ring entry back from host memory: none lost.
 - Not seen in these ranges: broken trade (B), LULD (J), retail interest (N), DLCR (O), MWCB decline (W) and
   operational halt (h). The synthetic tests cover them.
 
