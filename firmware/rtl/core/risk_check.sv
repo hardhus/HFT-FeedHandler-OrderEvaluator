@@ -273,15 +273,40 @@ module risk_check
   logic qty_gt_q;  // = o3_q.qty > max_qty_q
   logic notional_gt_q;  // = qty * price of the order in stage 3 > max_notional_q
 
-  logic [32:0] tok_sum;
+  logic [31:0] tok_sum;  // mod 2^32: a sum past it is above burst (sat1)
   logic [31:0] tokens_eff;
   logic rate_ok;
   logic full, cancel, cancel_kill;
-  risk_reason_e reason;
-  logic         accept;
+  risk_reason_e        reason;
+  logic                accept;
 
-  assign tok_sum = 33'(tokens_q) + (tick_q ? 33'(rate_refill_q) : 33'd0);
-  assign tokens_eff = tok_sum > 33'(rate_burst_q) ? rate_burst_q : tok_sum[31:0];
+  // Token bucket, per case in parallel (timing, S5): tokens_eff = the refilled (tick) or unchanged count,
+  // saturated at burst. tokens + refill > burst is compared as tokens > burst - refill (room_q, set with the
+  // limits), and each case's value minus one (an accept) is formed beside it, so accept only selects.
+  logic signed  [33:0] room_q;  // burst - refill
+  logic [31:0] burst_m1_q, refill_m1_q;  // burst - 1, refill - 1 (mod 2^32)
+  logic sat1, sat0;  // with a tick, without one: the count is above burst
+  logic [31:0] tok_sum_m1, tok_m1, tokens_n;
+  logic eff_nz, eff_gt1;  // tokens_eff != 0, > 1
+  assign tok_sum    = tokens_q + rate_refill_q;
+  assign tok_sum_m1 = tokens_q + refill_m1_q;
+  assign tok_m1     = tokens_q - 32'd1;
+  assign sat1       = $signed({2'b00, tokens_q}) > room_q;
+  assign sat0       = tokens_q > rate_burst_q;
+  always_comb begin
+    if (tick_q ? sat1 : sat0) begin
+      tokens_eff = rate_burst_q;
+      tokens_n   = accept ? burst_m1_q : rate_burst_q;
+    end else if (tick_q) begin
+      tokens_eff = tok_sum;
+      tokens_n   = accept ? tok_sum_m1 : tok_sum;
+    end else begin
+      tokens_eff = tokens_q;
+      tokens_n   = accept ? tok_m1 : tokens_q;
+    end
+    eff_nz  = |tokens_eff;
+    eff_gt1 = |tokens_eff[31:1];
+  end
   // tokens_eff != 0, from flags: the bucket can hold a token and has one, or gets one now
   assign rate_ok = rate_burst_q != '0 && (tok_nz_q || (tick_q && rate_refill_q != '0));
   assign full        = live_q == QP'(QD);  // held + live <= QD always (risk_props), so QM slots never run out
@@ -432,6 +457,9 @@ module risk_check
       rate_refill_q  <= cfg_rate_refill;
       rate_period_q  <= cfg_rate_period;
       rate_burst_q   <= cfg_rate_burst;
+      room_q         <= $signed({2'b00, cfg_rate_burst}) - $signed({2'b00, cfg_rate_refill});
+      burst_m1_q     <= cfg_rate_burst - 32'd1;
+      refill_m1_q    <= cfg_rate_refill - 32'd1;
     end
     if (rst) begin
       m_rej_valid        <= 1'b0;
@@ -441,6 +469,9 @@ module risk_check
       rate_refill_q      <= '0;
       rate_period_q      <= '0;
       rate_burst_q       <= '0;
+      room_q             <= '0;
+      burst_m1_q         <= '1;
+      refill_m1_q        <= '1;
       budget_q           <= '0;
       tokens_q           <= '0;
       pc_q               <= '0;
@@ -465,7 +496,7 @@ module risk_check
         tokens_q <= cfg_rate_burst;
         pc_q     <= '0;
       end else begin
-        tokens_q <= tokens_eff - 32'(accept);
+        tokens_q <= tokens_n;
         pc_q     <= (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
       end
 
@@ -505,9 +536,9 @@ module risk_check
       refs_zero_q   <= 1'b0;
     end else begin
       // an accept leaves tokens_eff - 1; it needs tokens_eff != 0
-      tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? tokens_eff > 32'd1 : tokens_eff != '0;
+      tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? eff_gt1 : eff_nz;
       budget_zero_q <= accept ? budget1 == '0 : budget0 == '0;
-      refs_zero_q <= accept ? refs_o : refs_z;  // an accept is never in a cancel's cycle
+      refs_zero_q   <= accept ? refs_o : refs_z;  // an accept is never in a cancel's cycle
     end
   end
 
