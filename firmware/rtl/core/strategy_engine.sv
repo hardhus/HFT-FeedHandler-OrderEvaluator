@@ -155,7 +155,12 @@ module strategy_engine
           rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r] &&
           !ctl_kill && ctl_tx_en;
     end
-    fire = hit & (~hit + 1'b1);  // the lowest index
+    for (int unsigned r = 0; r < N; r++) begin  // the lowest index (no carry chain: timing, S5)
+      fire[r] = hit[r];
+      for (int unsigned k = 0; k < r; k++) begin
+        fire[r] = fire[r] && !hit[k];
+      end
+    end
 
     // The order of each rule, in parallel (the fired one is selected after the register).
     for (int unsigned r = 0; r < N; r++) begin
