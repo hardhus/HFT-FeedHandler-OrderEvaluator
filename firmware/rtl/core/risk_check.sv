@@ -272,10 +272,11 @@ module risk_check
   logic refs_zero_q;  // = no UserRefNum left: 2^32 - ref_next_q - live_q == 0
   logic qty_gt_q;  // = o3_q.qty > max_qty_q
   logic notional_gt_q;  // = qty * price of the order in stage 3 > max_notional_q
+  logic burst_nz_q, refill_nz_q;  // = rate_burst_q != 0, rate_refill_q != 0 (set with the limits)
 
   logic [31:0] tok_sum;  // mod 2^32: a sum past it is above burst (sat1)
   logic [31:0] tokens_eff;
-  logic rate_ok;
+  logic        rate_ok;
   logic full, cancel, cancel_kill;
   risk_reason_e        reason;
   logic                accept;
@@ -308,7 +309,7 @@ module risk_check
     eff_gt1 = |tokens_eff[31:1];
   end
   // tokens_eff != 0, from flags: the bucket can hold a token and has one, or gets one now
-  assign rate_ok = rate_burst_q != '0 && (tok_nz_q || (tick_q && rate_refill_q != '0));
+  assign rate_ok = burst_nz_q && (tok_nz_q || (tick_q && refill_nz_q));
   assign full        = live_q == QP'(QD);  // held + live <= QD always (risk_props), so QM slots never run out
   assign cancel_kill = ctl_kill && !kill_d_q;
   assign cancel = cancel_kill || (!ctl_tx_en && tx_en_d_q);
@@ -348,6 +349,15 @@ module risk_check
   assign budget0  = bsum0[32] ? 32'hFFFF_FFFF : bsum0[31:0];
   assign budget1  = bsum1[32] ? 32'hFFFF_FFFF : bsum1[31:0];
   assign budget_n = accept ? budget1 : budget0;
+  // budget_zero_q next, without the adders (timing, S5): budget0 == 0 iff bsum0 == 0, budget1 == 0 iff bsum0 == 1,
+  // and bsum0 == 0 / 1 are read off the operands (a 33-bit sum of two 32-bit values does not wrap). An accept
+  // needs budget_q != 0, so with one bsum0 == 1 iff budget_q == 1 and nothing is added.
+  logic bq0, bq1, am0, bz0, bz1;
+  assign bq0 = budget_q == 32'd0;
+  assign bq1 = budget_q == 32'd1;
+  assign am0 = cmd_budget_amount == 32'd0;
+  assign bz0 = cmd_budget_add ? bq0 && am0 : bq0;
+  assign bz1 = bq1 && (!cmd_budget_add || am0);
 
   // Next-state values for the flags (as the state registers below take them).
   logic [31:0] max_qty_n, rate_period_n, pc_n;
@@ -457,6 +467,8 @@ module risk_check
       rate_refill_q  <= cfg_rate_refill;
       rate_period_q  <= cfg_rate_period;
       rate_burst_q   <= cfg_rate_burst;
+      burst_nz_q     <= cfg_rate_burst != '0;
+      refill_nz_q    <= cfg_rate_refill != '0;
       room_q         <= $signed({2'b00, cfg_rate_burst}) - $signed({2'b00, cfg_rate_refill});
       burst_m1_q     <= cfg_rate_burst - 32'd1;
       refill_m1_q    <= cfg_rate_refill - 32'd1;
@@ -469,6 +481,8 @@ module risk_check
       rate_refill_q      <= '0;
       rate_period_q      <= '0;
       rate_burst_q       <= '0;
+      burst_nz_q         <= 1'b0;
+      refill_nz_q        <= 1'b0;
       room_q             <= '0;
       burst_m1_q         <= '1;
       refill_m1_q        <= '1;
@@ -537,7 +551,7 @@ module risk_check
     end else begin
       // an accept leaves tokens_eff - 1; it needs tokens_eff != 0
       tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? eff_gt1 : eff_nz;
-      budget_zero_q <= accept ? budget1 == '0 : budget0 == '0;
+      budget_zero_q <= accept ? bz1 : bz0;
       refs_zero_q   <= accept ? refs_o : refs_z;  // an accept is never in a cancel's cycle
     end
   end

@@ -71,7 +71,7 @@ BINS = [
     "cancel_tx_off", "cancel_both", "drain_preempted", "host_paused_by_drain", "handover_on_cancel", "userref_ok",
     "userref_ignored_live", "userref_ignored_queue", "userref_ignored_zero", "refs_exhausted",
     "lookup_same_cycle_write", "invalid_host_clordid", "kill_masks_invalid", "second_cancel_while_draining",
-    "accept_while_draining", "rej_dropped", "accept_last_credit",
+    "accept_while_draining", "rej_dropped", "accept_last_credit", "last_budget_add_zero", "last_budget_add",
 ]  # fmt: skip
 
 
@@ -183,6 +183,7 @@ class Env:
 
         # 3. the decision
         rej = None
+        spent_last = False  # an accept spends the last budget unit
         if s in self.pipe:
             o, allowed = self.pipe.pop(s)
             assert queued_before + held_before <= QD, "held + live above 8"
@@ -194,6 +195,7 @@ class Env:
                     self.hit("accept_while_draining")
                 if r.credits == 1:
                     self.hit("accept_last_credit")
+                spent_last = r.budget == 1
                 r.decide(o, s, tx, allowed)
                 self.hit("accept_hw" if o.source == Source.RULE else "accept_host")
             else:
@@ -226,6 +228,8 @@ class Env:
             d.cmd_budget_amount.value = budget_add
             if r.budget + budget_add > BUDGET_MAX:
                 self.hit("budget_saturate")
+            if spent_last:
+                self.hit("last_budget_add_zero" if budget_add == 0 else "last_budget_add")
             r.budget_add(budget_add)
         if userref is not None:
             d.cmd_userref_wr.value = 1
@@ -700,7 +704,7 @@ async def tc_random_golden(dut):
         elif x < 0.012:
             kw["limits"] = random_limits()
         elif x < 0.02:
-            kw["budget_add"] = random.choice((1, 10, 1000, BUDGET_MAX))
+            kw["budget_add"] = random.choice((0, 1, 10, 1000, BUDGET_MAX))
         elif x < 0.024:
             kw["userref"] = random.choice((0, 1, 1000, USER_REF_MAX - 2))
         elif x < 0.03:
@@ -722,6 +726,14 @@ async def every_bin(e: Env) -> None:
     await e.open_path(limits=lim, budget=0)
     await e.step(hw_order=hw(qty=10, price=1000))  # reason_BUDGET (notional 10,000 passes)
     await e.idle(3)
+    for add in (0, 5):  # the last unit spent with an add in the decision's step (taken at s, decided at s + 3)
+        await e.step(budget_add=1)
+        await e.idle(4)  # a token
+        await e.step(hw_order=hw(qty=10, price=1000))
+        await e.idle(2)
+        await e.step(budget_add=add)  # last_budget_add_zero (0 left), last_budget_add (5 left)
+        await e.step(hw_order=hw(qty=10, price=1000))  # with 0 left: reason_BUDGET; with 5: no budget reject
+        await e.idle(3)
     await e.step(userref=9)  # userref_ignored_live
     await e.step(budget_add=BUDGET_MAX)
     await e.step(budget_add=7)  # budget_saturate

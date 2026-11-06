@@ -23,8 +23,8 @@ module risk_props #(
     input logic m_tx_valid,
     input logic [32:0] ref_next,
     input logic [CW-1:0] credits,
-    input logic [5:0] flags,  // risk_check's precomputed decision predicates
-    input logic [5:0] defs,  // their definitions, from the state (defs[5] without the commit cycle)
+    input logic [7:0] flags,  // risk_check's precomputed decision predicates
+    input logic [7:0] defs,  // their definitions, from the state (defs[5] without the commit cycle)
     input logic lim_wr,  // cfg_lim_wr or rst: the next cycle has no refill tick
     input logic [63:0] prod2,  // qty * price one stage before the decision
     input logic [63:0] max_notional
@@ -115,7 +115,7 @@ module risk_props #(
 
   a_flags :
   assert property (@(posedge clk) disable iff (rst || !armed)
-      flags == {defs[5] && !lim_wr_d, defs[4:1], prod_d > max_notional})
+      flags == {defs[7:6], defs[5] && !lim_wr_d, defs[4:1], prod_d > max_notional})
   else begin
     $error("risk_props: a precomputed decision flag differs from its definition");
   end

@@ -196,8 +196,12 @@ bind risk_check risk_props #(
     .m_tx_valid(m_tx_valid),
     .ref_next(ref_next_q),
     .credits(credits_q),
-    .flags({tick_q, tok_nz_q, budget_zero_q, refs_zero_q, qty_gt_q, notional_gt_q}),
+    .flags({
+      burst_nz_q, refill_nz_q, tick_q, tok_nz_q, budget_zero_q, refs_zero_q, qty_gt_q, notional_gt_q
+    }),
     .defs({
+      rate_burst_q != '0,
+      rate_refill_q != '0,
       rate_period_q != '0 && pc_q == '0,
       tokens_q != '0,
       budget_q == '0,
