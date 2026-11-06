@@ -59,6 +59,7 @@ set port_clock {
   {^dst_}                              dst_clk
   {^(s_axis_|m_axis_|q$|rst_out$)}     clk
   {^(cfg_|ts_|stat_|cnt_|[sm]_udp_|[sm]_msg_|[sm]_pkt_|[sm]_ev_|m_res_|sym_|mpkt_|mres_|feed_)} {clk net_clk}
+  {^(ctl_|cmd_|st_|ev_|ring_|[sm]_host_|m_rej_|m_sent_)} {clk net_clk}
   {^(s_axil_|host_|m_axi_)}           host_clk
   {^net_}                             net_clk
   {^rst$}                              {wr_clk clk}
@@ -189,6 +190,16 @@ set rams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PR
 set brams [llength [get_cells -quiet -hier -filter {IS_PRIMITIVE && REF_NAME =~ RAMB*}]]
 set timing [expr {$impl ? "WNS=$wns WHS=$whs (routed) SYNTH_WNS=$synth_wns" : "WNS=$wns WHS=$whs"}]
 puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams $timing CDC=[join $cdc_summary ,]"
+# Worst register-to-register setup slack ending in each top-level block (report only: one run shows every block
+# that misses, not just the worst path).
+foreach blk [lsort [get_cells -quiet -filter {!IS_PRIMITIVE}]] {
+  set ends [get_cells -quiet -hier -filter "NAME =~ $blk/* && IS_SEQUENTIAL"]
+  if {![llength $ends]} continue
+  set p [get_timing_paths -quiet -max_paths 1 -setup -from [all_registers -clock_pins] -to $ends]
+  if {[llength $p]} {
+    puts "HFT_SLACK: $tag $blk WNS=[get_property SLACK $p] LEVELS=[get_property LOGIC_LEVELS $p] FROM=[get_property STARTPOINT_PIN $p] TO=[get_property ENDPOINT_PIN $p]"
+  }
+}
 if {[llength $fail]} {
   puts "HFT_SYNTH_RESULT: FAIL ($tag) [join $fail {; }] -> $out"
   exit 1
