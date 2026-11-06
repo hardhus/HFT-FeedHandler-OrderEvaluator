@@ -131,6 +131,34 @@ def unwrap_soupbin(pkt: bytes) -> bytes:
     return pkt[SOUP_LEN:]
 
 
+DISPLAYS = b"YNA"  # decision 26: the safe set the core accepts
+CAPACITIES = b"APRO"
+ISES = b"N"  # no Intermarket Sweep Orders: the core never sweeps other venues (Reg NMS 600(b)(30), 611(c))
+CROSS_TYPES = b"N"  # continuous market
+
+
+def ip_checksum_ok(hdr: bytes) -> bool:
+    """The IPv4 header's ones' complement sum (checksum field included) is 0xFFFF."""
+    total = sum(int.from_bytes(hdr[i : i + 2], "big") for i in range(0, len(hdr), 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return total == 0xFFFF
+
+
+def tx_config_errors(cfg: TxConfig) -> list[str]:
+    """Why TX_COMMIT refuses cfg (decision 26); empty: it is taken. Every check is on the bytes."""
+    t = cfg.template
+    checks = {
+        "display": cfg.display in DISPLAYS, "capacity": cfg.capacity in CAPACITIES, "ise": cfg.ise in ISES,
+        "cross_type": cfg.cross_type in CROSS_TYPES, "length": len(t) == TEMPLATE_LEN,
+        "ethertype": t[12:14] == bytes.fromhex("0800"), "ver_ihl": t[14] == 0x45,
+        "ip_len": int.from_bytes(t[16:18], "big") == TEMPLATE_LEN - 14 + SOUP_LEN + OUCH_LEN,
+        "flags_frag": t[20:22] == bytes.fromhex("4000"), "proto": t[23] == 17, "ip_csum": ip_checksum_ok(t[14:34]),
+        "udp_len": int.from_bytes(t[38:40], "big") == 8 + SOUP_LEN + OUCH_LEN, "udp_csum": t[40:42] == bytes(2),
+    }  # fmt: skip
+    return [k for k, ok in checks.items() if not ok]
+
+
 def template(**udp: str | int) -> bytes:
     """A valid header template, as a host writes it (net.udp_frame arguments)."""
     return net.udp_frame(bytes(SOUP_LEN + OUCH_LEN), **udp)[:TEMPLATE_LEN]

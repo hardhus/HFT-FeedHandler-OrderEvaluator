@@ -27,6 +27,7 @@ from model.order import (
     hw_clordid,
     soupbin_u,
     template,
+    tx_config_errors,
     unwrap_soupbin,
     valid_order,
 )
@@ -279,3 +280,51 @@ def test_user_ref_next_is_written_only_while_killed_with_an_empty_queue():
     tx.tx_off()
     assert tx.write_user_ref_next(50, killed=True) and tx.user_ref_next == 50
     assert tx.write_user_ref_next(3, killed=True) and tx.user_ref_next == 3  # may go down while killed
+
+
+# ---- TX config (decision 26)
+
+
+def put(t: bytes, ofs: int, value: bytes) -> bytes:
+    return t[:ofs] + value + t[ofs + len(value) :]
+
+
+def refix(t: bytes) -> bytes:
+    """The template with its IPv4 checksum recomputed (so one field is wrong, not the checksum too)."""
+    hdr = t[14:24] + bytes(2) + t[26:34]
+    total = sum(int.from_bytes(hdr[i : i + 2], "big") for i in range(0, 20, 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return put(t, 24, (~total & 0xFFFF).to_bytes(2, "big"))
+
+
+T = CFG.template
+BAD_CONFIGS = {
+    "display": TxConfig(T, display=ord("Z")),
+    "capacity": TxConfig(T, capacity=ord("X")),
+    "ise": TxConfig(T, ise=ord("Y")),
+    "cross_type": TxConfig(T, cross_type=ord("O")),
+    "length": TxConfig(T[:41]),
+    "ethertype": TxConfig(put(T, 12, bytes.fromhex("86dd"))),
+    "ver_ihl": TxConfig(refix(put(T, 14, bytes([0x46])))),
+    "ip_len": TxConfig(refix(put(T, 16, (79).to_bytes(2, "big")))),
+    "flags_frag": TxConfig(refix(put(T, 20, bytes(2)))),
+    "proto": TxConfig(refix(put(T, 23, bytes([6])))),
+    "ip_csum": TxConfig(put(T, 25, bytes([T[25] ^ 1]))),
+    "udp_len": TxConfig(put(T, 38, (59).to_bytes(2, "big"))),
+    "udp_csum": TxConfig(put(T, 40, bytes([0x12, 0x34]))),
+}
+
+
+def test_a_valid_config_is_taken():
+    assert tx_config_errors(CFG) == []
+    for d, c in ((ord("N"), ord("A")), (ord("A"), ord("R")), (ord("Y"), ord("O"))):
+        assert tx_config_errors(TxConfig(T, display=d, capacity=c)) == []
+    other = template(dst_mac="0a:0b:0c:0d:0e:0f", src_ip="172.16.0.9", dst_ip="172.16.0.1", sport=1, dport=65535, ttl=1)
+    assert tx_config_errors(TxConfig(other)) == []
+
+
+@pytest.mark.parametrize("name", BAD_CONFIGS)
+def test_each_bad_field_alone_is_refused(name):
+    errors = tx_config_errors(BAD_CONFIGS[name])
+    assert errors == [name] if name != "length" else "length" in errors

@@ -197,3 +197,18 @@ bind risk_check risk_props #(
     .ref_next  (ref_next_q),
     .credits   (credits_q)
 );
+
+// TX output: generic AXI-Stream checks (stall stability, tkeep on tlast). No tuser.
+bind order_tx_builder axis_props #(
+    .DATA_W(64),
+    .USER_W(1)
+) u_m_axis_tx_props (
+    .clk   (clk),
+    .rst   (rst),
+    .tvalid(m_axis_tx_tvalid),
+    .tready(m_axis_tx_tready),
+    .tlast (m_axis_tx_tlast),
+    .tdata (m_axis_tx_tdata),
+    .tkeep (m_axis_tx_tkeep),
+    .tuser (1'b0)
+);
