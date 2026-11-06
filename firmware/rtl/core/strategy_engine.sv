@@ -107,6 +107,9 @@ module strategy_engine
   // ===================== Rules =====================
   strat_rule_t        rule_q     [N];
   logic        [31:0] thr_price_q[N];  // threshold + offset, valid when the rule has no error
+  // The price condition as one compare (timing, S5): price <= threshold is ~price >= ~threshold, so with
+  // m = all ones for "<=", the condition is (price ^ m) >= (threshold ^ m); threshold ^ m is set with the rule.
+  logic        [31:0] thr_cmp_q  [N];
   logic [N-1:0] err_q, armed_q, fired_q, doa_q;
   logic        kill_d_q;  // ctl_kill of the previous cycle  // doa: disarm on accept (decision 18)
 
@@ -148,8 +151,7 @@ module strategy_engine
           (s_ev_type == ITCH_T_TRADE && rule_q[r].msg_mask[2]);
       side_ok = (s_ev_side == OUCH_SIDE_BUY && rule_q[r].side_match[0]) ||
           (s_ev_side == OUCH_SIDE_SELL && rule_q[r].side_match[1]);
-      price_ok = rule_q[r].price_ge ? s_ev_price >= rule_q[r].price_threshold :
-          s_ev_price <= rule_q[r].price_threshold;
+      price_ok = (s_ev_price ^ {32{!rule_q[r].price_ge}}) >= thr_cmp_q[r];
       hit[r] = s_ev_valid && ev_decoded && type_ok && side_ok && price_ok &&
           s_ev_locate == rule_q[r].locate && (shares_hi || s_ev_shares[31:0] >= rule_q[r].min_shares) &&
           rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r] &&
@@ -201,6 +203,7 @@ module strategy_engine
     if (cfg_rule_wr) begin
       rule_q[cfg_rule_idx]      <= cfg_rule;
       thr_price_q[cfg_rule_idx] <= wr_sum[31:0];
+      thr_cmp_q[cfg_rule_idx]   <= cfg_rule.price_threshold ^ {32{!cfg_rule.price_ge}};
     end
     if (rst) begin
       err_q    <= '1;
