@@ -132,12 +132,15 @@ module strategy_engine
   assign fired_p    = s_pkt_valid ? '0 : fired_q;
   assign doa_p      = s_pkt_valid ? '0 : doa_q;
 
+  // shares (64-bit) against a 32-bit rule field: the upper half once for all rules, then 32-bit compares
+  logic shares_hi;
+  assign shares_hi = |s_ev_shares[63:32];
+
   logic [N-1:0] hit, fire;
-  order_t ord;
+  logic [7:0] c_side[N];  // each rule's order fields for this message, registered with fire (timing, S5)
+  logic [31:0] c_qty[N], c_price[N];
   always_comb begin
     logic type_ok, side_ok, price_ok;
-    logic [31:0] qty;
-    logic [ 7:0] side;
     hit = '0;
     for (int unsigned r = 0; r < N; r++) begin
       type_ok = (s_ev_type == ITCH_T_ADD_ORDER && rule_q[r].msg_mask[0]) ||
@@ -148,38 +151,27 @@ module strategy_engine
       price_ok = rule_q[r].price_ge ? s_ev_price >= rule_q[r].price_threshold :
           s_ev_price <= rule_q[r].price_threshold;
       hit[r] = s_ev_valid && ev_decoded && type_ok && side_ok && price_ok &&
-          s_ev_locate == rule_q[r].locate && s_ev_shares >= {32'd0, rule_q[r].min_shares} &&
+          s_ev_locate == rule_q[r].locate && (shares_hi || s_ev_shares[31:0] >= rule_q[r].min_shares) &&
           rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r] &&
           !ctl_kill && ctl_tx_en;
     end
-    fire       = hit & (~hit + 1'b1);  // the lowest index
+    fire = hit & (~hit + 1'b1);  // the lowest index
 
-    // The order of the fired rule: each rule's fields in parallel, then a one-hot OR.
-    ord        = '0;
-    ord.locate = s_ev_locate;
-    ord.stock  = s_ev_stock;
-    ord.seq    = s_ev_seq;
-    ord.sof_ts = s_ev_sof_ts;
-    ord.epoch  = s_ev_epoch;
+    // The order of each rule, in parallel (the fired one is selected after the register).
     for (int unsigned r = 0; r < N; r++) begin
-      qty = rule_q[r].qty;
-      if (rule_q[r].qty_min && s_ev_shares < {32'd0, rule_q[r].qty}) begin
-        qty = s_ev_shares[31:0];
+      c_qty[r] = rule_q[r].qty;
+      if (rule_q[r].qty_min && !shares_hi && s_ev_shares[31:0] < rule_q[r].qty) begin
+        c_qty[r] = s_ev_shares[31:0];
       end
       unique case (strat_action_e'(rule_q[r].action_side))
-        STRAT_ACT_BUY:  side = OUCH_SIDE_BUY;
-        STRAT_ACT_SELL: side = OUCH_SIDE_SELL;
+        STRAT_ACT_BUY:  c_side[r] = OUCH_SIDE_BUY;
+        STRAT_ACT_SELL: c_side[r] = OUCH_SIDE_SELL;
         default: begin  // OPPOSITE (3 never fires)
-          side = s_ev_side == OUCH_SIDE_BUY ? OUCH_SIDE_SELL : s_ev_side == OUCH_SIDE_SELL ? OUCH_SIDE_BUY : 8'h00;
+          c_side[r] = s_ev_side == OUCH_SIDE_BUY ? OUCH_SIDE_SELL : s_ev_side == OUCH_SIDE_SELL ? OUCH_SIDE_BUY :
+              8'h00;
         end
       endcase
-      if (fire[r]) begin
-        ord.rule  = ord.rule | STRAT_RULE_W'(r);
-        ord.side  = ord.side | side;
-        ord.qty   = ord.qty | qty;
-        ord.price = ord.price | (rule_q[r].price_threshold_mode ? thr_price_q[r] : s_ev_price);
-        ord.tif   = ord.tif | rule_q[r].tif;
-      end
+      c_price[r] = rule_q[r].price_threshold_mode ? thr_price_q[r] : s_ev_price;
     end
   end
 
@@ -227,13 +219,50 @@ module strategy_engine
 
   // ===================== Order queue (commit per packet) =====================
   logic fire_q, pkt_q, pkt_acc_q;
-  order_t ord_q;
-  order_t mem   [DEPTH];
+  order_t ord_q;  // the order fired in the previous cycle: a one-hot OR of the registered per-rule fields
+  order_t mem[DEPTH];
   logic [PTR_W-1:0] wr_ptr_q, commit_ptr_q, rd_ptr_q;
   logic [PTR_W-1:0] base, commit_n;
 
+  logic [N-1:0] fire_v_q;
+  logic [7:0] c_side_q[N], c_tif_q[N];
+  logic [31:0] c_qty_q[N], c_price_q[N];
+  logic [15:0] ev_locate_q;
+  logic [63:0] ev_stock_q, ev_seq_q, ev_sof_ts_q;
+  logic [CFG_EPOCH_W-1:0] ev_epoch_q;
   always_ff @(posedge clk) begin
-    ord_q <= ord;
+    fire_v_q  <= fire;
+    c_side_q  <= c_side;
+    c_qty_q   <= c_qty;
+    c_price_q <= c_price;
+    for (int unsigned r = 0; r < N; r++) begin
+      c_tif_q[r] <= rule_q[r].tif;
+    end
+    ev_locate_q <= s_ev_locate;
+    ev_stock_q  <= s_ev_stock;
+    ev_seq_q    <= s_ev_seq;
+    ev_sof_ts_q <= s_ev_sof_ts;
+    ev_epoch_q  <= s_ev_epoch;
+  end
+  always_comb begin
+    ord_q        = '0;
+    ord_q.locate = ev_locate_q;
+    ord_q.stock  = ev_stock_q;
+    ord_q.seq    = ev_seq_q;
+    ord_q.sof_ts = ev_sof_ts_q;
+    ord_q.epoch  = ev_epoch_q;
+    for (int unsigned r = 0; r < N; r++) begin
+      if (fire_v_q[r]) begin
+        ord_q.rule  = ord_q.rule | STRAT_RULE_W'(r);
+        ord_q.side  = ord_q.side | c_side_q[r];
+        ord_q.qty   = ord_q.qty | c_qty_q[r];
+        ord_q.price = ord_q.price | c_price_q[r];
+        ord_q.tif   = ord_q.tif | c_tif_q[r];
+      end
+    end
+  end
+
+  always_ff @(posedge clk) begin
     if (rst) begin
       fire_q    <= 1'b0;
       pkt_q     <= 1'b0;
