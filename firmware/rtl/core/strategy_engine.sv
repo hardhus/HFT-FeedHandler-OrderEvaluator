@@ -110,7 +110,11 @@ module strategy_engine
   // The price condition as one compare (timing, S5): price <= threshold is ~price >= ~threshold, so with
   // m = all ones for "<=", the condition is (price ^ m) >= (threshold ^ m); threshold ^ m is set with the rule.
   logic        [31:0] thr_cmp_q  [N];
-  logic [N-1:0] err_q, armed_q, fired_q, doa_q;
+  logic [N-1:0] err_q, armed_q;
+  // fired / doa (timing, S5): the registers take this cycle's state without the fire (fired_b_q, doa_b_q) and
+  // the hits (hit_q); the fire is formed from hit_q after them (fire_d), so fired = fired_b_q | fire_d and
+  // doa = doa_b_q | fire_d equal the state with the fire, one cycle on, as when the fire was registered.
+  logic [N-1:0] fired_b_q, doa_b_q, hit_q, fire_d, fired_e, doa_e;
   logic        kill_d_q;  // ctl_kill of the previous cycle  // doa: disarm on accept (decision 18)
 
   // Static error of the rule being written, and its threshold + offset.
@@ -124,22 +128,38 @@ module strategy_engine
          ($signed(wr_sum) < 34'sd1 || $signed(wr_sum) > $signed({2'b00, OUCH_PRICE_LIMIT_MAX})));
   end
 
+  // The lowest index of h (an explicit priority, no carry chain: timing, S5).
+  function automatic logic [N-1:0] lowest(input logic [N-1:0] h);
+    for (int unsigned r = 0; r < N; r++) begin
+      lowest[r] = h[r];
+      for (int unsigned k = 0; k < r; k++) begin
+        lowest[r] = lowest[r] && !h[k];
+      end
+    end
+  endfunction
+  assign fire_d  = lowest(hit_q);  // the previous cycle's fire
+  assign fired_e = fired_b_q | fire_d;
+  assign doa_e   = doa_b_q | fire_d;
+
   // ===================== Packet event, then the message =====================
   logic pkt_acc, ev_decoded;
   logic [N-1:0] pkt_off, armed_p, fired_p, doa_p;  // after this cycle's packet event
   logic [N-1:0] block, arm_set;  // this cycle's commands (decision 19)
   assign pkt_acc    = s_pkt_status inside {MOLD_OK, MOLD_HEARTBEAT, MOLD_EOS};
   assign ev_decoded = s_ev_class inside {ITCH_ORDER, ITCH_TRADE};
-  assign pkt_off    = (s_pkt_valid && pkt_acc) ? doa_q : '0;
+  assign pkt_off    = (s_pkt_valid && pkt_acc) ? doa_e : '0;
   assign armed_p    = armed_q & ~pkt_off;
-  assign fired_p    = s_pkt_valid ? '0 : fired_q;
-  assign doa_p      = s_pkt_valid ? '0 : doa_q;
+  assign fired_p    = s_pkt_valid ? '0 : fired_e;
+  assign doa_p      = s_pkt_valid ? '0 : doa_e;
 
   // shares (64-bit) against a 32-bit rule field: the upper half once for all rules, then 32-bit compares
   logic shares_hi;
   assign shares_hi = |s_ev_shares[63:32];
 
-  logic [N-1:0] hit, fire;
+  logic [N-1:0] hit;
+  /* verilator lint_off UNUSEDSIGNAL */  // this cycle's fire, for strategy_props; the registers take hit
+  logic [N-1:0] fire;
+  /* verilator lint_on UNUSEDSIGNAL */
   logic [7:0] c_side[N];  // each rule's order fields for this message, registered with fire (timing, S5)
   logic [31:0] c_qty[N], c_price[N];
   always_comb begin
@@ -157,12 +177,7 @@ module strategy_engine
           rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r] &&
           !ctl_kill && ctl_tx_en;
     end
-    for (int unsigned r = 0; r < N; r++) begin  // the lowest index (no carry chain: timing, S5)
-      fire[r] = hit[r];
-      for (int unsigned k = 0; k < r; k++) begin
-        fire[r] = fire[r] && !hit[k];
-      end
-    end
+    fire = lowest(hit);
 
     // The order of each rule, in parallel (the fired one is selected after the register).
     for (int unsigned r = 0; r < N; r++) begin
@@ -195,9 +210,9 @@ module strategy_engine
   assign arm_set = cmd_arm ? cmd_arm_mask : '0;
 
   // A tie goes to the disarming side; a fire of this cycle stays marked for the acceptance.
-  logic [N-1:0] armed_n, doa_n;
+  logic [N-1:0] armed_n, doa_n;  // doa_n: without this cycle's fire (it comes through hit_q)
   assign armed_n = (armed_p | arm_set) & ~(block | pkt_off);
-  assign doa_n   = (doa_p & ~(block | arm_set)) | fire;
+  assign doa_n   = doa_p & ~(block | arm_set);
 
   always_ff @(posedge clk) begin
     if (cfg_rule_wr) begin
@@ -206,19 +221,21 @@ module strategy_engine
       thr_cmp_q[cfg_rule_idx]   <= cfg_rule.price_threshold ^ {32{!cfg_rule.price_ge}};
     end
     if (rst) begin
-      err_q    <= '1;
-      armed_q  <= '0;
-      kill_d_q <= 1'b1;
-      fired_q  <= '0;
-      doa_q    <= '0;
+      err_q     <= '1;
+      armed_q   <= '0;
+      kill_d_q  <= 1'b1;
+      fired_b_q <= '0;
+      doa_b_q   <= '0;
+      hit_q     <= '0;
     end else begin
       if (cfg_rule_wr) begin
         err_q[cfg_rule_idx] <= wr_err;
       end
-      armed_q  <= armed_n;
-      kill_d_q <= ctl_kill;
-      fired_q  <= fired_p | fire;
-      doa_q    <= doa_n;
+      armed_q   <= armed_n;
+      kill_d_q  <= ctl_kill;
+      fired_b_q <= fired_p;
+      doa_b_q   <= doa_n;
+      hit_q     <= hit;
     end
   end
 
@@ -232,14 +249,12 @@ module strategy_engine
   logic [PTR_W-1:0] wr_ptr_q, commit_ptr_q, rd_ptr_q;
   logic [PTR_W-1:0] base, commit_n;
 
-  logic [N-1:0] fire_v_q;
   logic [7:0] c_side_q[N], c_tif_q[N];
   logic [31:0] c_qty_q[N], c_price_q[N];
   logic [15:0] ev_locate_q;
   logic [63:0] ev_stock_q, ev_seq_q, ev_sof_ts_q;
   logic [CFG_EPOCH_W-1:0] ev_epoch_q;
   always_ff @(posedge clk) begin
-    fire_v_q  <= fire;
     c_side_q  <= c_side;
     c_qty_q   <= c_qty;
     c_price_q <= c_price;
@@ -260,7 +275,7 @@ module strategy_engine
     ord_q.sof_ts = ev_sof_ts_q;
     ord_q.epoch  = ev_epoch_q;
     for (int unsigned r = 0; r < N; r++) begin
-      if (fire_v_q[r]) begin
+      if (fire_d[r]) begin
         ord_q.rule  = ord_q.rule | STRAT_RULE_W'(r);
         ord_q.side  = ord_q.side | c_side_q[r];
         ord_q.qty   = ord_q.qty | c_qty_q[r];
@@ -276,7 +291,7 @@ module strategy_engine
       pkt_q     <= 1'b0;
       pkt_acc_q <= 1'b0;
     end else begin
-      fire_q    <= |fire;
+      fire_q    <= |hit;  // = |fire
       pkt_q     <= s_pkt_valid;
       pkt_acc_q <= pkt_acc;
     end
