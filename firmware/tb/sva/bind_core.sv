@@ -182,20 +182,32 @@ bind risk_check risk_props #(
     .CREDITS(hft_pkg::RISK_RING_CREDITS),
     .CW     ($clog2(hft_pkg::RISK_RING_CREDITS + 1))
 ) u_risk_props (
-    .clk       (clk),
-    .rst       (rst),
-    .accept    (accept),
-    .ctl_kill  (ctl_kill),
-    .ctl_tx_en (ctl_tx_en),
-    .budget    (budget_q),
-    .tokens    (tokens_eff),
-    .handover  (handover),
-    .cancelled (cancelled),
-    .held      (held_q),
-    .live      (live_q),
+    .clk(clk),
+    .rst(rst),
+    .accept(accept),
+    .ctl_kill(ctl_kill),
+    .ctl_tx_en(ctl_tx_en),
+    .budget(budget_q),
+    .tokens(tokens_eff),
+    .handover(handover),
+    .cancelled(cancelled),
+    .held(held_q),
+    .live(live_q),
     .m_tx_valid(m_tx_valid),
-    .ref_next  (ref_next_q),
-    .credits   (credits_q)
+    .ref_next(ref_next_q),
+    .credits(credits_q),
+    .flags({tick_q, tok_nz_q, budget_zero_q, refs_zero_q, qty_gt_q, notional_gt_q}),
+    .defs({
+      rate_period_q != '0 && pc_q == '0,
+      tokens_q != '0,
+      budget_q == '0,
+      (33'h1_0000_0000 - ref_next_q - 33'(live_q)) == '0,
+      o3_q.qty > max_qty_q,
+      1'b0  // notional: risk_props compares prod2_q one cycle later
+    }),
+    .lim_wr(cfg_lim_wr || rst),
+    .prod2(prod2_q),
+    .max_notional(max_notional_q)
 );
 
 // TX output: generic AXI-Stream checks (stall stability, tkeep on tlast). No tuser.

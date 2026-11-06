@@ -9,20 +9,25 @@ module risk_props #(
     parameter int unsigned CREDITS = 16,
     parameter int unsigned CW      = 5
 ) (
-    input logic          clk,
-    input logic          rst,
-    input logic          accept,
-    input logic          ctl_kill,
-    input logic          ctl_tx_en,
-    input logic [  31:0] budget,
-    input logic [  31:0] tokens,
-    input logic          handover,
+    input logic clk,
+    input logic rst,
+    input logic accept,
+    input logic ctl_kill,
+    input logic ctl_tx_en,
+    input logic [31:0] budget,
+    input logic [31:0] tokens,
+    input logic handover,
     input logic [QP-1:0] cancelled,
     input logic [QP-1:0] held,
     input logic [QP-1:0] live,
-    input logic          m_tx_valid,
-    input logic [  32:0] ref_next,
-    input logic [CW-1:0] credits
+    input logic m_tx_valid,
+    input logic [32:0] ref_next,
+    input logic [CW-1:0] credits,
+    input logic [5:0] flags,  // risk_check's precomputed decision predicates
+    input logic [5:0] defs,  // their definitions, from the state (defs[5] without the commit cycle)
+    input logic lim_wr,  // cfg_lim_wr or rst: the next cycle has no refill tick
+    input logic [63:0] prod2,  // qty * price one stage before the decision
+    input logic [63:0] max_notional
 );
   // Sim-only: initial + always (not always_ff) on purpose.
   logic        armed;
@@ -99,5 +104,19 @@ module risk_props #(
   assert property (@(posedge clk) disable iff (rst || !armed) 32'(credits) <= CREDITS)
   else begin
     $error("risk_props: more ring credits than the packer's order queue");
+  end
+
+  logic        lim_wr_d;  // sim-only
+  logic [63:0] prod_d;  // the product of the order in the decision stage
+  always @(posedge clk) begin
+    lim_wr_d <= lim_wr;
+    prod_d   <= prod2;
+  end
+
+  a_flags :
+  assert property (@(posedge clk) disable iff (rst || !armed)
+      flags == {defs[5] && !lim_wr_d, defs[4:1], prod_d > max_notional})
+  else begin
+    $error("risk_props: a precomputed decision flag differs from its definition");
   end
 endmodule

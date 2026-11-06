@@ -1,5 +1,6 @@
 // risk_check: the single pre-trade gate for hardware and host orders, the TX queue and the UserRefNum counter
-// (audit/14 §2.5, P6, P7; decisions 5, 7, 9, 10, 12, 13, 15, 20, 21, 22, 24, 25).
+// (audit/14 §2.5, P6, P7; decisions 5, 7, 9, 10, 12, 13, 15, 20, 21, 22, 24, 25). Timing: the decision reads
+// flags registered one cycle ahead (S5); the behaviour is the same, cycle for cycle.
 // Clock domain : clk (net_clk)
 // Latency      : an order taken at clock edge k (s_hw_valid, or s_host_valid && s_host_ready) is decided in the
 //                cycle before edge k+3, with that cycle's ctl_kill and ctl_tx_en; after edge k+3 its RISK_REJECT
@@ -226,7 +227,7 @@ module risk_check
   logic v1_q, v2_q, v3_q;
   rorder_t o1_q, o2_q, o3_q;
   logic inv1_q, inv2_q, inv3_q, hit2_q, hit3_q;
-  logic [63:0] prod2_q, prod3_q;
+  logic [63:0] prod2_q;
 
   always_ff @(posedge clk) begin
     o1_q    <= in_ord;
@@ -238,7 +239,6 @@ module risk_check
     o3_q    <= o2_q;
     inv3_q  <= inv2_q;
     hit3_q  <= hit2_q;
-    prod3_q <= prod2_q;
     if (rst) begin
       v1_q <= 1'b0;
       v2_q <= 1'b0;
@@ -253,25 +253,37 @@ module risk_check
   // ===================== Stage 3: the decision =====================
   logic [31:0] max_qty_q, rate_refill_q, rate_period_q, rate_burst_q, budget_q, tokens_q, pc_q;
   logic [63:0] max_notional_q;
-  logic started_q, kill_d_q, tx_en_d_q;
+  logic kill_d_q, tx_en_d_q;
   logic [32:0] ref_next_q;  // 2^32: no number left
-  logic [QP-1:0] wr_q, rd_q;
+  logic [QP-1:0] wr_q;
+  (* max_fanout = 16 *) logic [QP-1:0] rd_q;  // the queue's read address drives every LUTRAM column (S5 timing)
   logic [QP-1:0] held_q;  // cancelled, not written out yet: the slots from rd on
   logic [QP-1:0] live_q;  // queued, not cancelled
   logic [CW-1:0] credits_q;
+  logic userref_ok;  // a TX_USERREF_NEXT write takes effect (decision 22)
 
-  logic          tick;
-  logic [  32:0] tok_sum;
-  logic [  31:0] tokens_eff;
-  logic [  32:0] refs_left;
+  // Predicates the decision reads, each registered from next-state values one cycle ahead (timing, S5): the
+  // decision is then a priority over flags. Where the decision's own accept changes the next state, both
+  // candidates are computed and accept only selects. Each flag equals its definition in every cycle
+  // (risk_props a_flags).
+  logic          tick_q;  // = rate_period_q != 0 && pc_q == 0, not in the cycle after a limits commit or reset
+  logic tok_nz_q;  // = tokens_q != 0
+  logic budget_zero_q;  // = budget_q == 0
+  logic refs_zero_q;  // = no UserRefNum left: 2^32 - ref_next_q - live_q == 0
+  logic qty_gt_q;  // = o3_q.qty > max_qty_q
+  logic notional_gt_q;  // = qty * price of the order in stage 3 > max_notional_q
+
+  logic [32:0] tok_sum;
+  logic [31:0] tokens_eff;
+  logic rate_ok;
   logic full, cancel, cancel_kill;
   risk_reason_e reason;
   logic         accept;
 
-  assign tick = started_q && rate_period_q != '0 && pc_q == '0;
-  assign tok_sum = 33'(tokens_q) + (tick ? 33'(rate_refill_q) : 33'd0);
+  assign tok_sum = 33'(tokens_q) + (tick_q ? 33'(rate_refill_q) : 33'd0);
   assign tokens_eff = tok_sum > 33'(rate_burst_q) ? rate_burst_q : tok_sum[31:0];
-  assign refs_left = 33'h1_0000_0000 - ref_next_q - 33'(live_q);
+  // tokens_eff != 0, from flags: the bucket can hold a token and has one, or gets one now
+  assign rate_ok = rate_burst_q != '0 && (tok_nz_q || (tick_q && rate_refill_q != '0));
   assign full        = live_q == QP'(QD);  // held + live <= QD always (risk_props), so QM slots never run out
   assign cancel_kill = ctl_kill && !kill_d_q;
   assign cancel = cancel_kill || (!ctl_tx_en && tx_en_d_q);
@@ -281,17 +293,17 @@ module risk_check
       reason = RISK_KILL;
     end else if (!ctl_tx_en) begin
       reason = RISK_TX_OFF;
-    end else if (inv3_q || refs_left == '0) begin
+    end else if (inv3_q || refs_zero_q) begin
       reason = RISK_INVALID;
     end else if (!hit3_q) begin
       reason = RISK_LOCATE;
-    end else if (o3_q.qty > max_qty_q) begin
+    end else if (qty_gt_q) begin
       reason = RISK_QTY;
-    end else if (prod3_q > max_notional_q) begin
+    end else if (notional_gt_q) begin
       reason = RISK_NOTIONAL;
-    end else if (budget_q == '0) begin
+    end else if (budget_zero_q) begin
       reason = RISK_BUDGET;
-    end else if (tokens_eff == '0) begin
+    end else if (!rate_ok) begin
       reason = RISK_RATE;
     end else if (full) begin
       reason = RISK_TX_BUSY;
@@ -303,11 +315,55 @@ module risk_check
   end
   assign accept = v3_q && reason == RISK_NONE;
 
-  // Budget: spend, then add, saturating at 2^32 - 1.
-  logic [32:0] budget_sum;
-  logic [31:0] budget_n;
-  assign budget_sum = 33'(budget_q) - 33'(accept) + (cmd_budget_add ? 33'(cmd_budget_amount) : 33'd0);
-  assign budget_n = budget_sum[32] ? 32'hFFFF_FFFF : budget_sum[31:0];
+  // Budget: spend, then add, saturating at 2^32 - 1. Both candidates (no accept, accept), then accept selects.
+  logic [32:0] bsum0, bsum1;
+  logic [31:0] budget0, budget1, budget_n;
+  assign bsum0    = 33'(budget_q) + (cmd_budget_add ? 33'(cmd_budget_amount) : 33'd0);
+  assign bsum1    = bsum0 - 33'd1;  // accept: budget_q > 0, so no underflow
+  assign budget0  = bsum0[32] ? 32'hFFFF_FFFF : bsum0[31:0];
+  assign budget1  = bsum1[32] ? 32'hFFFF_FFFF : bsum1[31:0];
+  assign budget_n = accept ? budget1 : budget0;
+
+  // Next-state values for the flags (as the state registers below take them).
+  logic [31:0] max_qty_n, rate_period_n, pc_n;
+  logic [63:0] max_notional_n;
+  logic        started_n;
+  assign max_qty_n = rst ? '0 : cfg_lim_wr ? cfg_max_qty : max_qty_q;
+  assign max_notional_n = rst ? '0 : cfg_lim_wr ? cfg_max_notional : max_notional_q;
+  assign rate_period_n = rst ? '0 : cfg_lim_wr ? cfg_rate_period : rate_period_q;
+  assign started_n = !rst && !cfg_lim_wr;
+  assign pc_n = (rst || cfg_lim_wr) ? '0 : (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
+
+  // refs_zero_q next (rst aside): with x = the next ref_next_q (handover: +1, else a TX_USERREF_NEXT write that
+  // takes effect: the value, else the same) and l = the next live_q without this cycle's accept (cancel: 0, else
+  // live_q - handover), no UserRefNum is left iff x + l == 2^32, or 2^32 - 1 with an accept (it takes one more).
+  // The sum is formed per case, so no select sits in front of an adder: a handover alone keeps ref_next + live.
+  logic uwr;  // a TX_USERREF_NEXT write takes effect
+  logic [32:0] sum_rl, sum_vl;
+  logic refs_z, refs_o;  // x + l == 2^32, == 2^32 - 1
+  assign uwr    = cmd_userref_wr && userref_ok;
+  assign sum_rl = ref_next_q + 33'(live_q);
+  assign sum_vl = 33'(cmd_userref_value) + 33'(live_q);
+  always_comb begin
+    if (cancel) begin
+      if (handover) begin  // x = ref_next_q + 1, l = 0
+        refs_z = ref_next_q == 33'hFFFF_FFFF;
+        refs_o = ref_next_q == 33'hFFFF_FFFE;
+      end else if (uwr) begin  // x = the value (< 2^32), l = 0
+        refs_z = 1'b0;
+        refs_o = cmd_userref_value == 32'hFFFF_FFFF;
+      end else begin  // x = ref_next_q, l = 0
+        refs_z = ref_next_q == 33'h1_0000_0000;
+        refs_o = ref_next_q == 33'hFFFF_FFFF;
+      end
+    end else if (handover || !uwr) begin  // x + l = ref_next_q + live_q
+      refs_z = sum_rl == 33'h1_0000_0000;
+      refs_o = sum_rl == 33'hFFFF_FFFF;
+    end else begin  // x = the value, l = live_q
+      refs_z = sum_vl == 33'h1_0000_0000;
+      refs_o = sum_vl == 33'hFFFF_FFFF;
+    end
+  end
 
   // ===================== Queue =====================
   rorder_t        q_mem [QM];
@@ -388,7 +444,6 @@ module risk_check
       budget_q           <= '0;
       tokens_q           <= '0;
       pc_q               <= '0;
-      started_q          <= 1'b0;
       kill_d_q           <= 1'b1;
       tx_en_d_q          <= 1'b0;
       ref_next_q         <= 33'd1;
@@ -407,13 +462,11 @@ module risk_check
 
       // token bucket
       if (cfg_lim_wr) begin
-        tokens_q  <= cfg_rate_burst;
-        pc_q      <= '0;
-        started_q <= 1'b0;
+        tokens_q <= cfg_rate_burst;
+        pc_q     <= '0;
       end else begin
-        tokens_q  <= tokens_eff - 32'(accept);
-        pc_q      <= (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
-        started_q <= 1'b1;
+        tokens_q <= tokens_eff - 32'(accept);
+        pc_q     <= (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
       end
 
       // queue pointers
@@ -442,8 +495,23 @@ module risk_check
     end
   end
 
+  always_ff @(posedge clk) begin
+    qty_gt_q      <= o2_q.qty > max_qty_n;
+    notional_gt_q <= prod2_q > max_notional_n;
+    tick_q        <= started_n && rate_period_n != '0 && pc_n == '0;
+    if (rst) begin
+      tok_nz_q      <= 1'b0;
+      budget_zero_q <= 1'b1;
+      refs_zero_q   <= 1'b0;
+    end else begin
+      // an accept leaves tokens_eff - 1; it needs tokens_eff != 0
+      tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? tokens_eff > 32'd1 : tokens_eff != '0;
+      budget_zero_q <= accept ? budget1 == '0 : budget0 == '0;
+      refs_zero_q <= accept ? refs_o : refs_z;  // an accept is never in a cancel's cycle
+    end
+  end
+
   rorder_t head;
-  logic    userref_ok;
   assign userref_ok    = ctl_kill && wr_q == rd_q && cmd_userref_value != '0;
   assign head          = q_mem[rd_q[QP-2:0]];
   assign m_tx_user_ref = ref_next_q[31:0];

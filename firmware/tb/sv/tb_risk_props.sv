@@ -21,6 +21,8 @@ module tb_risk_props;
   logic          m_tx_valid = 1'b0;
   logic [  32:0] ref_next = 33'd1;
   logic [   4:0] credits = 5'd16;
+  logic [   5:0] flags = 6'b10_1010;
+  logic [   5:0] defs = 6'b10_1010;
 
   always begin
     #3.2 clk = ~clk;
@@ -30,20 +32,25 @@ module tb_risk_props;
       .QD(QD),
       .QP(QP)
   ) u_props (
-      .clk       (clk),
-      .rst       (rst),
-      .accept    (accept),
-      .ctl_kill  (ctl_kill),
-      .ctl_tx_en (ctl_tx_en),
-      .budget    (budget),
-      .tokens    (tokens),
-      .handover  (handover),
-      .cancelled (cancelled),
-      .held      (held),
-      .live      (live),
-      .m_tx_valid(m_tx_valid),
-      .ref_next  (ref_next),
-      .credits   (credits)
+      .clk         (clk),
+      .rst         (rst),
+      .accept      (accept),
+      .ctl_kill    (ctl_kill),
+      .ctl_tx_en   (ctl_tx_en),
+      .budget      (budget),
+      .tokens      (tokens),
+      .handover    (handover),
+      .cancelled   (cancelled),
+      .held        (held),
+      .live        (live),
+      .m_tx_valid  (m_tx_valid),
+      .ref_next    (ref_next),
+      .credits     (credits),
+      .flags       (flags),
+      .defs        (defs),
+      .lim_wr      (1'b0),
+      .prod2       (64'd0),
+      .max_notional(64'd0)
   );
 
   // 1 when this run violates property k.
@@ -70,6 +77,8 @@ module tb_risk_props;
       m_tx_valid = 1'b0;
       ref_next   = 33'd1;
       credits    = 5'd16;
+      flags      = 6'b10_1010;
+      defs       = 6'b10_1010;
     end
   endtask
 
@@ -112,6 +121,7 @@ module tb_risk_props;
     live       = '0;
     held       = v(6) ? 5'd9 : 5'd1;
     credits    = v(10) ? 5'd17 : 5'd16;
+    defs       = v(11) ? 6'b10_1000 : 6'b10_1010;
     m_tx_valid = v(7);
     idle();
     @(negedge clk);
