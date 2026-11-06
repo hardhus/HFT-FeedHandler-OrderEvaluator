@@ -15,6 +15,7 @@ module tb_strategy_props;
   logic [    N-1:0] armed_p = '1;
   logic [    N-1:0] fired_p = '0;
   logic [    N-1:0] err = '0;
+  logic             path_open = 1'b1;
   logic             fire_q = 1'b0;
   logic             pkt_q = 1'b0;
   logic             pkt_acc_q = 1'b0;
@@ -36,6 +37,7 @@ module tb_strategy_props;
       .armed_p    (armed_p),
       .fired_p    (fired_p),
       .err        (err),
+      .path_open  (path_open),
       .fire_q     (fire_q),
       .pkt_q      (pkt_q),
       .pkt_acc_q  (pkt_acc_q),
@@ -59,6 +61,7 @@ module tb_strategy_props;
       armed_p     = '1;
       fired_p     = '0;
       err         = '0;
+      path_open   = 1'b1;
       fire_q      = 1'b0;
       pkt_q       = 1'b0;
       pkt_acc_q   = 1'b0;
@@ -74,10 +77,11 @@ module tb_strategy_props;
 
     // A fire of rule 2 (rule 0 fired before in this packet), its write, the accepted packet, the order.
     @(negedge clk);
-    fire    = 8'b0000_0100;
-    fired_p = 8'b0000_0001;
-    armed_p = v(2) ? 8'b0000_0001 : 8'b0000_0101;
-    err     = 8'b1000_0000;
+    fire      = 8'b0000_0100;
+    fired_p   = 8'b0000_0001;
+    armed_p   = v(2) ? 8'b0000_0001 : 8'b0000_0101;
+    err       = 8'b1000_0000;
+    path_open = !v(7);
     if (v(1)) begin
       fire    = 8'b0001_0100;
       armed_p = 8'b0001_0101;

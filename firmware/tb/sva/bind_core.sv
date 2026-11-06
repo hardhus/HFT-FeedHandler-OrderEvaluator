@@ -168,6 +168,7 @@ bind strategy_engine strategy_props #(
     .armed_p    (armed_p & ~block),
     .fired_p    (fired_p),
     .err        (err_q),
+    .path_open  (!ctl_kill && ctl_tx_en),
     .fire_q     (fire_q),
     .pkt_q      (pkt_q),
     .pkt_acc_q  (pkt_acc_q),

@@ -16,6 +16,7 @@ module strategy_props #(
     input logic [    N-1:0] armed_p,
     input logic [    N-1:0] fired_p,
     input logic [    N-1:0] err,
+    input logic             path_open,
     input logic             fire_q,
     input logic             pkt_q,
     input logic             pkt_acc_q,
@@ -54,6 +55,12 @@ module strategy_props #(
   assert property (@(posedge clk) disable iff (rst || !armed) (fire & ~(armed_p & ~err)) == '0)
   else begin
     $error("strategy_props: a rule fired while disarmed or with a static error");
+  end
+
+  a_fire_closed :
+  assert property (@(posedge clk) disable iff (rst || !armed) fire != '0 |-> path_open)
+  else begin
+    $error("strategy_props: a rule fired while the order path was closed");
   end
 
   a_fire_once :

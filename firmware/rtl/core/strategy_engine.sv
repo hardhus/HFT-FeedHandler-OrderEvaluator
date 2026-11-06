@@ -1,5 +1,5 @@
 // strategy_engine: 8 host-programmed rules on ITCH A/F/P messages; a fired order waits for its packet to be
-// accepted (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18, 19).
+// accepted (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18, 19, 23).
 // Clock domain : clk (net_clk)
 // Latency      : s_pkt_valid (accepted) -> the packet's first m_ord_valid 2 cycles, then one order per cycle
 //                in fire order
@@ -25,6 +25,9 @@
 //                disarming and arming effects meet (disarm and arm, commit and arm, the acceptance's disarm
 //                and an arm), the rule is disarmed. An arm in the cycle of a fire is not after the fire, so
 //                the acceptance still disarms that rule (decision 19).
+// Order path   : while it is closed (ctl_kill, or !ctl_tx_en) no rule fires, so none is used up; the cycle in
+//                which ctl_kill rises disarms every rule (an arm in that cycle loses). Orders fired before still
+//                leave (risk_check rejects them). Decision 23.
 // Static error : at cfg_rule_wr: locate 0, a tif the core does not send, action_side 3, qty 0, qty >= 1,000,000
 //                with qty_min = 0, or threshold + offset outside 1..OUCH_PRICE_LIMIT_MAX with
 //                price_threshold_mode = 1. The rule never fires; st_error shows it (decisions 6, 11, 16).
@@ -53,6 +56,10 @@ module strategy_engine
     // Packet events (itch_decoder m_pkt_*)
     input logic         s_pkt_valid,
     input mold_status_e s_pkt_status,
+
+    // Order path controls (net_clk levels, the same as risk_check's)
+    input logic ctl_kill,
+    input logic ctl_tx_en,
 
     // Configuration and commands (net_clk; from hft_csr_wrap)
     input logic                            cfg_rule_wr,
@@ -100,7 +107,8 @@ module strategy_engine
   // ===================== Rules =====================
   strat_rule_t        rule_q     [N];
   logic        [31:0] thr_price_q[N];  // threshold + offset, valid when the rule has no error
-  logic [N-1:0] err_q, armed_q, fired_q, doa_q;  // doa: disarm on accept (decision 18)
+  logic [N-1:0] err_q, armed_q, fired_q, doa_q;
+  logic        kill_d_q;  // ctl_kill of the previous cycle  // doa: disarm on accept (decision 18)
 
   // Static error of the rule being written, and its threshold + offset.
   logic [33:0] wr_sum;
@@ -141,7 +149,8 @@ module strategy_engine
           s_ev_price <= rule_q[r].price_threshold;
       hit[r] = s_ev_valid && ev_decoded && type_ok && side_ok && price_ok &&
           s_ev_locate == rule_q[r].locate && s_ev_shares >= {32'd0, rule_q[r].min_shares} &&
-          rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r];
+          rule_q[r].enable && armed_p[r] && !block[r] && !fired_p[r] && !err_q[r] &&
+          !ctl_kill && ctl_tx_en;
     end
     fire       = hit & (~hit + 1'b1);  // the lowest index
 
@@ -177,6 +186,9 @@ module strategy_engine
   // ===================== Commands =====================
   always_comb begin
     block = cmd_disarm ? cmd_disarm_mask : '0;
+    if (ctl_kill && !kill_d_q) begin
+      block = '1;
+    end
     if (cfg_rule_wr) begin
       block[cfg_rule_idx] = 1'b1;
     end
@@ -194,17 +206,19 @@ module strategy_engine
       thr_price_q[cfg_rule_idx] <= wr_sum[31:0];
     end
     if (rst) begin
-      err_q   <= '1;
-      armed_q <= '0;
-      fired_q <= '0;
-      doa_q   <= '0;
+      err_q    <= '1;
+      armed_q  <= '0;
+      kill_d_q <= 1'b1;
+      fired_q  <= '0;
+      doa_q    <= '0;
     end else begin
       if (cfg_rule_wr) begin
         err_q[cfg_rule_idx] <= wr_err;
       end
-      armed_q <= armed_n;
-      fired_q <= fired_p | fire;
-      doa_q   <= doa_n;
+      armed_q  <= armed_n;
+      kill_d_q <= ctl_kill;
+      fired_q  <= fired_p | fire;
+      doa_q    <= doa_n;
     end
   end
 

@@ -106,7 +106,7 @@ BINS = [
     "fire_type_A", "fire_type_F", "fire_type_P", "other_type_on_rule_locate", "malformed_a",
     "static_err_locate", "static_err_tif", "static_err_action", "static_err_qty0", "static_err_qty_big",
     "static_err_price", "queue_over_8", "commit_and_arm_same_cycle", "arm_and_disarm_same_cycle",
-    "command_blocks_message", "arm_on_fire_cycle", "arm_on_accept_cycle",
+    "command_blocks_message", "arm_on_fire_cycle", "arm_on_accept_cycle", "gate_blocks_fire", "kill_rise_disarms",
 ]  # fmt: skip
 
 
@@ -123,6 +123,7 @@ class Engine:
         self.got: list[tuple[int, OrderReq]] = []  # (output cycle, order) seen
         self.fired_this_pkt: set[int] = set()
         self.paused = False
+        self.kill, self.tx_en = False, True  # order path levels (held between steps)
 
     def hit(self, name: str) -> None:
         if self.cov is not None:
@@ -135,6 +136,8 @@ class Engine:
         d.cfg_rule_wr.value = 0
         d.cmd_disarm.value = 0
         d.cmd_arm.value = 0
+        d.ctl_kill.value = int(self.kill)
+        d.ctl_tx_en.value = int(self.tx_en)
         for k, w in EV_GARBAGE.items():
             getattr(d, f"s_ev_{k}").value = random.getrandbits(w)
         d.s_pkt_status.value = random.getrandbits(4)
@@ -144,10 +147,17 @@ class Engine:
         d.cmd_arm_mask.value = random.getrandbits(N_RULES)
 
     async def step(self, msg: Msg | None = None, pkt: S | None = None, commit: tuple[int, Rule] | None = None,
-                   disarm: int | None = None, arm: int | None = None) -> int | None:  # fmt: skip
+                   disarm: int | None = None, arm: int | None = None, kill: bool | None = None,
+                   tx_en: bool | None = None) -> int | None:  # fmt: skip
         """One input cycle; returns the rule that fired on msg, if any. The model's tick() holds the order of the
-        cycle and its ties (decision 19)."""
+        cycle and its ties (decisions 19, 23). kill and tx_en are levels: they hold until changed."""
         d, s = self.dut, self.model
+        if kill is not None:
+            if kill and not self.kill and s.armed:
+                self.hit("kill_rise_disarms")
+            self.kill = kill
+        if tx_en is not None:
+            self.tx_en = tx_en
         self.idle_inputs()
         accepted = None
         if pkt is not None:
@@ -175,6 +185,10 @@ class Engine:
             d.s_ev_side.value = e.side
             d.s_ev_stock.value = e.stock
             self._cover_message(e, block)
+            if (self.kill or not self.tx_en) and any(
+                r.enable and s.armed >> i & 1 and not static_error(r) and matches(r, e) for i, r in enumerate(s.rules)
+            ):
+                self.hit("gate_blocks_fire")
         if commit is not None:
             d.cfg_rule_wr.value = 1
             d.cfg_rule_idx.value = commit[0]
@@ -197,7 +211,8 @@ class Engine:
             if arm & s.disarm_on_accept and not accepted:
                 self.hit("cmd_after_fire_arm")
         released, fired = s.tick(
-            accepted, (msg.ev, msg.seq, msg.sof_ts, msg.epoch) if msg else None, commit, disarm or 0, arm or 0
+            accepted, (msg.ev, msg.seq, msg.sof_ts, msg.epoch) if msg else None, commit, disarm or 0, arm or 0,
+            self.kill, self.tx_en,
         )
         for o in released:
             self.out.append((self.d + 2, o))
@@ -505,6 +520,32 @@ async def tc_same_cycle(dut):
 
 
 @cocotb.test()
+async def tc_path_closed(dut):
+    """Decision 23, hand-written expectations: no fire while killed or tx_en is 0, so nothing is used up; a kill
+    rise disarms every rule and beats an arm in its cycle; arming while killed works for the release; an order
+    fired before the kill still leaves."""
+    e = await start(dut)
+    await program(e, rule(qty=1), rule(qty=2))
+    await e.step(tx_en=False)
+    assert await e.step(Msg(ev())) is None
+    await e.step(pkt=S.OK, tx_en=True)
+    assert int(dut.st_armed.value) & 0b11 == 0b11  # not used up
+    assert await e.step(Msg(ev())) == 0  # fired before the kill
+    await e.step(kill=True, arm=0b11)  # the rise disarms all, the arm loses
+    assert await e.step(Msg(ev())) is None
+    await e.step(pkt=S.OK)
+    await e.idle(2)
+    assert int(dut.st_armed.value) == 0
+    await e.step(arm=0b10)  # killed, no rise: arming for the release
+    assert await e.step(Msg(ev())) is None
+    await e.step(pkt=S.OK, kill=False)
+    assert await e.step(Msg(ev())) == 1
+    await e.step(pkt=S.OK)
+    await e.drain()
+    assert [o.qty for _, o in e.got] == [1, 2]
+
+
+@cocotb.test()
 async def tc_static_errors(dut):
     """Every static error alone: its st_error bit is set and the rule never fires."""
     e = await start(dut)
@@ -591,6 +632,10 @@ async def random_packet(e: Engine) -> None:
         kw = {}
         if random.random() < 0.08:
             kw["commit"] = (random.randrange(N_RULES), random_rule())
+        if random.random() < 0.01:
+            kw["kill"] = not e.kill
+        if random.random() < 0.01:
+            kw["tx_en"] = not e.tx_en
         if random.random() < 0.08:
             kw["arm"] = random.getrandbits(N_RULES)
         if random.random() < 0.04:
@@ -620,7 +665,7 @@ async def tc_random_golden(dut):
 
 async def every_bin(e: Engine) -> None:
     """Hits every bin of BINS whatever came before (the same per-cycle checks run on it)."""
-    await e.step(pkt=S.OK)  # close whatever packet is open
+    await e.step(pkt=S.OK, kill=False, tx_en=True)  # close whatever packet is open; open the path
     rules = [rule(action_side=ActionSide.BUY, min_shares=0), rule(qty_mode=QtyMode.MIN, qty=400, min_shares=0),
              rule(action_side=ActionSide.OPPOSITE, qty_mode=QtyMode.MIN, qty=600, min_shares=0),
              rule(price_mode=PriceMode.THRESHOLD, price_offset=-1, min_shares=0),
@@ -643,6 +688,10 @@ async def every_bin(e: Engine) -> None:
     await e.step(pkt=S.OK, arm=0b1)  # arm_on_accept_cycle
     await e.step(commit=(0, rules[0]), arm=0b1)  # commit_and_arm_same_cycle
     await e.step(disarm=0b10, arm=0b10)  # arm_and_disarm_same_cycle
+    await e.step(arm=ALL)
+    await e.step(Msg(ev()), tx_en=False)  # gate_blocks_fire
+    await e.step(kill=True, tx_en=True)  # kill_rise_disarms
+    await e.step(kill=False)
     for bad in ({"locate": 0}, {"tif": ord("6")}, {"action_side": 3}, {"qty": 0}, {"qty": 1_000_000},
                 {"price_mode": PriceMode.THRESHOLD, "price_threshold": 1, "price_offset": -1}):  # fmt: skip
         await e.step(commit=(5, rule(**bad)))

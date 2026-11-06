@@ -1,4 +1,4 @@
-"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18, 19).
+"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18, 19, 23).
 Pure Python, no simulator.
 
 Decision: the model works on itch.Event values and packet boundaries as data, one message at a
@@ -25,6 +25,8 @@ Rules:
   arm in that cycle takes effect from the next one. When disarming and arming effects meet in one cycle (disarm
   and arm, commit and arm, the acceptance's disarm and an arm), the rule is disarmed. An arm in the cycle of a
   fire is not "after the fire": the acceptance still disarms that rule.
+- Order path (decision 23): while it is closed (kill, or tx_en 0) no rule fires; the cycle in which kill
+  rises disarms every rule, as a disarm of all (an arm in that cycle loses). Orders fired before still leave.
 - Static error (RULE_STATUS error bit, the rule never fires; decisions 6, 11, 16): locate 0, time in
   force not allowed, action_side code 3, qty 0, qty >= 1,000,000 in FIXED mode, threshold + offset
   outside 1..PRICE_LIMIT_MAX in THRESHOLD mode.
@@ -127,6 +129,7 @@ class Strategy:
     fired: list[int] = field(default_factory=lambda: [0] * N_RULES)  # RULE_FIRED_<n>
     pending: list[OrderReq] = field(default_factory=list)
     fired_now: int = 0  # rules fired in the open packet
+    kill_prev: bool = False  # kill in the previous cycle (tick)
     disarm_on_accept: int = 0  # fired rules that no host command has reached since (decision 18)
 
     def commit(self, idx: int, rule: Rule) -> None:
@@ -175,6 +178,8 @@ class Strategy:
         commit: tuple[int, Rule] | None = None,
         disarm: int = 0,
         arm: int = 0,
+        kill: bool = False,
+        tx_en: bool = True,
     ) -> tuple[list[OrderReq], int | None]:
         """One net_clk cycle with any of: a packet event (accepted or not), a message (ev, seq, sof_ts, epoch)
         and the commands. Returns the released orders and the rule that fired (decision 19)."""
@@ -182,8 +187,11 @@ class Strategy:
         if accepted is not None:
             pkt_off = self.disarm_on_accept if accepted else 0
             released = self.packet(accepted)
-        block = disarm | (1 << commit[0] if commit else 0)
-        fired = self.message(*msg, block=block) if msg else None
+        kill_rise = kill and not self.kill_prev
+        self.kill_prev = kill
+        block = disarm | (1 << commit[0] if commit else 0) | ((1 << N_RULES) - 1 if kill_rise else 0)
+        path_open = not kill and tx_en
+        fired = self.message(*msg, block=block) if msg and path_open else None
         if commit:
             self.rules[commit[0]] = commit[1]
         new_fire = 0 if fired is None else 1 << fired

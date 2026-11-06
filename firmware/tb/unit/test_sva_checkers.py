@@ -166,6 +166,7 @@ STRATEGY_VIOLATIONS = {
     "a_order_committed": (4, "an order out that no accepted packet committed"),
     "a_drain": (5, "an accepted order waited"),
     "a_room": (6, "an order written to a full queue"),
+    "a_fire_closed": (7, "a rule fired while the order path was closed"),
 }
 
 AXI_WR_TB = ["firmware/tb/sva/axi_wr_props.sv", "firmware/tb/sv/tb_axi_wr_props.sv"]

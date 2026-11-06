@@ -360,3 +360,33 @@ def test_tick_a_message_with_the_packet_event_is_the_next_packets():
     s.tick(msg=(ev(), 1, 0, 0))
     out, fired = s.tick(accepted=True, msg=(ev(), 2, 0, 0))
     assert [o.qty for o in out] == [1] and fired == 1  # rule 0 was disarmed by the acceptance first
+
+
+# ---- Order path closed (decision 23)
+
+
+@pytest.mark.parametrize(("kill", "tx_en"), [(True, True), (False, False), (True, False)])
+def test_no_fire_while_the_path_is_closed(kill, tx_en):
+    s = armed(rule())
+    s.kill_prev = kill  # no rise in this test
+    assert s.tick(msg=(ev(), 1, 0, 0), kill=kill, tx_en=tx_en)[1] is None
+    assert s.armed & 1  # not used up
+    assert s.tick(msg=(ev(), 2, 0, 0))[1] == 0
+
+
+def test_kill_rise_disarms_every_rule_and_wins_over_an_arm():
+    s = armed(rule(), rule())
+    s.tick(kill=True, arm=0b11)
+    assert s.armed == 0
+    s.tick(kill=True, arm=0b11)  # killed, no rise: arming for the release works
+    assert s.armed == 0b11
+    out, fired = s.tick(msg=(ev(), 1, 0, 0), kill=False)
+    assert fired == 0
+
+
+def test_orders_fired_before_the_kill_still_leave():
+    s = armed(rule())
+    s.tick(msg=(ev(), 1, 0, 0))
+    s.tick(kill=True)
+    out, _ = s.tick(accepted=True, kill=True)
+    assert len(out) == 1 and s.armed == 0
