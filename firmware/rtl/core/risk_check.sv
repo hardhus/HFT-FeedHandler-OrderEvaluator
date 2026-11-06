@@ -285,7 +285,8 @@ module risk_check
   // saturated at burst. tokens + refill > burst is compared as tokens > burst - refill (room_q, set with the
   // limits), and each case's value minus one (an accept) is formed beside it, so accept only selects.
   logic signed  [33:0] room_q;  // burst - refill
-  logic [31:0] burst_m1_q, refill_m1_q;  // burst - 1, refill - 1 (mod 2^32)
+  logic [31:0]
+      burst_m1_q, refill_m1_q, period_m1_q;  // burst - 1, refill - 1, period - 1 (mod 2^32)
   logic sat1, sat0;  // with a tick, without one: the count is above burst
   logic [31:0] tok_sum_m1, tok_m1, tokens_n;
   logic eff_nz, eff_gt1;  // tokens_eff != 0, > 1
@@ -360,14 +361,16 @@ module risk_check
   assign bz1 = bq1 && (!cmd_budget_add || am0);
 
   // Next-state values for the flags (as the state registers below take them).
-  logic [31:0] max_qty_n, rate_period_n, pc_n;
+  logic [31:0] max_qty_n;
   logic [63:0] max_notional_n;
   logic        started_n;
-  assign max_qty_n = rst ? '0 : cfg_lim_wr ? cfg_max_qty : max_qty_q;
+  assign max_qty_n      = rst ? '0 : cfg_lim_wr ? cfg_max_qty : max_qty_q;
   assign max_notional_n = rst ? '0 : cfg_lim_wr ? cfg_max_notional : max_notional_q;
-  assign rate_period_n = rst ? '0 : cfg_lim_wr ? cfg_rate_period : rate_period_q;
-  assign started_n = !rst && !cfg_lim_wr;
-  assign pc_n = (rst || cfg_lim_wr) ? '0 : (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
+  assign started_n      = !rst && !cfg_lim_wr;
+  // The period counter wraps at period - 1 (registered with the limits: an equality, no subtraction before it).
+  // With a period, pc_q <= period - 1 < 2^32 - 1, so pc_q + 1 does not wrap: the next value is 0 only on the wrap.
+  logic pc_wrap;
+  assign pc_wrap = pc_q == period_m1_q;
 
   // refs_zero_q next (rst aside): with x = the next ref_next_q (handover: +1, else a TX_USERREF_NEXT write that
   // takes effect: the value, else the same) and l = the next live_q without this cycle's accept (cancel: 0, else
@@ -472,6 +475,7 @@ module risk_check
       room_q         <= $signed({2'b00, cfg_rate_burst}) - $signed({2'b00, cfg_rate_refill});
       burst_m1_q     <= cfg_rate_burst - 32'd1;
       refill_m1_q    <= cfg_rate_refill - 32'd1;
+      period_m1_q    <= cfg_rate_period - 32'd1;
     end
     if (rst) begin
       m_rej_valid        <= 1'b0;
@@ -486,6 +490,7 @@ module risk_check
       room_q             <= '0;
       burst_m1_q         <= '1;
       refill_m1_q        <= '1;
+      period_m1_q        <= '1;
       budget_q           <= '0;
       tokens_q           <= '0;
       pc_q               <= '0;
@@ -511,7 +516,7 @@ module risk_check
         pc_q     <= '0;
       end else begin
         tokens_q <= tokens_n;
-        pc_q     <= (pc_q == rate_period_q - 32'd1) ? '0 : pc_q + 32'd1;
+        pc_q     <= pc_wrap ? '0 : pc_q + 32'd1;
       end
 
       // queue pointers
@@ -543,7 +548,7 @@ module risk_check
   always_ff @(posedge clk) begin
     qty_gt_q      <= o2_q.qty > max_qty_n;
     notional_gt_q <= prod2_q > max_notional_n;
-    tick_q        <= started_n && rate_period_n != '0 && pc_n == '0;
+    tick_q        <= started_n && rate_period_q != '0 && pc_wrap;  // started: no commit, no reset
     if (rst) begin
       tok_nz_q      <= 1'b0;
       budget_zero_q <= 1'b1;
