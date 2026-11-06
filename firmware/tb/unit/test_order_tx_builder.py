@@ -41,6 +41,7 @@ from model.order import (
 
 PERIOD_PS = 6400
 N_RANDOM = 5000  # orders of tc_random_golden
+CFG_LAT = 2  # a write at edge k is decided at edge k + CFG_LAT (A24)
 BEATS = 12
 SPACES = b" " * 14
 CFG = TxConfig(template())
@@ -90,7 +91,7 @@ BAD = {  # one bad field each (decision 26)
 }  # fmt: skip
 BINS = [
     *[f"refused_{k}" for k in BAD], "back_to_back", "stall_first", "stall_mid", "stall_last", "cfg_between_frames",
-    "hw_clordid", "host_clordid", "hex_af", "rule_7", "cfg_same_edge_as_take", "sent_ts_after_stall",
+    "hw_clordid", "host_clordid", "hex_af", "rule_7", "cfg_same_edge_as_take", "sent_ts_after_stall", "cfg_overlap",
 ]  # fmt: skip
 
 
@@ -112,6 +113,7 @@ class Env:
     sent: list = field(default_factory=list)  # (edge, ref) ORDER_SENT seen
     exchange: Exchange | None = None
     cfg_valid: bool = False
+    pend: dict = field(default_factory=dict)  # edge -> config written CFG_LAT edges before
     paused: bool = False
     stalled_first: bool = False
 
@@ -174,13 +176,19 @@ class Env:
         self.stalled_first = self.cur is not None and self.beat == 0 and not handshake
         if taken:
             assert self.cur is None, f"step {s}: taken while a frame is on the bus"
-            if self.cfg is not None and cfg is not None:
+            if self.cfg is not None and s in self.pend:
                 self.hit("cfg_same_edge_as_take")
             if handshake and self.frames and self.frames[-1][0] == self.ref:
                 self.hit("back_to_back")  # the last beat went in this step
             self._take(o)
 
-        # the config of this step (after the take: a take in the same step uses the old one)
+        # the config written CFG_LAT steps ago is decided now (after the take: a take in the same step uses the
+        # old one)
+        if cfg is not None:
+            if self.pend:
+                self.hit("cfg_overlap")  # an earlier write is still being checked
+            self.pend[s + CFG_LAT] = cfg
+        cfg = self.pend.pop(s, None)
         refused = False
         if cfg is not None:
             errors = tx_config_errors(cfg)
@@ -269,6 +277,12 @@ class Env:
         assert int(d.st_cfg_valid.value) == cfg_valid, f"edge {s}: st_cfg_valid"
         assert int(d.ev_cfg_refused.value) == refused, f"edge {s}: ev_cfg_refused"
 
+    async def configure(self, cfg: TxConfig) -> None:
+        """Write cfg and wait until it is decided."""
+        await self.step(cfg=cfg)
+        for _ in range(CFG_LAT):
+            await self.step()
+
     async def send(self, o: OrderReq, ready_p: float = 1.0) -> None:
         """Offer o until it is taken."""
         while not await self.step(o, ready=random.random() < ready_p):
@@ -313,7 +327,7 @@ async def tc_hand_frame(dut):
     """The worked example of docs/protocol/order_msg.md, byte for byte, behind the template: UserRefNum 1, buy 100
     AAPL at 150.25, Day, hardware rule 0; first beat after the take edge, ORDER_SENT after the first beat."""
     e = await start(dut)
-    await e.step(cfg=CFG)
+    await e.configure(CFG)
     o = order(Source.RULE, rule=0, side=ord("B"), qty=100, stock=b"AAPL    ", price=1502500, tif=ord("0"))
     k = e.s + 1
     assert await e.step(o)
@@ -333,7 +347,7 @@ async def tc_hand_frame(dut):
 async def tc_back_to_back(dut):
     """The next order is taken in the cycle the last beat goes: 12 cycles a frame, no gap."""
     e = await start(dut)
-    await e.step(cfg=CFG)
+    await e.configure(CFG)
     takes = []
     for i in range(4):
         o = order(qty=i + 1)
@@ -351,7 +365,7 @@ async def tc_backpressure(dut):
     """tready low on the first, a middle and the last beat: the beat holds; ORDER_SENT waits for the first beat to
     be taken and carries that cycle's ts_now."""
     e = await start(dut)
-    await e.step(cfg=CFG)
+    await e.configure(CFG)
     assert await e.step(order(), ready=False)
     await e.step(ready=False)  # first beat stalled
     await e.step(ready=False)
@@ -385,10 +399,41 @@ async def tc_config_checks(dut):
 
 
 @cocotb.test()
+async def tc_config_latency(dut):
+    """A24: a write at edge k is decided at edge k+2: a take at edge k+2 uses the previous config, one at k+3 the
+    new one; st_cfg_valid and ev_cfg_refused change after edge k+2 (the monitor checks every edge); writes on
+    consecutive cycles are each decided, in order."""
+    e = await start(dut)
+    other = TxConfig(template(dport=6000), display=ord("N"))
+    await e.step(cfg=CFG)
+    await e.step()
+    await e.step()
+    assert e.cfg_valid
+    await e.step(cfg=other)
+    await e.step()
+    assert await e.step(order(qty=1))  # edge k+2: still CFG
+    await e.drain()
+    await e.step(cfg=CFG)
+    await e.step()
+    await e.step()
+    assert await e.step(order(qty=2))  # edge k+3: CFG again (other was in force)
+    await e.drain()
+    await e.step(cfg=other)
+    await e.step(cfg=BAD["proto"])
+    await e.step(cfg=CFG)
+    assert await e.step(order(qty=3))  # edge k+3: other decided, the refusal and CFG still in the pipe
+    await e.drain()
+    await e.send(order(qty=4))
+    await e.drain()
+    assert [f[:42] for _, f in e.frames] == [CFG.template, CFG.template, other.template, CFG.template]
+    assert [f[72] for _, f in e.frames] == [ord("Y"), ord("Y"), ord("N"), ord("Y")]
+
+
+@cocotb.test()
 async def tc_clordid_and_counter_digits(dut):
     """Hardware ClOrdID with every hex digit and rule 7; the host's ClOrdID as given; UserRefNum near the top."""
     e = await start(dut)
-    await e.step(cfg=CFG)
+    await e.configure(CFG)
     e.user_ref = 0x89ABCDEF
     e.exchange.user_ref_next = e.user_ref
     await e.send(order(Source.RULE, rule=7))
@@ -405,7 +450,7 @@ async def tc_clordid_and_counter_digits(dut):
 async def tc_reset_mid_frame(dut):
     """A reset cuts a frame: nothing more of it, and no config after it."""
     e = await start(dut)
-    await e.step(cfg=CFG)
+    await e.configure(CFG)
     await e.send(order())
     await e.step()
     e.paused = True
@@ -450,8 +495,8 @@ async def tc_random_golden(dut):
 
 async def every_bin(e: Env) -> None:
     for bad in BAD.values():
-        await e.step(cfg=bad)
-    await e.step(cfg=CFG)
+        await e.step(cfg=bad)  # cfg_overlap
+    await e.configure(CFG)
     await e.send(order(Source.RULE, rule=7))  # hw_clordid, rule_7
     await e.drain()
     e.user_ref = 0xABCDEF00
@@ -468,7 +513,9 @@ async def every_bin(e: Env) -> None:
     await e.step(ready=False)  # stall_last
     await e.drain()
     other = TxConfig(template(dport=6000))
-    await e.step(order(), cfg=other)  # cfg_same_edge_as_take: the take uses the old one
+    await e.step(cfg=other)
+    await e.step()
+    assert await e.step(order())  # cfg_same_edge_as_take: decided at the take edge, the take uses the old one
     await e.step(cfg=CFG)  # cfg_between_frames
     await e.drain()
     await e.send(order(), ready_p=1.0)

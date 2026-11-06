@@ -13,10 +13,14 @@
 //                digit, the UserRefNum as 8 upper-case hex digits, 3 spaces.
 // Config       : cfg_wr is checked (decision 26): display Y/N/A, capacity A/P/R/O, ise N, cross type N; the
 //                template's EtherType 0x0800, 0x45, total length 78, flags/fragment 0x4000, protocol 17, IPv4
-//                header checksum, UDP length 58, UDP checksum 0. A good one applies from the next frame taken;
-//                a bad one is refused (ev_cfg_refused) and the previous stays. st_cfg_valid: a good config has
-//                been taken since reset (the effective tx_en needs it).
-// Reset        : idle, no config (st_cfg_valid 0). A frame cut by rst is not finished.
+//                header checksum, UDP length 58, UDP checksum 0. The check takes two cycles (A24): a write at
+//                edge k (cfg_wr and the cfg_* of that cycle) is decided at edge k+2. A good one is then in force,
+//                for the frames taken after edge k+2 (one taken at edge k+2 or before uses the previous one); a
+//                bad one is refused (ev_cfg_refused after edge k+2) and the previous stays. Writes on
+//                consecutive cycles are each checked and decided in order. st_cfg_valid: a good config has been
+//                decided since reset (the effective tx_en needs it).
+// Reset        : idle, no config (st_cfg_valid 0); a write still being checked is dropped. A frame cut by rst is
+//                not finished.
 module order_tx_builder
   import hft_pkg::*;
 (
@@ -83,40 +87,102 @@ module order_tx_builder
     return t[8*i+:8];
   endfunction
 
-  logic        cfg_ok;
+  function automatic logic [17:0] hword(input logic [8*42-1:0] t, input int unsigned w);
+    return 18'({tbyte(t, 14 + 2 * w), tbyte(t, 15 + 2 * w)});  // IPv4 header word w
+  endfunction
+
+  // The check takes two cycles (A24): stage 1 the field checks and three partial sums of the ten IPv4 header
+  // words, stage 2 the checksum. Ones' complement: the folded sum is FFFF iff the 20-bit sum S (<= 10 * FFFF)
+  // is a nonzero multiple of FFFF.
+  logic wr1_q, fok1_q, wr2_q, ok2_q;
+  logic [17:0] ps1_q[3];
+  logic [8*42-1:0] t1_q, t2_q;
+  logic [7:0] display1_q, capacity1_q, ise1_q, cross1_q, display2_q, capacity2_q, ise2_q, cross2_q;
   logic [19:0] csum;
+  logic        csum_ok;
   always_comb begin
-    csum = '0;
-    for (int unsigned w = 0; w < 10; w++) begin
-      csum = csum + 20'({tbyte(cfg_template, 14 + 2 * w), tbyte(cfg_template, 15 + 2 * w)});
+    csum    = 20'(ps1_q[0]) + 20'(ps1_q[1]) + 20'(ps1_q[2]);
+    csum_ok = 1'b0;
+    for (int unsigned m = 1; m <= 10; m++) begin
+      csum_ok = csum_ok || csum == 20'(m * 16'hFFFF);
     end
-    csum = 20'(csum[15:0]) + 20'(csum[19:16]);
-    csum = 20'(csum[15:0]) + 20'(csum[19:16]);
-    cfg_ok = cfg_display inside {8'h59, 8'h4E, 8'h41} && cfg_capacity inside {8'h41, 8'h50, 8'h52, 8'h4F} &&
+  end
+
+  always_ff @(posedge clk) begin
+    t1_q <= cfg_template;
+    display1_q <= cfg_display;
+    capacity1_q <= cfg_capacity;
+    ise1_q <= cfg_ise;
+    cross1_q <= cfg_cross_type;
+    fok1_q       <= cfg_display inside {8'h59, 8'h4E, 8'h41} && cfg_capacity inside {8'h41, 8'h50, 8'h52, 8'h4F} &&
         cfg_ise == 8'h4E && cfg_cross_type == 8'h4E &&
-        {tbyte(cfg_template, 12), tbyte(cfg_template, 13)} == 16'h0800 && tbyte(cfg_template, 14) ==
-        8'h45 && {tbyte(cfg_template, 16), tbyte(cfg_template, 17)} == 16'd78 &&
-        {tbyte(cfg_template, 20), tbyte(cfg_template, 21)} == 16'h4000 && tbyte(cfg_template, 23) ==
-        8'd17 && csum[15:0] == 16'hFFFF && {tbyte(cfg_template, 38), tbyte(cfg_template, 39)} ==
-        16'd58 && {tbyte(cfg_template, 40), tbyte(cfg_template, 41)} == 16'h0000;
+        {tbyte(
+        cfg_template, 12
+    ), tbyte(
+        cfg_template, 13
+    )} == 16'h0800 && tbyte(
+        cfg_template, 14
+    ) == 8'h45 && {tbyte(
+        cfg_template, 16
+    ), tbyte(
+        cfg_template, 17
+    )} == 16'd78 && {tbyte(
+        cfg_template, 20
+    ), tbyte(
+        cfg_template, 21
+    )} == 16'h4000 && tbyte(
+        cfg_template, 23
+    ) == 8'd17 && {tbyte(
+        cfg_template, 38
+    ), tbyte(
+        cfg_template, 39
+    )} == 16'd58 && {tbyte(
+        cfg_template, 40
+    ), tbyte(
+        cfg_template, 41
+    )} == 16'h0000;
+    ps1_q[0] <= hword(
+        cfg_template, 0
+    ) + hword(
+        cfg_template, 1
+    ) + hword(
+        cfg_template, 2
+    ) + hword(
+        cfg_template, 3
+    );
+    ps1_q[1] <= hword(cfg_template, 4) + hword(cfg_template, 5) + hword(cfg_template, 6);
+    ps1_q[2] <= hword(cfg_template, 7) + hword(cfg_template, 8) + hword(cfg_template, 9);
+    t2_q <= t1_q;
+    display2_q <= display1_q;
+    capacity2_q <= capacity1_q;
+    ise2_q <= ise1_q;
+    cross2_q <= cross1_q;
+    ok2_q <= fok1_q && csum_ok;
+    if (rst) begin
+      wr1_q <= 1'b0;
+      wr2_q <= 1'b0;
+    end else begin
+      wr1_q <= cfg_wr;
+      wr2_q <= wr1_q;
+    end
   end
 
   logic [8*42-1:0] tmpl_q;
   logic [7:0] display_q, capacity_q, ise_q, cross_q;
   always_ff @(posedge clk) begin
-    if (cfg_wr && cfg_ok) begin
-      tmpl_q     <= cfg_template;
-      display_q  <= cfg_display;
-      capacity_q <= cfg_capacity;
-      ise_q      <= cfg_ise;
-      cross_q    <= cfg_cross_type;
+    if (wr2_q && ok2_q) begin
+      tmpl_q     <= t2_q;
+      display_q  <= display2_q;
+      capacity_q <= capacity2_q;
+      ise_q      <= ise2_q;
+      cross_q    <= cross2_q;
     end
     if (rst) begin
       st_cfg_valid   <= 1'b0;
       ev_cfg_refused <= 1'b0;
     end else begin
-      st_cfg_valid   <= st_cfg_valid || (cfg_wr && cfg_ok);
-      ev_cfg_refused <= cfg_wr && !cfg_ok;
+      st_cfg_valid   <= st_cfg_valid || (wr2_q && ok2_q);
+      ev_cfg_refused <= wr2_q && !ok2_q;
     end
   end
 
