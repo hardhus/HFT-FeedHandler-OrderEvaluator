@@ -133,6 +133,41 @@ package hft_pkg;
   // Common header of every message: type (1), stock locate (2), tracking number (2), timestamp (6).
   localparam int unsigned ITCH_HDR_LEN = 11;
 
+  // ---- Orders (F7; docs/protocol/order_msg.md, audit/14) ----
+  // OUCH 5.0 Enter Order limits (Data Types, section 2.1): the largest limit price, and Quantity < 1,000,000.
+  localparam logic [31:0] OUCH_PRICE_LIMIT_MAX = 32'h7735_939C;  // $199,999.9900
+  localparam logic [31:0] OUCH_QTY_LIMIT = 32'd1_000_000;
+  localparam logic [7:0] OUCH_SIDE_BUY = 8'h42;  // "B"
+  localparam logic [7:0] OUCH_SIDE_SELL = 8'h53;  // "S"
+  // Time in force the core sends: Day, IOC, GTX, After hours (not GTT: it needs an appendage).
+  function automatic logic ouch_tif_ok(input logic [7:0] tif);
+    return tif inside {8'h30, 8'h33, 8'h35, 8'h45};
+  endfunction
+
+  // strategy_engine rules (audit/14 §2.4). msg_mask bit 0/1/2 = A/F/P; side_match bit 0/1 = B/S.
+  localparam int unsigned STRAT_N_RULES = 8;
+  localparam int unsigned STRAT_RULE_W = $clog2(STRAT_N_RULES);
+  typedef enum logic [1:0] {
+    STRAT_ACT_BUY      = 2'd0,
+    STRAT_ACT_SELL     = 2'd1,
+    STRAT_ACT_OPPOSITE = 2'd2   // the event's opposite side; code 3 is a static error
+  } strat_action_e;
+  typedef struct packed {
+    logic        enable;
+    logic [2:0]  msg_mask;
+    logic [15:0] locate;
+    logic [1:0]  side_match;
+    logic        price_ge;              // 0: event price <= threshold, 1: >=
+    logic [31:0] price_threshold;
+    logic [31:0] min_shares;
+    logic [1:0]  action_side;           // strat_action_e, or 3
+    logic        qty_min;               // 0: qty, 1: min(event shares, qty)
+    logic [31:0] qty;
+    logic        price_threshold_mode;  // 0: event price, 1: threshold + offset
+    logic [31:0] price_offset;          // signed
+    logic [7:0]  tif;
+  } strat_rule_t;
+
   // Big-endian unsigned integer of n <= 8 bytes at byte offset ofs of a message vector
   // (byte i = v[8i+7:8i]): the first byte is the most significant (K3).
   function automatic logic [63:0] msg_be(input logic [8*MOLD_MAX_MSG-1:0] v, input int unsigned ofs,

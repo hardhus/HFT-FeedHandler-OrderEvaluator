@@ -1,4 +1,4 @@
-"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18).
+"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18, 19).
 Pure Python, no simulator.
 
 Decision: the model works on itch.Event values and packet boundaries as data, one message at a
@@ -7,7 +7,8 @@ they reach net_clk. Cycle timing is the unit test's business.
 
 Rules:
 - A rule matches a message when: it is enabled, armed, has no static error, has not fired in this
-  packet; the type is in msg_mask (A, F, P only: decision 2); the locate equals the rule's; the
+  packet; the message is decoded (ORDER or TRADE class, so a MALFORMED A never matches) and its
+  type is in msg_mask (A, F, P only: decision 2); the locate equals the rule's; the
   event side is in side_match; price_op holds between the event price and price_threshold; and
   shares >= min_shares.
 - Per message at most one rule fires: the lowest index that matches (P4). A rule fires at most once
@@ -19,6 +20,11 @@ Rules:
   after its fire: the host's later command wins (decision 18). The fired-in-this-packet mark is not
   cleared by those commands, so a rule still fires at most once per packet.
 - RULE_COMMIT replaces the rule and disarms it (decision 8). RULE_ARM and RULE_DISARM take masks.
+- One cycle (tick(), decision 19: a tie goes to the disarming side): the packet event, then the message, then
+  the commands. A disarm or commit of a rule in the cycle of a message keeps that rule from firing on it; an
+  arm in that cycle takes effect from the next one. When disarming and arming effects meet in one cycle (disarm
+  and arm, commit and arm, the acceptance's disarm and an arm), the rule is disarmed. An arm in the cycle of a
+  fire is not "after the fire": the acceptance still disarms that rule.
 - Static error (RULE_STATUS error bit, the rule never fires; decisions 6, 11, 16): locate 0, time in
   force not allowed, action_side code 3, qty 0, qty >= 1,000,000 in FIXED mode, threshold + offset
   outside 1..PRICE_LIMIT_MAX in THRESHOLD mode.
@@ -30,7 +36,7 @@ Rules:
 from dataclasses import dataclass, field
 from enum import IntEnum
 
-from model.itch import Event
+from model.itch import DECODED, Event
 from model.order import QTY_LIMIT, TIFS, OrderReq, Source, valid_price
 
 N_RULES = 8
@@ -89,7 +95,7 @@ def static_error(r: Rule) -> bool:
 
 
 def matches(r: Rule, ev: Event) -> bool:
-    if ev.type not in MSG_TYPES or not r.msg_mask >> MSG_TYPES.index(ev.type) & 1:
+    if ev.cls not in DECODED or ev.type not in MSG_TYPES or not r.msg_mask >> MSG_TYPES.index(ev.type) & 1:
         return False
     if ev.side not in SIDE_BITS or not r.side_match >> SIDE_BITS.index(ev.side) & 1:
         return False
@@ -139,10 +145,12 @@ class Strategy:
     def error_bits(self) -> int:
         return sum(1 << i for i, r in enumerate(self.rules) if static_error(r))
 
-    def message(self, ev: Event, seq: int, sof_ts: int, epoch: int) -> int | None:
-        """One OUT message of the open packet; returns the rule that fired, if any."""
+    def message(self, ev: Event, seq: int, sof_ts: int, epoch: int, block: int = 0) -> int | None:
+        """One OUT message of the open packet; returns the rule that fired, if any. block: rules disarmed or
+        committed in the same cycle (tick())."""
         for i, r in enumerate(self.rules):
-            live = r.enable and self.armed >> i & 1 and not self.fired_now >> i & 1 and not static_error(r)
+            armed = self.armed & ~block
+            live = r.enable and armed >> i & 1 and not self.fired_now >> i & 1 and not static_error(r)
             if live and matches(r, ev):
                 self.fired_now |= 1 << i
                 self.disarm_on_accept |= 1 << i
@@ -159,3 +167,26 @@ class Strategy:
                 self.fired[o.rule] += 1
         self.pending, self.fired_now, self.disarm_on_accept = [], 0, 0
         return out
+
+    def tick(
+        self,
+        accepted: bool | None = None,
+        msg: tuple[Event, int, int, int] | None = None,
+        commit: tuple[int, Rule] | None = None,
+        disarm: int = 0,
+        arm: int = 0,
+    ) -> tuple[list[OrderReq], int | None]:
+        """One net_clk cycle with any of: a packet event (accepted or not), a message (ev, seq, sof_ts, epoch)
+        and the commands. Returns the released orders and the rule that fired (decision 19)."""
+        released, pkt_off = [], 0
+        if accepted is not None:
+            pkt_off = self.disarm_on_accept if accepted else 0
+            released = self.packet(accepted)
+        block = disarm | (1 << commit[0] if commit else 0)
+        fired = self.message(*msg, block=block) if msg else None
+        if commit:
+            self.rules[commit[0]] = commit[1]
+        new_fire = 0 if fired is None else 1 << fired
+        self.armed = (self.armed | arm) & ~(block | pkt_off) & (1 << N_RULES) - 1
+        self.disarm_on_accept = self.disarm_on_accept & ~(block | arm) | new_fire
+        return released, fired

@@ -158,6 +158,16 @@ PACKER_VIOLATIONS = {
     "a_accepted_gets_end": (8, "an accepted packet event without a commit or rollback"),
 }
 
+STRATEGY_TB = ["firmware/tb/sva/strategy_props.sv", "firmware/tb/sv/tb_strategy_props.sv"]
+STRATEGY_VIOLATIONS = {
+    "a_fire_onehot": (1, "more than one rule fired on a message"),
+    "a_fire_armed": (2, "a rule fired while disarmed or with a static error"),
+    "a_fire_once": (3, "a rule fired twice in one packet"),
+    "a_order_committed": (4, "an order out that no accepted packet committed"),
+    "a_drain": (5, "an accepted order waited"),
+    "a_room": (6, "an order written to a full queue"),
+}
+
 AXI_WR_TB = ["firmware/tb/sva/axi_wr_props.sv", "firmware/tb/sv/tb_axi_wr_props.sv"]
 AXI_WR_VIOLATIONS = {
     "a_aw_stable": (1, "AW changed or dropped before AWREADY"),
@@ -221,6 +231,7 @@ CHECKERS = {
     "fifo": ("tb_fifo_props", FIFO_TB, FIFO_VIOLATIONS),
     "fifo_commit": ("tb_fifo_commit_props", FIFO_COMMIT_TB, FIFO_COMMIT_VIOLATIONS),
     "packer": ("tb_packer_props", PACKER_TB, PACKER_VIOLATIONS),
+    "strategy": ("tb_strategy_props", STRATEGY_TB, STRATEGY_VIOLATIONS),
     "axi_wr": ("tb_axi_wr_props", AXI_WR_TB, AXI_WR_VIOLATIONS),
     "ring": ("tb_ring_props", RING_TB, RING_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),

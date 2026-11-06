@@ -156,3 +156,21 @@ bind event_ring_writer ring_props #(
     .phase_q      (phase_q),
     .out_q        (out_q)
 );
+
+bind strategy_engine strategy_props #(
+    .N    (N),
+    .DEPTH(DEPTH),
+    .PTR_W(PTR_W)
+) u_strategy_props (
+    .clk        (clk),
+    .rst        (rst),
+    .fire       (fire),
+    .armed_p    (armed_p & ~block),
+    .fired_p    (fired_p),
+    .err        (err_q),
+    .fire_q     (fire_q),
+    .pkt_q      (pkt_q),
+    .pkt_acc_q  (pkt_acc_q),
+    .fill       (base - rd_ptr_q),
+    .m_ord_valid(m_ord_valid)
+);

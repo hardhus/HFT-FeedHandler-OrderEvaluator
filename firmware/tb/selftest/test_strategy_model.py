@@ -7,7 +7,7 @@ field by field here.
 
 import pytest
 
-from model.itch import Bitmap, ItchConfig, encode, expect
+from model.itch import Bitmap, ItchClass, ItchConfig, encode, expect
 from model.order import PRICE_LIMIT_MAX, Source
 from model.strategy import (
     N_RULES,
@@ -133,6 +133,13 @@ MATCH = [
 @pytest.mark.parametrize(("name", "rchange", "echange", "want"), MATCH, ids=[c[0] for c in MATCH])
 def test_matches(name, rchange, echange, want):
     assert matches(rule(**rchange), ev(**echange)) is want
+
+
+def test_a_malformed_a_message_never_matches():
+    msg = encode("A", locate=LOC, order_ref=1, side="B", shares=500, stock=STOCK, price=1_000_000)
+    e, _ = expect(msg + b"\x00", ItchConfig(), Bitmap())  # one byte long: MALFORMED, fields 0
+    assert e.cls == ItchClass.MALFORMED and e.type == ord("A") and e.locate == LOC
+    assert not matches(rule(side_match=0b11, min_shares=0, price_op=PriceOp.GE, price_threshold=0), e)
 
 
 def test_disabled_or_disarmed_rules_do_not_fire():
@@ -296,3 +303,60 @@ def test_arm_ignores_bits_above_the_rules():
     s = Strategy()
     s.arm(0x1FF)
     assert s.armed == 0xFF
+
+
+# ---- One cycle, ties (decision 19)
+
+
+def test_tick_disarm_and_arm_in_one_cycle_disarms():
+    s = armed(rule())
+    s.tick(disarm=1, arm=1)
+    assert s.armed & 1 == 0
+
+
+def test_tick_commit_and_arm_in_one_cycle_disarms():
+    s = Strategy()
+    s.tick(commit=(0, BASE), arm=1)
+    assert s.armed & 1 == 0 and s.rules[0] == BASE
+
+
+def test_tick_arm_in_the_cycle_of_the_acceptance_loses():
+    s = armed(rule())
+    s.tick(msg=(ev(), 1, 0, 0))
+    out, _ = s.tick(accepted=True, arm=1)
+    assert len(out) == 1 and s.armed & 1 == 0
+
+
+def test_tick_arm_in_the_cycle_of_the_fire_is_not_after_it():
+    s = armed(rule())
+    assert s.tick(msg=(ev(), 1, 0, 0), arm=1)[1] == 0
+    s.tick(accepted=True)
+    assert s.armed & 1 == 0
+    s = armed(rule())
+    s.tick(msg=(ev(), 1, 0, 0))
+    s.tick(arm=1)  # the next cycle: after the fire (decision 18)
+    s.tick(accepted=True)
+    assert s.armed & 1
+
+
+@pytest.mark.parametrize("command", ["disarm", "commit"])
+def test_tick_disarm_or_commit_blocks_the_message_of_its_cycle(command):
+    s = armed(rule(qty=1), rule(qty=2))
+    kw = {"disarm": 1} if command == "disarm" else {"commit": (0, rule(qty=9))}
+    assert s.tick(msg=(ev(), 1, 0, 0), **kw)[1] == 1  # rule 0 is blocked, rule 1 takes the message
+    assert s.armed & 0b11 == 0b10
+
+
+def test_tick_arm_does_not_fire_the_message_of_its_cycle():
+    s = Strategy()
+    s.commit(0, BASE)
+    assert s.tick(msg=(ev(), 1, 0, 0), arm=1)[1] is None
+    assert s.armed & 1
+    assert s.tick(msg=(ev(), 2, 0, 0))[1] == 0
+
+
+def test_tick_a_message_with_the_packet_event_is_the_next_packets():
+    s = armed(rule(qty=1), rule(qty=2))
+    s.tick(msg=(ev(), 1, 0, 0))
+    out, fired = s.tick(accepted=True, msg=(ev(), 2, 0, 0))
+    assert [o.qty for o in out] == [1] and fired == 1  # rule 0 was disarmed by the acceptance first
