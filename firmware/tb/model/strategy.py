@@ -1,4 +1,4 @@
-"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16).
+"""Golden model of strategy_engine (audit/14 §2.3, §2.4, P4; decisions 1, 2, 6, 8, 11, 14, 16, 18).
 Pure Python, no simulator.
 
 Decision: the model works on itch.Event values and packet boundaries as data, one message at a
@@ -12,10 +12,12 @@ Rules:
   shares >= min_shares.
 - Per message at most one rule fires: the lowest index that matches (P4). A rule fires at most once
   per packet.
-- Fired orders wait for the packet event. Accepted (OK, HEARTBEAT, EOS): they leave in fire order,
-  their rules are disarmed and their RULE_FIRED counters count. Any other status: they are dropped
-  and the rules stay armed (decision 1). The order still leaves if its rule was disarmed or
-  committed in between (decision 14).
+- Fired orders wait for the packet event. Accepted (OK, HEARTBEAT, EOS): they leave in fire order
+  and their RULE_FIRED counters count. Any other status: they are dropped and the rules stay armed
+  (decision 1). The order still leaves if its rule was disarmed or committed in between (decision 14).
+- Acceptance disarms a fired rule only if no RULE_ARM, RULE_DISARM or RULE_COMMIT reached that rule
+  after its fire: the host's later command wins (decision 18). The fired-in-this-packet mark is not
+  cleared by those commands, so a rule still fires at most once per packet.
 - RULE_COMMIT replaces the rule and disarms it (decision 8). RULE_ARM and RULE_DISARM take masks.
 - Static error (RULE_STATUS error bit, the rule never fires; decisions 6, 11, 16): locate 0, time in
   force not allowed, action_side code 3, qty 0, qty >= 1,000,000 in FIXED mode, threshold + offset
@@ -119,16 +121,20 @@ class Strategy:
     fired: list[int] = field(default_factory=lambda: [0] * N_RULES)  # RULE_FIRED_<n>
     pending: list[OrderReq] = field(default_factory=list)
     fired_now: int = 0  # rules fired in the open packet
+    disarm_on_accept: int = 0  # fired rules that no host command has reached since (decision 18)
 
     def commit(self, idx: int, rule: Rule) -> None:
         self.rules[idx] = rule
         self.armed &= ~(1 << idx)
+        self.disarm_on_accept &= ~(1 << idx)
 
     def arm(self, mask: int) -> None:
         self.armed |= mask & (1 << N_RULES) - 1
+        self.disarm_on_accept &= ~mask
 
     def disarm(self, mask: int) -> None:
         self.armed &= ~mask
+        self.disarm_on_accept &= ~mask
 
     def error_bits(self) -> int:
         return sum(1 << i for i, r in enumerate(self.rules) if static_error(r))
@@ -139,6 +145,7 @@ class Strategy:
             live = r.enable and self.armed >> i & 1 and not self.fired_now >> i & 1 and not static_error(r)
             if live and matches(r, ev):
                 self.fired_now |= 1 << i
+                self.disarm_on_accept |= 1 << i
                 self.pending.append(make_order(i, r, ev, seq, sof_ts, epoch))
                 return i
         return None
@@ -147,8 +154,8 @@ class Strategy:
         """The packet event; returns the orders that go to risk, in order."""
         out = self.pending if accepted else []
         if accepted:
-            self.armed &= ~self.fired_now
+            self.armed &= ~self.disarm_on_accept
             for o in out:
                 self.fired[o.rule] += 1
-        self.pending, self.fired_now = [], 0
+        self.pending, self.fired_now, self.disarm_on_accept = [], 0, 0
         return out

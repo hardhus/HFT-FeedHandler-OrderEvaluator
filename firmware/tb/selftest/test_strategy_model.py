@@ -241,6 +241,47 @@ def test_disarm_or_commit_after_the_fire_does_not_cancel_the_order():
     assert s.fired[:2] == [1, 1]
 
 
+def test_commit_and_arm_after_the_fire_survive_the_acceptance():
+    """Decision 18: the host's commands after the fire win over the one-shot disarm."""
+    s = armed(rule(qty=1))
+    s.message(ev(), 1, 0, 0)
+    s.commit(0, rule(qty=2))
+    s.arm(1)
+    assert [o.qty for o in s.packet(True)] == [1]  # the old rule's order still goes (decision 14)
+    assert s.armed & 1
+    assert s.message(ev(), 2, 0, 0) == 0  # the new rule fires in the next packet
+    assert [o.qty for o in s.packet(True)] == [2]
+    assert s.armed & 1 == 0  # no command since this fire: one-shot
+
+
+@pytest.mark.parametrize("command", ["arm", "disarm", "commit"])
+def test_any_command_after_the_fire_takes_the_rule_out_of_the_acceptance_disarm(command):
+    s = armed(rule(), rule())
+    s.message(ev(), 1, 0, 0)
+    s.message(ev(), 2, 0, 0)
+    {"arm": lambda: s.arm(0b01), "disarm": lambda: s.disarm(0b01), "commit": lambda: s.commit(0, BASE)}[command]()
+    assert len(s.packet(True)) == 2
+    assert s.armed & 0b11 == (0b01 if command == "arm" else 0b00)  # rule 1: one-shot as usual
+
+
+def test_a_rearmed_rule_still_fires_once_per_packet():
+    s = armed(rule())
+    assert s.message(ev(), 1, 0, 0) == 0
+    s.arm(1)
+    assert s.message(ev(), 2, 0, 0) is None
+    assert len(s.packet(True)) == 1 and s.armed & 1
+
+
+def test_a_rejected_packet_clears_the_acceptance_disarm():
+    s = armed(rule())
+    s.message(ev(), 1, 0, 0)
+    s.packet(accepted=False)
+    s.message(ev(), 2, 0, 0)
+    s.arm(1)
+    s.packet(True)
+    assert s.armed & 1
+
+
 def test_commit_disarms():
     """Decision 8."""
     s = armed(rule())
