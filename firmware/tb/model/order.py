@@ -207,6 +207,11 @@ class TxPort:
         out, self.queue = self.queue, []
         return out
 
-    def write_user_ref_next(self, value: int) -> None:
-        assert 1 <= value <= USER_REF_MAX + 1 and not self.queue
+    def write_user_ref_next(self, value: int, killed: bool = True) -> bool:
+        """TX_USERREF_NEXT (decision 22): takes effect only while killed with an empty queue; returns False
+        (ignored, the sticky error bit) otherwise."""
+        assert 1 <= value <= USER_REF_MAX + 1
+        if not killed or self.queue:
+            return False
         self.user_ref_next = value
+        return True

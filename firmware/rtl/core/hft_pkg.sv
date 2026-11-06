@@ -144,6 +144,28 @@ package hft_pkg;
     return tif inside {8'h30, 8'h33, 8'h35, 8'h45};
   endfunction
 
+  // risk_check (audit/14 §2.5; decision 9): reasons in priority order = RISK_REJECT `reason`.
+  typedef enum logic [3:0] {
+    RISK_NONE      = 4'd0,
+    RISK_KILL      = 4'd1,
+    RISK_TX_OFF    = 4'd2,
+    RISK_INVALID   = 4'd3,
+    RISK_LOCATE    = 4'd4,
+    RISK_QTY       = 4'd5,
+    RISK_NOTIONAL  = 4'd6,
+    RISK_BUDGET    = 4'd7,
+    RISK_RATE      = 4'd8,
+    RISK_TX_BUSY   = 4'd9,
+    RISK_RING_FULL = 4'd10
+  } risk_reason_e;
+  // ORDER_SENT and RISK_REJECT `source`.
+  typedef enum logic [1:0] {
+    ORDER_SRC_RULE = 2'd1,
+    ORDER_SRC_HOST = 2'd2
+  } order_src_e;
+  localparam int unsigned RISK_TX_QUEUE = 8;  // accepted orders waiting for TX (P7)
+  localparam int unsigned RISK_RING_CREDITS = 16;  // order entries event_packer's order queue holds (P8, decision 25)
+
   // strategy_engine rules (audit/14 §2.4). msg_mask bit 0/1/2 = A/F/P; side_match bit 0/1 = B/S.
   localparam int unsigned STRAT_N_RULES = 8;
   localparam int unsigned STRAT_RULE_W = $clog2(STRAT_N_RULES);

@@ -169,6 +169,20 @@ STRATEGY_VIOLATIONS = {
     "a_fire_closed": (7, "a rule fired while the order path was closed"),
 }
 
+RISK_TB = ["firmware/tb/sva/risk_props.sv", "firmware/tb/sv/tb_risk_props.sv"]
+RISK_VIOLATIONS = {
+    "a_kill_no_accept": (1, "an order accepted while killed"),
+    "a_tx_off_no_accept": (2, "an order accepted while tx_en was 0"),
+    "a_budget_no_accept": (3, "an order accepted with budget 0"),
+    "a_rate_no_accept": (4, "an order accepted with no token"),
+    "a_one_gate": (5, "an order went to TX without passing the checks"),
+    "a_held_live": (6, "held and live orders above the queue size"),
+    "a_no_tx_while_drain": (7, "an order offered to TX while cancelled ones are written out"),
+    "a_ref_left": (8, "an order handed over with no UserRefNum left"),
+    "a_accept_has_credit": (9, "an order accepted with no ring credit"),
+    "a_credits_bounded": (10, "more ring credits than the packer's order queue"),
+}
+
 AXI_WR_TB = ["firmware/tb/sva/axi_wr_props.sv", "firmware/tb/sv/tb_axi_wr_props.sv"]
 AXI_WR_VIOLATIONS = {
     "a_aw_stable": (1, "AW changed or dropped before AWREADY"),
@@ -233,6 +247,7 @@ CHECKERS = {
     "fifo_commit": ("tb_fifo_commit_props", FIFO_COMMIT_TB, FIFO_COMMIT_VIOLATIONS),
     "packer": ("tb_packer_props", PACKER_TB, PACKER_VIOLATIONS),
     "strategy": ("tb_strategy_props", STRATEGY_TB, STRATEGY_VIOLATIONS),
+    "risk": ("tb_risk_props", RISK_TB, RISK_VIOLATIONS),
     "axi_wr": ("tb_axi_wr_props", AXI_WR_TB, AXI_WR_VIOLATIONS),
     "ring": ("tb_ring_props", RING_TB, RING_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),

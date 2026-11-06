@@ -268,3 +268,14 @@ def test_exchange_refuses_a_repeated_user_ref():
     ex.receive(GOOD)
     with pytest.raises(ExchangeError, match="UserRefNum 1, want 2"):
         ex.receive(GOOD)
+
+
+def test_user_ref_next_is_written_only_while_killed_with_an_empty_queue():
+    """Decision 22."""
+    tx = TxPort(CFG)
+    assert not tx.write_user_ref_next(50, killed=False) and tx.user_ref_next == 1
+    tx.accept(host_req())
+    assert not tx.write_user_ref_next(50, killed=True) and tx.user_ref_next == 1
+    tx.tx_off()
+    assert tx.write_user_ref_next(50, killed=True) and tx.user_ref_next == 50
+    assert tx.write_user_ref_next(3, killed=True) and tx.user_ref_next == 3  # may go down while killed

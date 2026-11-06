@@ -175,3 +175,25 @@ bind strategy_engine strategy_props #(
     .fill       (base - rd_ptr_q),
     .m_ord_valid(m_ord_valid)
 );
+
+bind risk_check risk_props #(
+    .QD     (QD),
+    .QP     (QP),
+    .CREDITS(hft_pkg::RISK_RING_CREDITS),
+    .CW     ($clog2(hft_pkg::RISK_RING_CREDITS + 1))
+) u_risk_props (
+    .clk       (clk),
+    .rst       (rst),
+    .accept    (accept),
+    .ctl_kill  (ctl_kill),
+    .ctl_tx_en (ctl_tx_en),
+    .budget    (budget_q),
+    .tokens    (tokens_eff),
+    .handover  (handover),
+    .cancelled (cancelled),
+    .held      (held_q),
+    .live      (live_q),
+    .m_tx_valid(m_tx_valid),
+    .ref_next  (ref_next_q),
+    .credits   (credits_q)
+);

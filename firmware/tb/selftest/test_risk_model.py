@@ -209,3 +209,65 @@ def test_tx_en_fall_cancels_the_queue_as_tx_off():
     assert r.decide(req(), 0, tx) == Reason.TX_OFF
     assert r.set_tx_en(True, tx) == []
     assert r.decide(req(), 0, tx) == Reason.NONE
+
+
+# ---- kill (decisions 20, 21)
+
+
+def test_kill_rise_cancels_the_queue_as_kill_without_refund():
+    r, tx = open_risk(budget=10), TxPort(CFG)
+    reqs = [req(qty=q) for q in (1, 2, 3)]
+    for o in reqs:
+        r.decide(o, 0, tx)
+    budget, tokens = r.budget, r.tokens
+    assert r.set_kill(True, tx) == reqs
+    assert r.rejects[Reason.KILL] == 3 and r.last_cancel == Reason.KILL and not tx.queue
+    assert (r.budget, r.tokens) == (budget, tokens)  # no refund
+    assert r.set_kill(True, tx) == []  # a level, not a rise: nothing more
+    assert r.decide(req(), 0, tx) == Reason.KILL
+
+
+def test_kill_and_tx_en_fall_in_one_cycle_cancel_as_kill():
+    r, tx = open_risk(), TxPort(CFG)
+    r.decide(req(), 0, tx)
+    assert len(r.controls(tx, kill=True, tx_en=False)) == 1
+    assert (r.rejects[Reason.KILL], r.rejects[Reason.TX_OFF]) == (1, 0)
+
+
+def test_tx_off_cancel_has_no_refund():
+    r, tx = open_risk(budget=5), TxPort(CFG)
+    r.decide(req(), 0, tx)
+    r.set_tx_en(False, tx)
+    assert (r.budget, r.tokens) == (4, 3)
+
+
+def test_kill_fall_cancels_nothing():
+    r, tx = open_risk(), TxPort(CFG)
+    r.kill = True
+    tx.queue.append(req())  # cannot happen in the core; checks that only a rise cancels
+    assert r.set_kill(False, tx) == [] and len(tx.queue) == 1
+
+
+# ---- Ring credits (decision 25)
+
+
+def test_ring_full_is_the_last_reason_and_a_dropped_reject_is_counted():
+    r, tx = open_risk(budget=100, limits=Limits(max_qty=1000, max_notional=1 << 63, rate_period=0, rate_burst=100)), TxPort(CFG)
+    for _ in range(16):
+        assert r.decide(req(), 0, tx) == Reason.NONE
+        tx.queue.clear()
+    assert r.credits == 0
+    assert r.decide(req(), 0, tx) == Reason.RING_FULL and not r.last_written
+    assert r.decide(req(locate=LOC + 1), 0, tx) == Reason.LOCATE and r.ring_drops == 2
+    r.credit_return()
+    assert r.decide(req(locate=LOC + 1), 0, tx) == Reason.LOCATE and r.last_written and r.credits == 0
+    r.credit_return()
+    assert r.decide(req(), 0, tx) == Reason.NONE and r.credits == 0
+
+
+def test_ring_full_comes_after_tx_busy():
+    r, tx = open_risk(), TxPort(CFG)
+    r.credits = 0
+    for _ in range(8):
+        tx.queue.append(req())
+    assert r.reason(req(), 0, tx) == Reason.TX_BUSY
