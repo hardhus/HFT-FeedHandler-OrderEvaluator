@@ -156,6 +156,11 @@ PACKER_VIOLATIONS = {
     "a_end_xor": (6, "fifo_commit and fifo_rollback in one cycle"),
     "a_end_has_event": (7, "a commit or rollback without a packet event"),
     "a_accepted_gets_end": (8, "an accepted packet event without a commit or rollback"),
+    "a_ord_outside_unit": (9, "an order entry inside a packet's unit"),
+    "a_ord_commits": (10, "an order entry written without its commit"),
+    "a_credit_ret": (11, "ring_credit_ret is not one per written order entry, one cycle later"),
+    "a_order_room": (12, "more order entries than the queue holds"),
+    "a_ord_taken": (13, "a queued order entry not taken in a free cycle"),
 }
 
 STRATEGY_TB = ["firmware/tb/sva/strategy_props.sv", "firmware/tb/sv/tb_strategy_props.sv"]

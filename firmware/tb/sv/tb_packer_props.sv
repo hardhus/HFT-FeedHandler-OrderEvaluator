@@ -1,40 +1,59 @@
 // tb_packer_props: checks the packer_props checker itself. Drives its ports directly: a message, a write, an
 // accepted packet event and its commit 1 cycle later, then one with 2 entries and its commit 2 cycles
-// later, a rejected event and its rollback. Every property's antecedent is hit, so a clean run proves the
+// later, a rejected event and its rollback, an order entry taken, written and its credit given back, a full
+// queue. Every property's antecedent is hit, so a clean run proves the
 // checker quiet. With HFT_VIOLATE=<k> exactly one property is violated (numbers in test_sva_checkers.py);
 // its assertion must fire. Values are set after a falling edge and sampled at the next rising edge.
 `timescale 1ns / 1ps
 module tb_packer_props;
   import hft_pkg::*;
 
-  logic clk = 1'b0;
-  logic rst = 1'b1;
-  logic s_ev_valid = 1'b0;
-  logic s_pkt_valid = 1'b0;
-  logic pkt_accepted = 1'b0;
-  logic s1_valid = 1'b0;
-  logic fifo_wr_en = 1'b0;
-  logic fifo_commit = 1'b0;
-  logic fifo_rollback = 1'b0;
-  logic fifo_full = 1'b0;
-  logic fifo_wr_busy = 1'b0;
+  logic                         clk = 1'b0;
+  logic                         rst = 1'b1;
+  logic                         s_ev_valid = 1'b0;
+  logic                         s_pkt_valid = 1'b0;
+  logic                         pkt_accepted = 1'b0;
+  logic                         s1_valid = 1'b0;
+  logic                         fifo_wr_en = 1'b0;
+  logic                         fifo_commit = 1'b0;
+  logic                         fifo_rollback = 1'b0;
+  logic                         fifo_full = 1'b0;
+  logic                         fifo_wr_busy = 1'b0;
+  logic                         s_sent_valid = 1'b0;
+  logic                         s_rej_valid = 1'b0;
+  logic                         s1_commit = 1'b0;
+  logic                         s1_rollback = 1'b0;
+  logic                         s1_ord = 1'b0;
+  logic                         ord_write = 1'b0;
+  logic                         ord_free = 1'b0;
+  logic [RING_ORD_QUEUED_W-1:0] oq_n = '0;
+  logic                         ring_credit_ret = 1'b0;
 
   always begin
     #3.2 clk = ~clk;
   end
 
   packer_props u_props (
-      .clk          (clk),
-      .rst          (rst),
-      .s_ev_valid   (s_ev_valid),
-      .s_pkt_valid  (s_pkt_valid),
-      .pkt_accepted (pkt_accepted),
-      .s1_valid     (s1_valid),
-      .fifo_wr_en   (fifo_wr_en),
-      .fifo_commit  (fifo_commit),
-      .fifo_rollback(fifo_rollback),
-      .fifo_full    (fifo_full),
-      .fifo_wr_busy (fifo_wr_busy)
+      .clk            (clk),
+      .rst            (rst),
+      .s_ev_valid     (s_ev_valid),
+      .s_pkt_valid    (s_pkt_valid),
+      .pkt_accepted   (pkt_accepted),
+      .s1_valid       (s1_valid),
+      .fifo_wr_en     (fifo_wr_en),
+      .fifo_commit    (fifo_commit),
+      .fifo_rollback  (fifo_rollback),
+      .fifo_full      (fifo_full),
+      .fifo_wr_busy   (fifo_wr_busy),
+      .s_sent_valid   (s_sent_valid),
+      .s_rej_valid    (s_rej_valid),
+      .s1_commit      (s1_commit),
+      .s1_rollback    (s1_rollback),
+      .s1_ord         (s1_ord),
+      .ord_write      (ord_write),
+      .ord_free       (ord_free),
+      .oq_n           (oq_n),
+      .ring_credit_ret(ring_credit_ret)
   );
 
   // 1 when this run violates property k.
@@ -146,6 +165,42 @@ module tb_packer_props;
       fifo_commit = 1'b1;
       idle();
     end
+
+    // An order entry: it comes in, is taken in a free cycle, written with its commit, its credit comes back.
+    @(negedge clk);
+    s_sent_valid = 1'b1;
+    @(negedge clk);
+    s_sent_valid = 1'b0;
+    oq_n         = 1;
+    ord_free     = 1'b1;
+    @(negedge clk);
+    s1_ord      = !v(13);  // 13: a_ord_taken
+    ord_write   = !v(13);
+    fifo_wr_en  = !v(13);
+    fifo_commit = !v(13) && !v(10);  // 10: a_ord_commits
+    s1_commit   = v(9);  // 9: a_ord_outside_unit
+    @(negedge clk);
+    s1_ord          = 1'b0;
+    ord_write       = 1'b0;
+    fifo_wr_en      = 1'b0;
+    fifo_commit     = 1'b0;
+    s1_commit       = 1'b0;
+    ord_free        = 1'b0;
+    oq_n            = v(13) ? 1 : 0;
+    ring_credit_ret = !v(13) && !v(11);  // 11: a_credit_ret
+    @(negedge clk);
+    ring_credit_ret = 1'b0;
+    oq_n            = '0;
+    idle(2);
+
+    // A full queue: nothing more may come in.
+    @(negedge clk);
+    oq_n        = RING_ORD_QUEUED_W'(RISK_RING_CREDITS);
+    s_rej_valid = v(12);  // 12: a_order_room
+    @(negedge clk);
+    s_rej_valid = 1'b0;
+    oq_n        = '0;
+    idle(2);
 
     if (v(4)) begin  // 4: a_capacity
       repeat (RING_MAX_PKT_ENTRIES + 1) begin

@@ -165,6 +165,9 @@ package hft_pkg;
   } order_src_e;
   localparam int unsigned RISK_TX_QUEUE = 8;  // accepted orders waiting for TX (P7)
   localparam int unsigned RISK_RING_CREDITS = 16;  // order entries event_packer's order queue holds (P8, decision 25)
+  localparam int unsigned RING_ORD_QUEUED_W = $clog2(
+      RISK_RING_CREDITS + 1
+  );  // event_packer cnt_ord_queued
 
   // strategy_engine rules (audit/14 §2.4). msg_mask bit 0/1/2 = A/F/P; side_match bit 0/1 = B/S.
   localparam int unsigned STRAT_N_RULES = 8;

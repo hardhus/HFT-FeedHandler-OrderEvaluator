@@ -1,4 +1,4 @@
-// event_path_ooc: OOC synthesis harness for event_packer, the COMMIT=1 cdc_async_fifo and event_ring_writer. Every
+// event_path_ooc: OOC synthesis harness for event_packer (its order queue included), the COMMIT=1 cdc_async_fifo and event_ring_writer. Every
 // input goes through one register first, as from itch_decoder's output registers on the net side and a register
 // slice on the host side, so all paths are register to register and inside the timing and CDC gates. Every output is
 // a port, so synthesis keeps all of the logic.
@@ -45,10 +45,44 @@ module event_path_ooc
     input logic         [           63:0] s_pkt_sof_ts,
     input logic         [CFG_EPOCH_W-1:0] s_pkt_epoch,
 
-    output logic [63:0] cnt_commit_entries,
-    output logic [63:0] cnt_drop_pkts,
-    output logic [63:0] cnt_drop_entries,
-    output logic        net_overflow,
+    input  logic                            s_sent_valid,
+    input  logic         [            31:0] s_sent_user_ref,
+    input  order_src_e                      s_sent_source,
+    input  logic         [STRAT_RULE_W-1:0] s_sent_rule,
+    input  logic         [             7:0] s_sent_side,
+    input  logic         [            31:0] s_sent_qty,
+    input  logic         [            31:0] s_sent_price,
+    input  logic         [            15:0] s_sent_locate,
+    input  logic         [            63:0] s_sent_stock,
+    input  logic         [             7:0] s_sent_tif,
+    input  logic         [           111:0] s_sent_clordid,
+    input  logic         [            63:0] s_sent_seq,
+    input  logic         [            63:0] s_sent_sof_ts,
+    input  logic         [ CFG_EPOCH_W-1:0] s_sent_epoch,
+    input  logic         [            63:0] s_sent_tx_ts,
+    input  logic                            s_rej_valid,
+    input  risk_reason_e                    s_rej_reason,
+    input  order_src_e                      s_rej_source,
+    input  logic         [STRAT_RULE_W-1:0] s_rej_rule,
+    input  logic         [             7:0] s_rej_side,
+    input  logic         [            31:0] s_rej_qty,
+    input  logic         [            31:0] s_rej_price,
+    input  logic         [            15:0] s_rej_locate,
+    input  logic         [            63:0] s_rej_stock,
+    input  logic         [             7:0] s_rej_tif,
+    input  logic         [           111:0] s_rej_clordid,
+    input  logic         [            63:0] s_rej_seq,
+    input  logic         [            63:0] s_rej_sof_ts,
+    input  logic         [ CFG_EPOCH_W-1:0] s_rej_epoch,
+    input  logic         [            63:0] s_rej_ts,
+    input  logic                            s_rej_lost,
+    output logic                            ring_credit_ret,
+
+    output logic [                 63:0] cnt_commit_entries,
+    output logic [                 63:0] cnt_drop_pkts,
+    output logic [                 63:0] cnt_drop_entries,
+    output logic [RING_ORD_QUEUED_W-1:0] cnt_ord_queued,
+    output logic                         net_overflow,
 
     output logic host_underflow,
 
@@ -97,7 +131,38 @@ module event_path_ooc
   logic                              pkt_valid_q;
   mold_status_e                      pkt_status_q;
   logic [63:0] pkt_seq_q, pkt_gap_q, pkt_sof_ts_q;
-  logic [CFG_EPOCH_W-1:0] pkt_epoch_q;
+  logic         [ CFG_EPOCH_W-1:0] pkt_epoch_q;
+  logic                            sent_valid_q;
+  logic         [            31:0] sent_user_ref_q;
+  order_src_e                      sent_source_q;
+  logic         [STRAT_RULE_W-1:0] sent_rule_q;
+  logic         [             7:0] sent_side_q;
+  logic         [            31:0] sent_qty_q;
+  logic         [            31:0] sent_price_q;
+  logic         [            15:0] sent_locate_q;
+  logic         [            63:0] sent_stock_q;
+  logic         [             7:0] sent_tif_q;
+  logic         [           111:0] sent_clordid_q;
+  logic         [            63:0] sent_seq_q;
+  logic         [            63:0] sent_sof_ts_q;
+  logic         [ CFG_EPOCH_W-1:0] sent_epoch_q;
+  logic         [            63:0] sent_tx_ts_q;
+  logic                            rej_valid_q;
+  risk_reason_e                    rej_reason_q;
+  order_src_e                      rej_source_q;
+  logic         [STRAT_RULE_W-1:0] rej_rule_q;
+  logic         [             7:0] rej_side_q;
+  logic         [            31:0] rej_qty_q;
+  logic         [            31:0] rej_price_q;
+  logic         [            15:0] rej_locate_q;
+  logic         [            63:0] rej_stock_q;
+  logic         [             7:0] rej_tif_q;
+  logic         [           111:0] rej_clordid_q;
+  logic         [            63:0] rej_seq_q;
+  logic         [            63:0] rej_sof_ts_q;
+  logic         [ CFG_EPOCH_W-1:0] rej_epoch_q;
+  logic         [            63:0] rej_ts_q;
+  logic                            rej_lost_q;
 
   always_ff @(posedge net_clk) begin
     rst_q            <= net_rst;
@@ -128,6 +193,37 @@ module event_path_ooc
     pkt_gap_q        <= s_pkt_gap;
     pkt_sof_ts_q     <= s_pkt_sof_ts;
     pkt_epoch_q      <= s_pkt_epoch;
+    sent_valid_q     <= s_sent_valid;
+    sent_user_ref_q  <= s_sent_user_ref;
+    sent_source_q    <= s_sent_source;
+    sent_rule_q      <= s_sent_rule;
+    sent_side_q      <= s_sent_side;
+    sent_qty_q       <= s_sent_qty;
+    sent_price_q     <= s_sent_price;
+    sent_locate_q    <= s_sent_locate;
+    sent_stock_q     <= s_sent_stock;
+    sent_tif_q       <= s_sent_tif;
+    sent_clordid_q   <= s_sent_clordid;
+    sent_seq_q       <= s_sent_seq;
+    sent_sof_ts_q    <= s_sent_sof_ts;
+    sent_epoch_q     <= s_sent_epoch;
+    sent_tx_ts_q     <= s_sent_tx_ts;
+    rej_valid_q      <= s_rej_valid;
+    rej_reason_q     <= s_rej_reason;
+    rej_source_q     <= s_rej_source;
+    rej_rule_q       <= s_rej_rule;
+    rej_side_q       <= s_rej_side;
+    rej_qty_q        <= s_rej_qty;
+    rej_price_q      <= s_rej_price;
+    rej_locate_q     <= s_rej_locate;
+    rej_stock_q      <= s_rej_stock;
+    rej_tif_q        <= s_rej_tif;
+    rej_clordid_q    <= s_rej_clordid;
+    rej_seq_q        <= s_rej_seq;
+    rej_sof_ts_q     <= s_rej_sof_ts;
+    rej_epoch_q      <= s_rej_epoch;
+    rej_ts_q         <= s_rej_ts;
+    rej_lost_q       <= s_rej_lost;
   end
 
   logic fifo_wr_en, fifo_commit, fifo_rollback, fifo_full, fifo_wr_busy;
@@ -164,6 +260,38 @@ module event_path_ooc
       .s_pkt_gap       (pkt_gap_q),
       .s_pkt_sof_ts    (pkt_sof_ts_q),
       .s_pkt_epoch     (pkt_epoch_q),
+      .s_sent_valid    (sent_valid_q),
+      .s_sent_user_ref (sent_user_ref_q),
+      .s_sent_source   (sent_source_q),
+      .s_sent_rule     (sent_rule_q),
+      .s_sent_side     (sent_side_q),
+      .s_sent_qty      (sent_qty_q),
+      .s_sent_price    (sent_price_q),
+      .s_sent_locate   (sent_locate_q),
+      .s_sent_stock    (sent_stock_q),
+      .s_sent_tif      (sent_tif_q),
+      .s_sent_clordid  (sent_clordid_q),
+      .s_sent_seq      (sent_seq_q),
+      .s_sent_sof_ts   (sent_sof_ts_q),
+      .s_sent_epoch    (sent_epoch_q),
+      .s_sent_tx_ts    (sent_tx_ts_q),
+      .s_rej_valid     (rej_valid_q),
+      .s_rej_reason    (rej_reason_q),
+      .s_rej_source    (rej_source_q),
+      .s_rej_rule      (rej_rule_q),
+      .s_rej_side      (rej_side_q),
+      .s_rej_qty       (rej_qty_q),
+      .s_rej_price     (rej_price_q),
+      .s_rej_locate    (rej_locate_q),
+      .s_rej_stock     (rej_stock_q),
+      .s_rej_tif       (rej_tif_q),
+      .s_rej_clordid   (rej_clordid_q),
+      .s_rej_seq       (rej_seq_q),
+      .s_rej_sof_ts    (rej_sof_ts_q),
+      .s_rej_epoch     (rej_epoch_q),
+      .s_rej_ts        (rej_ts_q),
+      .s_rej_lost      (rej_lost_q),
+      .ring_credit_ret,
       .fifo_wr_en,
       .fifo_din,
       .fifo_commit,
@@ -172,7 +300,8 @@ module event_path_ooc
       .fifo_wr_busy,
       .cnt_commit_entries,
       .cnt_drop_pkts,
-      .cnt_drop_entries
+      .cnt_drop_entries,
+      .cnt_ord_queued
   );
 
   cdc_async_fifo #(

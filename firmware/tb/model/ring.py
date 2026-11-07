@@ -10,9 +10,14 @@ Rules, packet by packet:
 - dropped: an accepted packet that did not fit writes nothing, is counted whole, and the next
   entry that is committed carries overflow_before. A packet that would have been rolled back
   anyway is no loss: it is not counted and sets no flag, even if it did not fit.
-- order entries (ORDER_SENT, RISK_REJECT; audit/14 §2.7, P8): written between packets, each one its
-  own unit. One that did not fit is counted in drop_orders (RING_DROP_ORDERS) and sets
-  overflow_before on the next committed entry, like a dropped packet.
+- order entries (ORDER_SENT, RISK_REJECT; audit/14 §2.7, P8, decisions 25, 28-31): written between
+  packets, each one its own unit. They wait for room and are never dropped by the packer: risk_check
+  reserves a ring credit for every accepted order, so an ORDER_SENT and a cancel's RISK_REJECT
+  always get their entry. Only a decision's RISK_REJECT that found no credit is lost: counted in
+  drop_orders (RING_DROP_ORDERS) and it sets overflow_before on the next committed entry after its
+  place, like a dropped packet (an order entry takes a dropped packet's flag too). Its place is an
+  input: the test puts it in the list where decision 29 says it was (after that cycle's
+  ORDER_SENT, before a cancel's RISK_REJECT of the same cycle).
 
 Ring protocol: entry i goes to base + (i mod N) * 128 with phase ~bit(i, log2 N), so the first pass
 has phase 1 and memory that starts at 0 is not valid. Producer and consumer indexes wrap at 2**32
@@ -58,7 +63,8 @@ class RingOrder:
     reason: Reason = Reason.NONE
     user_ref: int = 0
     ts: int = 0
-    dropped: bool = False  # did not fit in the commit FIFO (from the test's timeline)
+    dropped: bool = False  # a decision's reject that found no ring credit (from the test's timeline)
+    cancel: bool = False  # a RISK_REJECT of an order cancelled in the TX queue (decisions 7, 20)
 
 
 @dataclass
@@ -130,6 +136,8 @@ def expect_entries(items: list[RingPacket | RingOrder], overflow_pending: bool =
     result = RingExpect([], overflow_pending=overflow_pending)
     for pkt in items:
         if isinstance(pkt, RingOrder):
+            if pkt.dropped and (pkt.reason == Reason.NONE or pkt.cancel):
+                raise ValueError("an ORDER_SENT or a cancel's RISK_REJECT has a reserved credit and never drops")
             if pkt.dropped:
                 result.drop_orders += 1
                 result.overflow_pending = True

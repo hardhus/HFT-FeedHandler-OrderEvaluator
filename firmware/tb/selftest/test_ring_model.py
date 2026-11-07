@@ -308,7 +308,7 @@ def test_order_entries_stay_between_packets_in_order():
 
 
 def test_a_dropped_order_entry_is_counted_and_flags_the_next_entry():
-    r = expect_entries([RingOrder(HW_ORDER, user_ref=1, dropped=True), pkt(n=2), RingOrder(HOST_ORDER, Reason.RATE)])
+    r = expect_entries([RingOrder(HW_ORDER, Reason.RATE, dropped=True), pkt(n=2), RingOrder(HOST_ORDER, Reason.RATE)])
     assert (r.drop_orders, r.drop_pkts, r.drop_entries, r.drop_msgs) == (1, 0, 0, 0)
     assert flags(r) == [FLAG_OVERFLOW_BEFORE, 0, 0]
 
@@ -318,6 +318,25 @@ def test_an_order_entry_takes_the_flag_of_a_dropped_packet():
     assert (r.drop_pkts, r.drop_entries, r.drop_orders) == (1, 2, 0)
     assert kinds(r) == [Kind.RISK_REJECT, Kind.ITCH] and flags(r) == [FLAG_OVERFLOW_BEFORE, 0]
     assert not r.overflow_pending
+
+
+@pytest.mark.parametrize(
+    "lost", [RingOrder(HW_ORDER, user_ref=1, dropped=True), RingOrder(HW_ORDER, Reason.KILL, cancel=True, dropped=True)]
+)
+def test_a_sent_order_or_a_cancel_never_drops(lost):
+    # Decision 25: both have a reserved credit; a run that drops one is a broken test timeline.
+    with pytest.raises(ValueError, match="never drops"):
+        expect_entries([lost])
+
+
+def test_a_lost_reject_flags_the_order_entry_after_its_place():
+    # Decision 29: the same cycle's ORDER_SENT is before the lost reject, a cancel of that cycle after it.
+    r = expect_entries([
+        RingOrder(HW_ORDER, user_ref=1), RingOrder(HOST_ORDER, Reason.RING_FULL, dropped=True),
+        RingOrder(HW_ORDER, Reason.KILL, cancel=True), pkt(n=1),
+    ])  # fmt: skip
+    assert kinds(r) == [Kind.ORDER_SENT, Kind.RISK_REJECT, Kind.ITCH]
+    assert flags(r) == [0, FLAG_OVERFLOW_BEFORE, 0] and r.drop_orders == 1
 
 
 def test_a_dropped_order_at_the_end_leaves_the_flag_pending():

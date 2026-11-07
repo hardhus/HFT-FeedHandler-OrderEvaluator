@@ -121,8 +121,11 @@ module rx_csr_top
     output logic         [CFG_EPOCH_W-1:0] m_fwd_pkt_epoch,
 
     // Commit FIFO: a write that found it full (event_packer drops the packet), a read of it empty (never)
-    output logic ring_fifo_overflow,
-    output logic ring_fifo_underflow,
+    output logic                         ring_fifo_overflow,
+    output logic                         ring_fifo_underflow,
+    // event_packer's order queue (its inputs are tied off until S8)
+    output logic                         ring_credit_ret,
+    output logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued,
 
     // Host memory
     output logic [             63:0] m_axi_hmw_awaddr,
@@ -436,6 +439,39 @@ module rx_csr_top
       .s_pkt_gap         (m_fwd_pkt_gap),
       .s_pkt_sof_ts      (m_fwd_pkt_sof_ts),
       .s_pkt_epoch       (m_fwd_pkt_epoch),
+      // Order entries: wired in S8 (audit/14)
+      .s_sent_valid      ('0),
+      .s_sent_user_ref   ('0),
+      .s_sent_source     (ORDER_SRC_RULE),
+      .s_sent_rule       ('0),
+      .s_sent_side       ('0),
+      .s_sent_qty        ('0),
+      .s_sent_price      ('0),
+      .s_sent_locate     ('0),
+      .s_sent_stock      ('0),
+      .s_sent_tif        ('0),
+      .s_sent_clordid    ('0),
+      .s_sent_seq        ('0),
+      .s_sent_sof_ts     ('0),
+      .s_sent_epoch      ('0),
+      .s_sent_tx_ts      ('0),
+      .s_rej_valid       ('0),
+      .s_rej_reason      (RISK_NONE),
+      .s_rej_source      (ORDER_SRC_RULE),
+      .s_rej_rule        ('0),
+      .s_rej_side        ('0),
+      .s_rej_qty         ('0),
+      .s_rej_price       ('0),
+      .s_rej_locate      ('0),
+      .s_rej_stock       ('0),
+      .s_rej_tif         ('0),
+      .s_rej_clordid     ('0),
+      .s_rej_seq         ('0),
+      .s_rej_sof_ts      ('0),
+      .s_rej_epoch       ('0),
+      .s_rej_ts          ('0),
+      .s_rej_lost        ('0),
+      .ring_credit_ret   (ring_credit_ret),
       .fifo_wr_en        (fifo_wr_en),
       .fifo_din          (fifo_din),
       .fifo_commit       (fifo_commit),
@@ -444,7 +480,8 @@ module rx_csr_top
       .fifo_wr_busy      (fifo_wr_busy),
       .cnt_commit_entries(ring_commit_entries),
       .cnt_drop_pkts     (ring_drop_pkts),
-      .cnt_drop_entries  (ring_drop_entries)
+      .cnt_drop_entries  (ring_drop_entries),
+      .cnt_ord_queued    (ring_ord_queued)
   );
 
   cdc_async_fifo #(

@@ -93,17 +93,26 @@ bind itch_decoder itch_props u_itch_props (
 );
 
 bind event_packer packer_props u_packer_props (
-    .clk          (clk),
-    .rst          (rst),
-    .s_ev_valid   (s_ev_valid),
-    .s_pkt_valid  (s_pkt_valid),
-    .pkt_accepted (pkt_accepted),
-    .s1_valid     (s1_valid),
-    .fifo_wr_en   (fifo_wr_en),
-    .fifo_commit  (fifo_commit),
-    .fifo_rollback(fifo_rollback),
-    .fifo_full    (fifo_full),
-    .fifo_wr_busy (fifo_wr_busy)
+    .clk            (clk),
+    .rst            (rst),
+    .s_ev_valid     (s_ev_valid),
+    .s_pkt_valid    (s_pkt_valid),
+    .pkt_accepted   (pkt_accepted),
+    .s1_valid       (s1_valid),
+    .fifo_wr_en     (fifo_wr_en),
+    .fifo_commit    (fifo_commit),
+    .fifo_rollback  (fifo_rollback),
+    .fifo_full      (fifo_full),
+    .fifo_wr_busy   (fifo_wr_busy),
+    .s_sent_valid   (s_sent_valid),
+    .s_rej_valid    (s_rej_valid),
+    .s1_commit      (s1_commit),
+    .s1_rollback    (s1_rollback),
+    .s1_ord         (s1_ord_q),
+    .ord_write      (ord_ok),
+    .ord_free       (ord_free),
+    .oq_n           (oq_n_q),
+    .ring_credit_ret(ring_credit_ret)
 );
 
 bind itch_stats itch_stats_props #(
