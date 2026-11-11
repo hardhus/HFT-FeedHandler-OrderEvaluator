@@ -1,6 +1,7 @@
 """cdc_async_fifo (portable): order, no loss/duplication, full/empty boundaries, overflow and
 underflow, latency, reset/busy protocol and gray pointers, across clock ratios and with the
-CDC jitter model. Built with WR_COUNT=1: every test also checks the fill level (FillWatch)."""
+CDC jitter model. Built with WR_COUNT=1: every test also checks the fill level (FillWatch). start() is
+shared with test_cdc_async_fifo_commit (WR_COUNT=0, no fill level): the WR_COUNT env says which build runs."""
 
 import os
 import random
@@ -26,6 +27,12 @@ def depth() -> int:
 
 def jitter() -> int:
     return int(os.environ["JITTER"])
+
+
+def wr_count_built() -> bool:
+    """The build's WR_COUNT, passed via env by every runner that uses start() (no default: a runner that
+    forgets it fails here instead of skipping or wrongly running FillWatch)."""
+    return {"0": False, "1": True}[os.environ["WR_COUNT"]]
 
 
 class Pulses:
@@ -113,7 +120,8 @@ async def start(dut) -> Pulses:
     assert dut.full.value, "full must be 1 during reset (like XPM FULL_RESET_VALUE=1)"
     dut.rst.value = 0
     await wait_not_busy(dut)
-    FillWatch(dut)
+    if wr_count_built():
+        FillWatch(dut)
     return Pulses(dut)
 
 
@@ -452,5 +460,5 @@ def test_cdc_async_fifo(depth_log2, width, sync_stages, jitter, ratio):
         parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "WR_COUNT": 1},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
         extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
-                   "SYNC_STAGES": sync_stages},  # fmt: skip
+                   "SYNC_STAGES": sync_stages, "WR_COUNT": 1},  # fmt: skip
     )

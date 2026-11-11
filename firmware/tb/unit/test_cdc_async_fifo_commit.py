@@ -382,8 +382,8 @@ def test_cdc_async_fifo_commit(depth_log2, width, sync_stages, jitter, ratio):
         toplevel="cdc_async_fifo",
         filelists=["common.f"],
         test_module="test_cdc_async_fifo_commit",
-        parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "COMMIT": 1},
+        parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "COMMIT": 1, "WR_COUNT": 0},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
         extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
-                   "SYNC_STAGES": sync_stages},  # fmt: skip
+                   "SYNC_STAGES": sync_stages, "WR_COUNT": 0},  # fmt: skip
     )
