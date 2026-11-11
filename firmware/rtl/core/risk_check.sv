@@ -31,7 +31,8 @@
 //                ring_credit_ret when the packer moves an entry on. An accepted order reserves one for its later
 //                entry (ORDER_SENT, or its cancel's RISK_REJECT), so an order that leaves always gets its entry. A
 //                decision's RISK_REJECT takes a credit if there is one; else it is not written (ev_rej_dropped,
-//                counted as RING_DROP_ORDERS) and a cancelled order may use the free port (decision 25).
+//                counted as RING_DROP_ORDERS; ev_rej_dropped_reason is its reason, for RISK_REJECT_<reason>)
+//                and a cancelled order may use the free port (decision 25).
 // UserRefNum   : m_tx_user_ref is the counter; each order handed over takes it and the counter adds 1. It stops
 //                at 2^32: no number left is INVALID. cmd_userref_wr takes effect only while ctl_kill is 1, the
 //                queue is empty and the value is not 0; otherwise ev_userref_ignored (decision 22).
@@ -131,8 +132,9 @@ module risk_check
     output logic         [            63:0] m_rej_ts,
 
     // Ring credits (event_packer)
-    input  logic ring_credit_ret,
-    output logic ev_rej_dropped,
+    input  logic         ring_credit_ret,
+    output logic         ev_rej_dropped,
+    output risk_reason_e ev_rej_dropped_reason, // valid with ev_rej_dropped
 
     output logic [31:0] st_budget
 );
@@ -526,9 +528,10 @@ module risk_check
       end else if (handover) begin
         rd_q <= rd_q + 1'b1;
       end
-      held_q         <= held_q - QP'(drain_out) + cancelled;
-      credits_q      <= credits_q - CW'(v3_q && credits_q != '0) + CW'(ring_credit_ret);
-      ev_rej_dropped <= v3_q && reason != RISK_NONE && credits_q == '0;
+      held_q                <= held_q - QP'(drain_out) + cancelled;
+      credits_q             <= credits_q - CW'(v3_q && credits_q != '0) + CW'(ring_credit_ret);
+      ev_rej_dropped        <= v3_q && reason != RISK_NONE && credits_q == '0;
+      ev_rej_dropped_reason <= reason;
       if (cancel) begin
         live_q <= '0;
       end else begin

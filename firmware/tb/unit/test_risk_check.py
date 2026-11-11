@@ -84,6 +84,7 @@ class Exp:
     budget: int = 0
     ignored: bool = False
     dropped: bool = False
+    dropped_reason: int = 0  # with dropped
 
 
 @dataclass
@@ -205,6 +206,7 @@ class Env:
                 else:
                     self.drops.append((s, reason, o))
                     e.dropped = True
+                    e.dropped_reason = int(reason)
                     self.hit("rej_dropped")
         if rej is None and held_before:
             o, reason, cts = tx.held.popleft()
@@ -348,6 +350,9 @@ class Env:
         assert int(d.st_budget.value) == e.budget, f"edge {s}: st_budget {int(d.st_budget.value)}, model {e.budget}"
         assert int(d.ev_userref_ignored.value) == e.ignored, f"edge {s}: ev_userref_ignored"
         assert int(d.ev_rej_dropped.value) == e.dropped, f"edge {s}: ev_rej_dropped"
+        if e.dropped:
+            got = int(d.ev_rej_dropped_reason.value)
+            assert got == e.dropped_reason, f"edge {s}: ev_rej_dropped_reason {got}, model {e.dropped_reason}"
 
     async def open_path(self, limits: Limits = OPEN, budget: int = 1000, allow: tuple[int, ...] = (42,)) -> None:
         """The reset contract's order: limits, bitmap, budget, then tx_en, kill released last."""

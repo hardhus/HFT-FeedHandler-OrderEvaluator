@@ -20,7 +20,7 @@ extern "C" {
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bm 0xffffffff
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bp 0
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bw 32
-#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50003
+#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50004
 
 // reg - hft_csr::GLOBAL::SCRATCH
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bm 0xffffffff
@@ -333,6 +333,11 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t HI;
 } hft_csr__counter64_live_t;
 
+// reg - hft_csr::RING::RING_ORDER_QUEUED
+#define HFT_CSR__RING__RING_ORDER_QUEUED__QUEUED_bm 0x1f
+#define HFT_CSR__RING__RING_ORDER_QUEUED__QUEUED_bp 0
+#define HFT_CSR__RING__RING_ORDER_QUEUED__QUEUED_bw 5
+
 // regfile - hft_csr::RING
 typedef struct __attribute__ ((__packed__)) {
     uint32_t RING_CTRL;
@@ -349,12 +354,385 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t RING_COMMIT_ENTRIES;
     hft_csr__counter64_t RING_DROP_PKTS;
     hft_csr__counter64_t RING_DROP_ENTRIES;
+    hft_csr__counter64_t RING_DROP_ORDERS;
+    uint32_t RING_ORDER_QUEUED;
 } hft_csr__RING_t;
+
+// reg - hft_csr::RISK::MAX_QTY
+#define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bm 0xffffffff
+#define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bp 0
+#define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bw 32
+#define HFT_CSR__RISK__MAX_QTY__MAX_QTY_reset 0x0
+
+// reg - hft_csr::RISK::MAX_NOTIONAL_LO
+#define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bm 0xffffffff
+#define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bp 0
+#define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bw 32
+#define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_reset 0x0
+
+// reg - hft_csr::RISK::MAX_NOTIONAL_HI
+#define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bm 0xffffffff
+#define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bp 0
+#define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bw 32
+#define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_reset 0x0
+
+// reg - hft_csr::RISK::RATE_REFILL
+#define HFT_CSR__RISK__RATE_REFILL__REFILL_bm 0xffffffff
+#define HFT_CSR__RISK__RATE_REFILL__REFILL_bp 0
+#define HFT_CSR__RISK__RATE_REFILL__REFILL_bw 32
+#define HFT_CSR__RISK__RATE_REFILL__REFILL_reset 0x0
+
+// reg - hft_csr::RISK::RATE_PERIOD
+#define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bm 0xffffffff
+#define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bp 0
+#define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bw 32
+#define HFT_CSR__RISK__RATE_PERIOD__PERIOD_reset 0x0
+
+// reg - hft_csr::RISK::RATE_BURST
+#define HFT_CSR__RISK__RATE_BURST__BURST_bm 0xffffffff
+#define HFT_CSR__RISK__RATE_BURST__BURST_bp 0
+#define HFT_CSR__RISK__RATE_BURST__BURST_bw 32
+#define HFT_CSR__RISK__RATE_BURST__BURST_reset 0x0
+
+// reg - hft_csr::RISK::RISK_COMMIT
+#define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bm 0x1
+#define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bp 0
+#define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bw 1
+
+// reg - hft_csr::RISK::RISK_CTRL
+#define HFT_CSR__RISK__RISK_CTRL__KILL_bm 0x1
+#define HFT_CSR__RISK__RISK_CTRL__KILL_bp 0
+#define HFT_CSR__RISK__RISK_CTRL__KILL_bw 1
+#define HFT_CSR__RISK__RISK_CTRL__KILL_reset 0x1
+
+// reg - hft_csr::RISK::BUDGET_ADD
+#define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bm 0xffffffff
+#define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bp 0
+#define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bw 32
+
+// reg - hft_csr::RISK::BUDGET
+#define HFT_CSR__RISK__BUDGET__BUDGET_bm 0xffffffff
+#define HFT_CSR__RISK__BUDGET__BUDGET_bp 0
+#define HFT_CSR__RISK__BUDGET__BUDGET_bw 32
+
+// regfile - hft_csr::RISK
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t MAX_QTY;
+    uint32_t MAX_NOTIONAL_LO;
+    uint32_t MAX_NOTIONAL_HI;
+    uint32_t RATE_REFILL;
+    uint32_t RATE_PERIOD;
+    uint32_t RATE_BURST;
+    uint32_t RISK_COMMIT;
+    uint32_t RISK_CTRL;
+    uint32_t BUDGET_ADD;
+    uint32_t BUDGET;
+    uint8_t RESERVED_28_3f[0x18];
+    hft_csr__counter64_t ORDERS_SENT_HW;
+    hft_csr__counter64_t ORDERS_SENT_HOST;
+    uint8_t RESERVED_50_5f[0x10];
+    hft_csr__counter64_t RISK_REJECT_KILL;
+    hft_csr__counter64_t RISK_REJECT_TX_OFF;
+    hft_csr__counter64_t RISK_REJECT_INVALID;
+    hft_csr__counter64_t RISK_REJECT_LOCATE;
+    hft_csr__counter64_t RISK_REJECT_QTY;
+    hft_csr__counter64_t RISK_REJECT_NOTIONAL;
+    hft_csr__counter64_t RISK_REJECT_BUDGET;
+    hft_csr__counter64_t RISK_REJECT_RATE;
+    hft_csr__counter64_t RISK_REJECT_TX_BUSY;
+    hft_csr__counter64_t RISK_REJECT_RING_FULL;
+} hft_csr__RISK_t;
+
+// reg - hft_csr::STRATEGY::RULE_SEL
+#define HFT_CSR__STRATEGY__RULE_SEL__IDX_bm 0x7
+#define HFT_CSR__STRATEGY__RULE_SEL__IDX_bp 0
+#define HFT_CSR__STRATEGY__RULE_SEL__IDX_bw 3
+#define HFT_CSR__STRATEGY__RULE_SEL__IDX_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_CTRL
+#define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bm 0x1
+#define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bp 0
+#define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bw 1
+#define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__MSG_MASK_bm 0xe
+#define HFT_CSR__STRATEGY__RULE_CTRL__MSG_MASK_bp 1
+#define HFT_CSR__STRATEGY__RULE_CTRL__MSG_MASK_bw 3
+#define HFT_CSR__STRATEGY__RULE_CTRL__MSG_MASK_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__SIDE_MATCH_bm 0x30
+#define HFT_CSR__STRATEGY__RULE_CTRL__SIDE_MATCH_bp 4
+#define HFT_CSR__STRATEGY__RULE_CTRL__SIDE_MATCH_bw 2
+#define HFT_CSR__STRATEGY__RULE_CTRL__SIDE_MATCH_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_GE_bm 0x40
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_GE_bp 6
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_GE_bw 1
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_GE_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__ACTION_SIDE_bm 0x300
+#define HFT_CSR__STRATEGY__RULE_CTRL__ACTION_SIDE_bp 8
+#define HFT_CSR__STRATEGY__RULE_CTRL__ACTION_SIDE_bw 2
+#define HFT_CSR__STRATEGY__RULE_CTRL__ACTION_SIDE_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__QTY_MIN_bm 0x400
+#define HFT_CSR__STRATEGY__RULE_CTRL__QTY_MIN_bp 10
+#define HFT_CSR__STRATEGY__RULE_CTRL__QTY_MIN_bw 1
+#define HFT_CSR__STRATEGY__RULE_CTRL__QTY_MIN_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_THRESHOLD_MODE_bm 0x800
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_THRESHOLD_MODE_bp 11
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_THRESHOLD_MODE_bw 1
+#define HFT_CSR__STRATEGY__RULE_CTRL__PRICE_THRESHOLD_MODE_reset 0x0
+#define HFT_CSR__STRATEGY__RULE_CTRL__TIF_bm 0xff0000
+#define HFT_CSR__STRATEGY__RULE_CTRL__TIF_bp 16
+#define HFT_CSR__STRATEGY__RULE_CTRL__TIF_bw 8
+#define HFT_CSR__STRATEGY__RULE_CTRL__TIF_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_LOCATE
+#define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bm 0xffff
+#define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bp 0
+#define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bw 16
+#define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_THRESHOLD
+#define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bm 0xffffffff
+#define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bp 0
+#define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bw 32
+#define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_MIN_SHARES
+#define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bm 0xffffffff
+#define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bp 0
+#define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bw 32
+#define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_QTY
+#define HFT_CSR__STRATEGY__RULE_QTY__QTY_bm 0xffffffff
+#define HFT_CSR__STRATEGY__RULE_QTY__QTY_bp 0
+#define HFT_CSR__STRATEGY__RULE_QTY__QTY_bw 32
+#define HFT_CSR__STRATEGY__RULE_QTY__QTY_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_OFFSET
+#define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bm 0xffffffff
+#define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bp 0
+#define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bw 32
+#define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_reset 0x0
+
+// reg - hft_csr::STRATEGY::RULE_COMMIT
+#define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bm 0x1
+#define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bp 0
+#define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bw 1
+
+// reg - hft_csr::STRATEGY::RULE_ARM
+#define HFT_CSR__STRATEGY__RULE_ARM__MASK_bm 0xff
+#define HFT_CSR__STRATEGY__RULE_ARM__MASK_bp 0
+#define HFT_CSR__STRATEGY__RULE_ARM__MASK_bw 8
+
+// reg - hft_csr::STRATEGY::RULE_DISARM
+#define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bm 0xff
+#define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bp 0
+#define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bw 8
+
+// reg - hft_csr::STRATEGY::RULE_STATUS
+#define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bm 0xff
+#define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bp 0
+#define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bw 8
+
+// reg - hft_csr::STRATEGY::RULE_ARMED
+#define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bm 0xff
+#define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bp 0
+#define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bw 8
+
+// regfile - hft_csr::STRATEGY
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t RULE_SEL;
+    uint32_t RULE_CTRL;
+    uint32_t RULE_LOCATE;
+    uint32_t RULE_THRESHOLD;
+    uint32_t RULE_MIN_SHARES;
+    uint32_t RULE_QTY;
+    uint32_t RULE_OFFSET;
+    uint32_t RULE_COMMIT;
+    uint32_t RULE_ARM;
+    uint32_t RULE_DISARM;
+    uint32_t RULE_STATUS;
+    uint32_t RULE_ARMED;
+    uint8_t RESERVED_30_3f[0x10];
+    hft_csr__counter64_t RULE_FIRED_0;
+    hft_csr__counter64_t RULE_FIRED_1;
+    hft_csr__counter64_t RULE_FIRED_2;
+    hft_csr__counter64_t RULE_FIRED_3;
+    hft_csr__counter64_t RULE_FIRED_4;
+    hft_csr__counter64_t RULE_FIRED_5;
+    hft_csr__counter64_t RULE_FIRED_6;
+    hft_csr__counter64_t RULE_FIRED_7;
+} hft_csr__STRATEGY_t;
+
+// reg - hft_csr::TX::TX_CTRL
+#define HFT_CSR__TX__TX_CTRL__TX_EN_bm 0x1
+#define HFT_CSR__TX__TX_CTRL__TX_EN_bp 0
+#define HFT_CSR__TX__TX_CTRL__TX_EN_bw 1
+#define HFT_CSR__TX__TX_CTRL__TX_EN_reset 0x0
+
+// reg - hft_csr::TX::TX_OUCH
+#define HFT_CSR__TX__TX_OUCH__DISPLAY_bm 0xff
+#define HFT_CSR__TX__TX_OUCH__DISPLAY_bp 0
+#define HFT_CSR__TX__TX_OUCH__DISPLAY_bw 8
+#define HFT_CSR__TX__TX_OUCH__DISPLAY_reset 0x0
+#define HFT_CSR__TX__TX_OUCH__CAPACITY_bm 0xff00
+#define HFT_CSR__TX__TX_OUCH__CAPACITY_bp 8
+#define HFT_CSR__TX__TX_OUCH__CAPACITY_bw 8
+#define HFT_CSR__TX__TX_OUCH__CAPACITY_reset 0x0
+#define HFT_CSR__TX__TX_OUCH__ISE_bm 0xff0000
+#define HFT_CSR__TX__TX_OUCH__ISE_bp 16
+#define HFT_CSR__TX__TX_OUCH__ISE_bw 8
+#define HFT_CSR__TX__TX_OUCH__ISE_reset 0x0
+#define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_bm 0xff000000
+#define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_bp 24
+#define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_bw 8
+#define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_reset 0x0
+
+// reg - hft_csr::TX::TX_COMMIT
+#define HFT_CSR__TX__TX_COMMIT__COMMIT_bm 0x1
+#define HFT_CSR__TX__TX_COMMIT__COMMIT_bp 0
+#define HFT_CSR__TX__TX_COMMIT__COMMIT_bw 1
+
+// reg - hft_csr::TX::TX_STATUS
+#define HFT_CSR__TX__TX_STATUS__CFG_VALID_bm 0x1
+#define HFT_CSR__TX__TX_STATUS__CFG_VALID_bp 0
+#define HFT_CSR__TX__TX_STATUS__CFG_VALID_bw 1
+#define HFT_CSR__TX__TX_STATUS__CFG_REFUSED_bm 0x2
+#define HFT_CSR__TX__TX_STATUS__CFG_REFUSED_bp 1
+#define HFT_CSR__TX__TX_STATUS__CFG_REFUSED_bw 1
+#define HFT_CSR__TX__TX_STATUS__USERREF_IGNORED_bm 0x4
+#define HFT_CSR__TX__TX_STATUS__USERREF_IGNORED_bp 2
+#define HFT_CSR__TX__TX_STATUS__USERREF_IGNORED_bw 1
+
+// reg - hft_csr::TX::TX_USERREF_NEXT
+#define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bm 0xffffffff
+#define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bp 0
+#define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bw 32
+
+// reg - hft_csr::TX::TX_USERREF
+#define HFT_CSR__TX__TX_USERREF__VALUE_bm 0xffffffff
+#define HFT_CSR__TX__TX_USERREF__VALUE_bp 0
+#define HFT_CSR__TX__TX_USERREF__VALUE_bw 32
+
+// reg - hft_csr::TX::TX_TEMPLATE
+#define HFT_CSR__TX__TX_TEMPLATE__BYTES_bm 0xffffffff
+#define HFT_CSR__TX__TX_TEMPLATE__BYTES_bp 0
+#define HFT_CSR__TX__TX_TEMPLATE__BYTES_bw 32
+#define HFT_CSR__TX__TX_TEMPLATE__BYTES_reset 0x0
+
+// reg - hft_csr::TX::TX_TEMPLATE_TAIL
+#define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bm 0xffff0000
+#define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bp 16
+#define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bw 16
+#define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_reset 0x0
+
+// reg - hft_csr::TX::MBOX_SIDE
+#define HFT_CSR__TX__MBOX_SIDE__SIDE_bm 0xff
+#define HFT_CSR__TX__MBOX_SIDE__SIDE_bp 0
+#define HFT_CSR__TX__MBOX_SIDE__SIDE_bw 8
+#define HFT_CSR__TX__MBOX_SIDE__SIDE_reset 0x0
+
+// reg - hft_csr::TX::MBOX_QTY
+#define HFT_CSR__TX__MBOX_QTY__QTY_bm 0xffffffff
+#define HFT_CSR__TX__MBOX_QTY__QTY_bp 0
+#define HFT_CSR__TX__MBOX_QTY__QTY_bw 32
+#define HFT_CSR__TX__MBOX_QTY__QTY_reset 0x0
+
+// reg - hft_csr::TX::MBOX_PRICE
+#define HFT_CSR__TX__MBOX_PRICE__PRICE_bm 0xffffffff
+#define HFT_CSR__TX__MBOX_PRICE__PRICE_bp 0
+#define HFT_CSR__TX__MBOX_PRICE__PRICE_bw 32
+#define HFT_CSR__TX__MBOX_PRICE__PRICE_reset 0x0
+
+// reg - hft_csr::TX::MBOX_LOCATE
+#define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bm 0xffff
+#define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bp 0
+#define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bw 16
+#define HFT_CSR__TX__MBOX_LOCATE__LOCATE_reset 0x0
+
+// reg - hft_csr::TX::MBOX_STOCK_0
+#define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bm 0xffffffff
+#define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bp 0
+#define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bw 32
+#define HFT_CSR__TX__MBOX_STOCK_0__BYTES_reset 0x0
+
+// reg - hft_csr::TX::MBOX_STOCK_1
+#define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bm 0xffffffff
+#define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bp 0
+#define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bw 32
+#define HFT_CSR__TX__MBOX_STOCK_1__BYTES_reset 0x0
+
+// reg - hft_csr::TX::MBOX_TIF
+#define HFT_CSR__TX__MBOX_TIF__TIF_bm 0xff
+#define HFT_CSR__TX__MBOX_TIF__TIF_bp 0
+#define HFT_CSR__TX__MBOX_TIF__TIF_bw 8
+#define HFT_CSR__TX__MBOX_TIF__TIF_reset 0x0
+
+// reg - hft_csr::TX::MBOX_CLORDID
+#define HFT_CSR__TX__MBOX_CLORDID__BYTES_bm 0xffffffff
+#define HFT_CSR__TX__MBOX_CLORDID__BYTES_bp 0
+#define HFT_CSR__TX__MBOX_CLORDID__BYTES_bw 32
+#define HFT_CSR__TX__MBOX_CLORDID__BYTES_reset 0x0
+
+// reg - hft_csr::TX::MBOX_CLORDID_TAIL
+#define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bm 0xffff0000
+#define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bp 16
+#define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bw 16
+#define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_reset 0x0
+
+// reg - hft_csr::TX::MBOX_SEND
+#define HFT_CSR__TX__MBOX_SEND__SEND_bm 0x1
+#define HFT_CSR__TX__MBOX_SEND__SEND_bp 0
+#define HFT_CSR__TX__MBOX_SEND__SEND_bw 1
+#define HFT_CSR__TX__MBOX_SEND__SEND_reset 0x0
+
+// reg - hft_csr::TX::MBOX_SPACE
+#define HFT_CSR__TX__MBOX_SPACE__SPACE_bm 0x1f
+#define HFT_CSR__TX__MBOX_SPACE__SPACE_bp 0
+#define HFT_CSR__TX__MBOX_SPACE__SPACE_bw 5
+
+// reg - hft_csr::TX::MBOX_STATUS
+#define HFT_CSR__TX__MBOX_STATUS__DROPPED_bm 0x1
+#define HFT_CSR__TX__MBOX_STATUS__DROPPED_bp 0
+#define HFT_CSR__TX__MBOX_STATUS__DROPPED_bw 1
+
+// regfile - hft_csr::TX
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t TX_CTRL;
+    uint32_t TX_OUCH;
+    uint32_t TX_COMMIT;
+    uint32_t TX_STATUS;
+    uint32_t TX_USERREF_NEXT;
+    uint32_t TX_USERREF;
+    uint8_t RESERVED_18_1f[0x8];
+    uint32_t TX_TEMPLATE[10];
+    uint32_t TX_TEMPLATE_TAIL;
+    uint8_t RESERVED_4c_4f[0x4];
+    uint32_t MBOX_SIDE;
+    uint32_t MBOX_QTY;
+    uint32_t MBOX_PRICE;
+    uint32_t MBOX_LOCATE;
+    uint32_t MBOX_STOCK_0;
+    uint32_t MBOX_STOCK_1;
+    uint32_t MBOX_TIF;
+    uint8_t RESERVED_6c_6f[0x4];
+    uint32_t MBOX_CLORDID[3];
+    uint32_t MBOX_CLORDID_TAIL;
+    uint32_t MBOX_SEND;
+    uint32_t MBOX_SPACE;
+    uint32_t MBOX_STATUS;
+    uint8_t RESERVED_8c_8f[0x4];
+    hft_csr__counter64_live_t MBOX_DROP;
+} hft_csr__TX_t;
 
 // mem - hft_csr::SYMBOL
 typedef struct __attribute__ ((__packed__)) {
     uint32_t mem[2048];
 } hft_csr__SYMBOL_t;
+
+// mem - hft_csr::LOCATE_ALLOW
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t mem[2048];
+} hft_csr__LOCATE_ALLOW_t;
 
 // addrmap - hft_csr
 typedef struct __attribute__ ((__packed__)) {
@@ -369,12 +747,19 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__ITCH_t ITCH;
     uint8_t RESERVED_688_7ff[0x178];
     hft_csr__RING_t RING;
-    uint8_t RESERVED_858_7fff[0x77a8];
+    uint8_t RESERVED_864_9ff[0x19c];
+    hft_csr__RISK_t RISK;
+    uint8_t RESERVED_ab0_fff[0x550];
+    hft_csr__STRATEGY_t STRATEGY;
+    uint8_t RESERVED_1080_1fff[0xf80];
+    hft_csr__TX_t TX;
+    uint8_t RESERVED_2098_7fff[0x5f68];
     hft_csr__SYMBOL_t SYMBOL;
+    hft_csr__LOCATE_ALLOW_t LOCATE_ALLOW;
 } hft_csr_t;
 
 
-static_assert(sizeof(hft_csr_t) == 0xa000, "Packing error");
+static_assert(sizeof(hft_csr_t) == 0xc000, "Packing error");
 
 #ifdef __cplusplus
 }

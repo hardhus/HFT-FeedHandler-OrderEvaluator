@@ -31,7 +31,16 @@ ITCH_CLASSES = ("ORDER", "TRADE", "ADMIN", "AUCTION", "UNKNOWN", "MALFORMED")
 # ITCH counters after the per-class ones, with their addresses.
 ITCH_EXTRA = {"OUT": 0x0670, "FILTERED": 0x0678, "MASKED": 0x0680}
 
-# Every register of the map (F5 + F3 FEED block + F4 ITCH block + F6 RING block): path -> address.
+# RISK_REJECT_<reason> in risk_reason_e order (codes 1..10).
+REASONS = ("KILL", "TX_OFF", "INVALID", "LOCATE", "QTY", "NOTIONAL", "BUDGET", "RATE", "TX_BUSY", "RING_FULL")
+# External registers (hft_csr_wrap answers them through the order command channel, decision 33).
+EXTERNAL = {
+    "RISK.RISK_COMMIT", "RISK.BUDGET_ADD", "STRATEGY.RULE_COMMIT", "STRATEGY.RULE_ARM", "STRATEGY.RULE_DISARM",
+    "TX.TX_COMMIT", "TX.TX_USERREF_NEXT", "TX.TX_USERREF",
+}  # fmt: skip
+
+# Every register of the map (F5 + F3 FEED block + F4 ITCH block + F6 RING block + F7 RISK, STRATEGY, TX):
+# path -> address.
 EXPECTED = {
     "GLOBAL.ID": 0x0000,
     "GLOBAL.VERSION": 0x0004,
@@ -103,6 +112,9 @@ EXPECTED = {
     "RING.RING_DROP_PKTS.HI": 0x084C,
     "RING.RING_DROP_ENTRIES.LO": 0x0850,
     "RING.RING_DROP_ENTRIES.HI": 0x0854,
+    "RING.RING_DROP_ORDERS.LO": 0x0858,
+    "RING.RING_DROP_ORDERS.HI": 0x085C,
+    "RING.RING_ORDER_QUEUED": 0x0860,
     "STATS.STATS_CTRL": 0x0400,
     "STATS.STATS_SEQ": 0x0404,
     "STATS.RX_PKTS.LO": 0x0410,
@@ -146,17 +158,87 @@ EXPECTED = {
     "ITCH.ITCH_FILTERED.HI": 0x067C,
     "ITCH.ITCH_MASKED.LO": 0x0680,
     "ITCH.ITCH_MASKED.HI": 0x0684,
+    "RISK.MAX_QTY": 0x0A00,
+    "RISK.MAX_NOTIONAL_LO": 0x0A04,
+    "RISK.MAX_NOTIONAL_HI": 0x0A08,
+    "RISK.RATE_REFILL": 0x0A0C,
+    "RISK.RATE_PERIOD": 0x0A10,
+    "RISK.RATE_BURST": 0x0A14,
+    "RISK.RISK_COMMIT": 0x0A18,
+    "RISK.RISK_CTRL": 0x0A1C,
+    "RISK.BUDGET_ADD": 0x0A20,
+    "RISK.BUDGET": 0x0A24,
+    "RISK.ORDERS_SENT_HW.LO": 0x0A40,
+    "RISK.ORDERS_SENT_HW.HI": 0x0A44,
+    "RISK.ORDERS_SENT_HOST.LO": 0x0A48,
+    "RISK.ORDERS_SENT_HOST.HI": 0x0A4C,
+    "RISK.RISK_REJECT_KILL.LO": 0x0A60,
+    "RISK.RISK_REJECT_KILL.HI": 0x0A64,
+    "RISK.RISK_REJECT_TX_OFF.LO": 0x0A68,
+    "RISK.RISK_REJECT_TX_OFF.HI": 0x0A6C,
+    "RISK.RISK_REJECT_INVALID.LO": 0x0A70,
+    "RISK.RISK_REJECT_INVALID.HI": 0x0A74,
+    "RISK.RISK_REJECT_LOCATE.LO": 0x0A78,
+    "RISK.RISK_REJECT_LOCATE.HI": 0x0A7C,
+    "RISK.RISK_REJECT_QTY.LO": 0x0A80,
+    "RISK.RISK_REJECT_QTY.HI": 0x0A84,
+    "RISK.RISK_REJECT_NOTIONAL.LO": 0x0A88,
+    "RISK.RISK_REJECT_NOTIONAL.HI": 0x0A8C,
+    "RISK.RISK_REJECT_BUDGET.LO": 0x0A90,
+    "RISK.RISK_REJECT_BUDGET.HI": 0x0A94,
+    "RISK.RISK_REJECT_RATE.LO": 0x0A98,
+    "RISK.RISK_REJECT_RATE.HI": 0x0A9C,
+    "RISK.RISK_REJECT_TX_BUSY.LO": 0x0AA0,
+    "RISK.RISK_REJECT_TX_BUSY.HI": 0x0AA4,
+    "RISK.RISK_REJECT_RING_FULL.LO": 0x0AA8,
+    "RISK.RISK_REJECT_RING_FULL.HI": 0x0AAC,
+    "STRATEGY.RULE_SEL": 0x1000,
+    "STRATEGY.RULE_CTRL": 0x1004,
+    "STRATEGY.RULE_LOCATE": 0x1008,
+    "STRATEGY.RULE_THRESHOLD": 0x100C,
+    "STRATEGY.RULE_MIN_SHARES": 0x1010,
+    "STRATEGY.RULE_QTY": 0x1014,
+    "STRATEGY.RULE_OFFSET": 0x1018,
+    "STRATEGY.RULE_COMMIT": 0x101C,
+    "STRATEGY.RULE_ARM": 0x1020,
+    "STRATEGY.RULE_DISARM": 0x1024,
+    "STRATEGY.RULE_STATUS": 0x1028,
+    "STRATEGY.RULE_ARMED": 0x102C,
+    **{f"STRATEGY.RULE_FIRED_{n}.LO": 0x1040 + 8 * n for n in range(8)},
+    **{f"STRATEGY.RULE_FIRED_{n}.HI": 0x1044 + 8 * n for n in range(8)},
+    "TX.TX_CTRL": 0x2000,
+    "TX.TX_OUCH": 0x2004,
+    "TX.TX_COMMIT": 0x2008,
+    "TX.TX_STATUS": 0x200C,
+    "TX.TX_USERREF_NEXT": 0x2010,
+    "TX.TX_USERREF": 0x2014,
+    **{f"TX.TX_TEMPLATE[{i}]": 0x2020 + 4 * i for i in range(10)},
+    "TX.TX_TEMPLATE_TAIL": 0x2048,
+    "TX.MBOX_SIDE": 0x2050,
+    "TX.MBOX_QTY": 0x2054,
+    "TX.MBOX_PRICE": 0x2058,
+    "TX.MBOX_LOCATE": 0x205C,
+    "TX.MBOX_STOCK_0": 0x2060,
+    "TX.MBOX_STOCK_1": 0x2064,
+    "TX.MBOX_TIF": 0x2068,
+    **{f"TX.MBOX_CLORDID[{i}]": 0x2070 + 4 * i for i in range(3)},
+    "TX.MBOX_CLORDID_TAIL": 0x207C,
+    "TX.MBOX_SEND": 0x2080,
+    "TX.MBOX_SPACE": 0x2084,
+    "TX.MBOX_STATUS": 0x2088,
+    "TX.MBOX_DROP.LO": 0x2090,
+    "TX.MBOX_DROP.HI": 0x2094,
 }
 # Every memory of the map: path -> (address, entries, width).
-EXPECTED_MEMS = {"SYMBOL": (0x8000, 2048, 32)}
+EXPECTED_MEMS = {"SYMBOL": (0x8000, 2048, 32), "LOCATE_ALLOW": (0xA000, 2048, 32)}
 
 MAX_READ_WINDOW_REGS = 43  # registers in one 512-byte read window (see test_read_windows_stay_small)
 
-# Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved
-# (RISK 0x0500, STRATEGY 0x1000, TX 0x2000) except the SYMBOL memory at 0x8000.
+# Blocks with registers and their address ranges; the rest of the 64 KiB window is reserved except the SYMBOL
+# memory at 0x8000 and LOCATE_ALLOW at 0xA000.
 BLOCKS = {"GLOBAL": (0x0000, 0x0100), "NET": (0x0100, 0x0200), "FEED": (0x0200, 0x0300), "RING": (0x0800, 0x0900),
-          "STATS": (0x0400, 0x0500),
-          "ITCH": (0x0600, 0x0700)}  # fmt: skip
+          "STATS": (0x0400, 0x0500), "ITCH": (0x0600, 0x0700), "RISK": (0x0A00, 0x0B00), "STRATEGY": (0x1000, 0x1100),
+          "TX": (0x2000, 0x2100)}  # fmt: skip
 
 
 def test_every_register_at_its_address():
@@ -175,7 +257,7 @@ def test_read_windows_stay_small():
 def test_constants():
     regs = regs_by_path()
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
-    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0003  # + F3 FEED, F4 ITCH, SYMBOL and F6 RING (minor)
+    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0004  # + F3 FEED, F4 ITCH, SYMBOL, F6 RING, F7 (minor)
 
 
 def test_drop_counters_follow_reason_codes():
@@ -225,6 +307,41 @@ def test_itch_counters_follow_class_codes():
     assert len(itch) == len(ITCH_CLASSES) + len(ITCH_EXTRA)
 
 
+def test_risk_reject_counters_follow_reason_codes():
+    """RISK_REJECT_<reason> exists for every risk_reason_e code but NONE, at 0x0A60 + 8 * (code - 1), and the
+    order_stats indices of hft_pkg.sv put them in that order (ORD_CNT_REJ + reason - 1)."""
+    pkg = HFT_PKG.read_text()
+    codes = {m[1]: int(m[2]) for m in re.finditer(r"\bRISK_(\w+)\s*=\s*4'd(\d+)", pkg)}
+    assert codes.pop("NONE") == 0
+    assert codes == {name: i + 1 for i, name in enumerate(REASONS)}, "reason codes and RISK_REJECT_* differ"
+    regs = regs_by_path()
+    for name, code in codes.items():
+        assert regs[f"RISK.RISK_REJECT_{name}.LO"].addr == 0x0A60 + 8 * (code - 1), name
+    assert len([p for p in regs if p.startswith("RISK.RISK_REJECT_") and p.endswith(".LO")]) == len(REASONS)
+    assert "ORD_N_REASONS = int'(RISK_RING_FULL)" in pkg, "order_stats counts every reason"
+
+
+def test_external_registers():
+    """The command registers are external (hft_csr_wrap answers them after the command is in effect), each
+    either write-only with hw = r (the hardware takes the value) or TX_USERREF read-only; no other register is
+    external. The model keeps nothing for them: a write is OK and recorded, a read gives the hardware value."""
+    regs = csr_map()
+    ext = {r.path for r in regs if any(f.external for f in r.fields)}
+    assert ext == EXTERNAL
+    for r in regs:
+        if r.path in ext:
+            assert all(f.external and not f.storage for f in r.fields), r.path
+    by = regs_by_path()
+    assert all(by[p].writable and not by[p].readable for p in EXTERNAL - {"TX.TX_USERREF"})
+    assert by["TX.TX_USERREF"].readable and not by["TX.TX_USERREF"].writable
+    m = CsrModel()
+    assert m.write(by["TX.TX_USERREF_NEXT"].addr, 0x1234_5678, strb=0b0011) == (OKAY, set())
+    assert m.ext_writes == [("TX.TX_USERREF_NEXT", 0x5678)]
+    assert m.read(by["TX.TX_USERREF_NEXT"].addr) == (0, SLVERR), "write-only"
+    m.hw["TX.TX_USERREF.value"] = 9
+    assert m.read(by["TX.TX_USERREF"].addr) == (9, OKAY)
+
+
 def test_symbol_memory():
     """SYMBOL: 2048 x 32 bit, read/write, aligned to its size, no register inside it; the model
     answers it like a RAM with byte strobes (0 at reset)."""
@@ -238,7 +355,20 @@ def test_symbol_memory():
     assert m.write(0x8004, 0xAABB_CCDD, strb=0b0101) == (OKAY, set())
     assert m.read(0x8004) == (0x00BB_00DD, OKAY)
     assert m.read(0x8006) == (0x00BB_00DD, OKAY), "unaligned: the word"
-    assert m.read(0xA000) == (0, SLVERR), "past the end"
+    assert m.read(0xC000) == (0, SLVERR), "past LOCATE_ALLOW, the last memory"
+
+
+def test_locate_allow_memory():
+    """LOCATE_ALLOW: 2048 x 32 bit, read/write, right after SYMBOL, aligned to its size, no register inside it;
+    the model answers it like SYMBOL, as its own RAM."""
+    loc = mem("LOCATE_ALLOW")
+    assert loc.size == 0x2000 and loc.addr == 0xA000 and loc.sw_read and loc.sw_write and loc.desc
+    assert not [r for r in csr_map() if loc.word(r.addr) is not None]
+    m = CsrModel()
+    assert m.write(0xA008, 0x1122_3344, strb=0b1010) == (OKAY, set())
+    assert m.read(0xA008) == (0x1100_3300, OKAY)
+    assert m.read(0x8008) == (0, OKAY), "SYMBOL is another memory"
+    assert m.read(0xBFFC) == (0, OKAY)
 
 
 def test_layout_rules():
@@ -265,11 +395,26 @@ def test_access_kinds():
     ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.", "ITCH.", "RING.")) and p.endswith((".LO", ".HI"))}
     ro |= {"RING.PROD_IDX", "RING.RING_STATUS"}
     ro -= {"FEED.RESYNC_SEQ_LO", "FEED.RESYNC_SEQ_HI"}  # software writes the resync value
-    wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL", "FEED.FEED_COMMIT"}
+    ro |= {p for p in EXPECTED if p.startswith(("RISK.", "STRATEGY.", "TX.")) and p.endswith((".LO", ".HI"))}
+    ro |= {"RING.RING_ORDER_QUEUED", "RISK.BUDGET", "STRATEGY.RULE_STATUS", "STRATEGY.RULE_ARMED", "TX.TX_STATUS",
+           "TX.TX_USERREF", "TX.MBOX_SPACE", "TX.MBOX_STATUS"}  # fmt: skip
+    wo = {"NET.NET_COMMIT", "STATS.STATS_CTRL", "FEED.FEED_COMMIT", "TX.MBOX_SEND"}
+    wo |= EXTERNAL - {"TX.TX_USERREF"}
     assert {p: kind(p) for p in EXPECTED} == {p: "RO" if p in ro else "WO" if p in wo else "RW" for p in EXPECTED}
     pulses = {f"{r.path}.{f.name}" for r in csr_map() for f in r.fields if f.singlepulse}
     assert pulses == {"NET.NET_COMMIT.commit", "STATS.STATS_CTRL.snapshot", "FEED.FEED_COMMIT.commit",
-                      "FEED.FEED_COMMIT.resync"}  # fmt: skip
+                      "FEED.FEED_COMMIT.resync", "TX.MBOX_SEND.send"}  # fmt: skip
+    # Reset contract (decision 5): kill 1, tx_en 0; RULE_SEL and the shadows 0.
+    assert {f.name: (f.lsb, f.width, f.reset) for f in regs["RISK.RISK_CTRL"].fields} == {"kill": (0, 1, 1)}
+    assert {f.name: (f.lsb, f.width, f.reset) for f in regs["TX.TX_CTRL"].fields} == {"tx_en": (0, 1, 0)}
+    rule = {f.name: (f.lsb, f.width) for f in regs["STRATEGY.RULE_CTRL"].fields}
+    assert rule == {"enable": (0, 1), "msg_mask": (1, 3), "side_match": (4, 2), "price_ge": (6, 1),
+                    "action_side": (8, 2), "qty_min": (10, 1), "price_threshold_mode": (11, 1), "tif": (16, 8)}  # fmt: skip
+    ouch = {f.name: (f.lsb, f.width) for f in regs["TX.TX_OUCH"].fields}
+    assert ouch == {"display": (0, 8), "capacity": (8, 8), "ise": (16, 8), "cross_type": (24, 8)}
+    assert {f.name: f.lsb for f in regs["TX.TX_STATUS"].fields} == {"cfg_valid": 0, "cfg_refused": 1,
+                                                                   "userref_ignored": 2}  # fmt: skip
+    assert regs["TX.TX_TEMPLATE_TAIL"].fields[0].lsb == 16 and regs["TX.MBOX_CLORDID_TAIL"].fields[0].lsb == 16
     assert regs["NET.NET_CTRL"].fields[0].reset == 0, "rx_en must reset to 0 (receiver off)"
     ctrl = {f.name: f for f in regs["FEED.FEED_CTRL"].fields}
     assert (ctrl["enable"].lsb, ctrl["enable"].reset) == (0, 0), "feed enable must reset to 0"

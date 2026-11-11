@@ -1,6 +1,7 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
 // Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*,
-//                sym_*, cnt_ring_*, rx_stats, mold_stats, itch_stats)
+//                sym_*, cnt_ring_*, rx_stats, mold_stats, itch_stats, ctl_*, cmd_*, loc_*, m_host_*, ord_*,
+//                st_*, ev_*, order_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
 //                commit buffer and requests one cdc_handshake transfer; the receiver's cfg_* then
 //                change together in one net_clk cycle (eth_ip_udp_rx samples them per frame).
@@ -55,6 +56,36 @@
 //                lands, so BRESP means the write is in the bitmap. regblock keeps one access in
 //                flight. During the bitmap sweep after reset the command waits at net
 //                (sym_req_ready = 0), and so does the bus.
+// Order cmds   : RULE_COMMIT, RULE_ARM, RULE_DISARM, RISK_COMMIT, BUDGET_ADD, TX_COMMIT, TX_USERREF_NEXT,
+//                TX_USERREF (read) and LOCATE_ALLOW are regblock external registers: one command channel in bus order (decision
+//                33). regblock holds every other access while one is in flight, and the write (or read)
+//                response comes when the command's response lands back in host_clk. A write with the commit
+//                bit 0 (RULE/RISK/TX_COMMIT) is answered at once and sends nothing. The fence (decision 36):
+//                the host side sends a command only when the mailbox FIFO has been read empty (every
+//                MBOX_SEND before it taken by risk_check); the net side applies it only when no host order
+//                was taken in the last 3 cycles (each one decided) and the synchronized kill and tx_en
+//                equal the host's values the command carries (written before it, so in effect first). It
+//                then pulses one cfg_*/cmd_* (or does the LOCATE_ALLOW access on loc_*) and answers after
+//                CMD_SETTLE more cycles, with the events of those cycles (ev_cfg_refused: decided 2 edges
+//                after the write, decision 27; ev_userref_ignored) and st_error, st_tx_cfg_valid and
+//                st_userref. TX_COMMIT is refused (no cfg_tx_wr) unless the path is closed: ctl_kill or
+//                !ctl_tx_en (decision 37). The fence never waits for the TX queue: with tready stuck the host
+//                could not even write kill (decision 36).
+// Status       : RULE_STATUS.error and TX_STATUS.cfg_valid are as of the last response; TX_STATUS.cfg_refused
+//                and userref_ignored are the result of the last command of their kind (decision 34).
+// Controls     : RISK_CTRL.kill and TX_CTRL.tx_en reach net_clk through sync_bit (decision 32), STAGES edges
+//                after the register changes. ctl_kill is 1 and ctl_tx_en 0 during net_rst and STAGES + 1
+//                cycles after it (the synchronizers have no reset); ctl_tx_en also needs st_tx_cfg_valid
+//                (decision 26). A kill write waits on the bus behind a command in flight (decision 38).
+// Mailbox      : MBOX_SEND (swmod: each write once) copies the MBOX_* shadow into a cdc_async_fifo (16, COMMIT
+//                = 0) to net_clk, or drops it when the FIFO is full or busy: MBOX_STATUS.dropped (the last
+//                send's result, decision 34) and MBOX_DROP (live, host_clk, decision 35). MBOX_SPACE = 16 -
+//                wr_count. At net the FIFO's head is m_host_* (valid = not empty; ready pops it).
+// Order stats  : order_stats counts ord_fire_* (RULE_FIRED_<n>), ord_sent_* (ORDERS_SENT_*), ord_rej_* and
+//                ord_lost_* (RISK_REJECT_<reason>, RING_DROP_ORDERS). The snapshot takes them, ord_queued
+//                (RING_ORDER_QUEUED), st_armed (RULE_ARMED) and st_budget (BUDGET) in the same net_clk cycle as
+//                the other banks. ord_sent_*, ord_rej_*, ord_lost_* and ord_queued must be event_packer's own
+//                order inputs and its cnt_ord_queued (order_stats header): no extra delay (audit/14 S7 A5).
 // Reset        : host_rst and net_rst asserted together (one source, one reset_sync per domain,
 //                cdc_handshake contract). After reset cfg_rx_en, cfg_feed_en, cfg_session_check,
 //                cfg_resync and cfg_class_en are 0; the other cfg_* are undefined until the first
@@ -158,7 +189,79 @@ module hft_csr_wrap
     output logic [31:0] sym_req_wdata,
     output logic [ 3:0] sym_req_wstrb,
     input  logic        sym_rsp_valid,
-    input  logic [31:0] sym_rsp_rdata
+    input  logic [31:0] sym_rsp_rdata,
+
+    // Order path controls, to strategy_engine and risk_check (net_clk)
+    output logic ctl_kill,
+    output logic ctl_tx_en,
+
+    // strategy_engine configuration and status
+    output logic                            cfg_rule_wr,
+    output logic        [ STRAT_RULE_W-1:0] cfg_rule_idx,
+    output strat_rule_t                     cfg_rule,
+    output logic                            cmd_arm,
+    output logic        [STRAT_N_RULES-1:0] cmd_arm_mask,
+    output logic                            cmd_disarm,
+    output logic        [STRAT_N_RULES-1:0] cmd_disarm_mask,
+    input  logic        [STRAT_N_RULES-1:0] st_armed,
+    input  logic        [STRAT_N_RULES-1:0] st_error,
+
+    // risk_check configuration, commands and status
+    output logic        cfg_lim_wr,
+    output logic [31:0] cfg_max_qty,
+    output logic [63:0] cfg_max_notional,
+    output logic [31:0] cfg_rate_refill,
+    output logic [31:0] cfg_rate_period,
+    output logic [31:0] cfg_rate_burst,
+    output logic        cmd_budget_add,
+    output logic [31:0] cmd_budget_amount,
+    output logic        cmd_userref_wr,
+    output logic [31:0] cmd_userref_value,
+    input  logic        ev_userref_ignored,
+    input  logic [31:0] st_userref,          // risk_check m_tx_user_ref
+    input  logic [31:0] st_budget,
+
+    // risk_check allow bitmap command port (as sym_*)
+    output logic        loc_req_valid,
+    input  logic        loc_req_ready,
+    output logic        loc_req_wr,
+    output logic [10:0] loc_req_addr,
+    output logic [31:0] loc_req_wdata,
+    output logic [ 3:0] loc_req_wstrb,
+    input  logic        loc_rsp_valid,
+    input  logic [31:0] loc_rsp_rdata,
+
+    // order_tx_builder configuration and status
+    output logic            cfg_tx_wr,
+    output logic [8*42-1:0] cfg_template,
+    output logic [     7:0] cfg_display,
+    output logic [     7:0] cfg_capacity,
+    output logic [     7:0] cfg_ise,
+    output logic [     7:0] cfg_cross_type,
+    input  logic            st_tx_cfg_valid,
+    input  logic            ev_cfg_refused,
+
+    // Host orders from the mailbox, to risk_check s_host_*
+    output logic         m_host_valid,
+    input  logic         m_host_ready,
+    output logic [  7:0] m_host_side,
+    output logic [ 31:0] m_host_qty,
+    output logic [ 31:0] m_host_price,
+    output logic [ 15:0] m_host_locate,
+    output logic [ 63:0] m_host_stock,
+    output logic [  7:0] m_host_tif,
+    output logic [111:0] m_host_clordid,
+
+    // Order counters' events (= event_packer's order inputs) and its queue level
+    input logic                                 ord_fire_valid,   // strategy_engine m_ord_*
+    input logic         [     STRAT_RULE_W-1:0] ord_fire_rule,
+    input logic                                 ord_sent_valid,   // order_tx_builder m_sent_*
+    input order_src_e                           ord_sent_source,
+    input logic                                 ord_rej_valid,    // risk_check m_rej_*
+    input risk_reason_e                         ord_rej_reason,
+    input logic                                 ord_lost_valid,   // risk_check ev_rej_dropped*
+    input risk_reason_e                         ord_lost_reason,
+    input logic         [RING_ORD_QUEUED_W-1:0] ord_queued        // event_packer cnt_ord_queued
 );
   // One NET configuration as it crosses the clock domains.
   typedef struct packed {
@@ -341,6 +444,10 @@ module hft_csr_wrap
     logic [CNT_W-1:0]                 ring_commit_entries;
     logic [CNT_W-1:0]                 ring_drop_pkts;
     logic [CNT_W-1:0]                 ring_drop_entries;
+    logic [ORD_N_CNT-1:0][CNT_W-1:0]  ord;
+    logic [RING_ORD_QUEUED_W-1:0]     ord_queued;
+    logic [STRAT_N_RULES-1:0]         armed;
+    logic [31:0]                      budget;
     logic [63:0]                      expected_seq;
     logic                             synced;
     logic                             eos;
@@ -351,6 +458,7 @@ module hft_csr_wrap
   logic [  RX_N_CNT-1:0][CNT_W-1:0] cnt;
   logic [MOLD_N_CNT-1:0][CNT_W-1:0] mold_cnt;
   logic [ITCH_N_CNT-1:0][CNT_W-1:0] itch_cnt;
+  logic [ ORD_N_CNT-1:0][CNT_W-1:0] ord_cnt;
   snap_t snap_src, snap_dst, snap_cnt;
 
   // Level-sensitive like NET_COMMIT (regblock may hold the pulse one more cycle).
@@ -462,6 +570,23 @@ module hft_csr_wrap
       .cnt        (itch_cnt)
   );
 
+  // Order counters: the packer's own order inputs, no delay (header).
+  order_stats #(
+      .CNT_W(CNT_W)
+  ) u_order_stats (
+      .clk        (net_clk),
+      .rst        (net_rst),
+      .fire_valid (ord_fire_valid),
+      .fire_rule  (ord_fire_rule),
+      .sent_valid (ord_sent_valid),
+      .sent_source(ord_sent_source),
+      .rej_valid  (ord_rej_valid),
+      .rej_reason (ord_rej_reason),
+      .lost_valid (ord_lost_valid),
+      .lost_reason(ord_lost_reason),
+      .cnt        (ord_cnt)
+  );
+
   // Feed state delayed to the cycle in which the counter banks hold the packet event that made it.
   localparam int unsigned FEED_DELAY = 6;
   logic [FEED_DELAY-1:0][63:0] feed_seq_q;
@@ -479,6 +604,10 @@ module hft_csr_wrap
   assign snap_src.ring_commit_entries = cnt_ring_commit_entries;
   assign snap_src.ring_drop_pkts      = cnt_ring_drop_pkts;
   assign snap_src.ring_drop_entries   = cnt_ring_drop_entries;
+  assign snap_src.ord                 = ord_cnt;
+  assign snap_src.ord_queued          = ord_queued;
+  assign snap_src.armed               = st_armed;
+  assign snap_src.budget              = st_budget;
   assign snap_src.expected_seq        = feed_seq_q[FEED_DELAY-1];
   assign snap_src.synced              = feed_synced_q[FEED_DELAY-1];
   assign snap_src.eos                 = feed_eos_q[FEED_DELAY-1];
@@ -599,6 +728,53 @@ module hft_csr_wrap
   assign hwif_in.RING.RING_DROP_PKTS.HI.value.next = snap_cnt.ring_drop_pkts[63:32];
   assign hwif_in.RING.RING_DROP_ENTRIES.LO.value.next = snap_cnt.ring_drop_entries[31:0];
   assign hwif_in.RING.RING_DROP_ENTRIES.HI.value.next = snap_cnt.ring_drop_entries[63:32];
+  assign hwif_in.RING.RING_DROP_ORDERS.LO.value.next = snap_cnt.ord[ORD_CNT_DROP][31:0];
+  assign hwif_in.RING.RING_DROP_ORDERS.HI.value.next = snap_cnt.ord[ORD_CNT_DROP][63:32];
+  assign hwif_in.RING.RING_ORDER_QUEUED.queued.next = snap_cnt.ord_queued;
+  // STRATEGY: RULE_FIRED_<n> at index n.
+  assign hwif_in.STRATEGY.RULE_FIRED_0.LO.value.next = snap_cnt.ord[0][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_0.HI.value.next = snap_cnt.ord[0][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_1.LO.value.next = snap_cnt.ord[1][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_1.HI.value.next = snap_cnt.ord[1][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_2.LO.value.next = snap_cnt.ord[2][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_2.HI.value.next = snap_cnt.ord[2][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_3.LO.value.next = snap_cnt.ord[3][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_3.HI.value.next = snap_cnt.ord[3][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_4.LO.value.next = snap_cnt.ord[4][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_4.HI.value.next = snap_cnt.ord[4][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_5.LO.value.next = snap_cnt.ord[5][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_5.HI.value.next = snap_cnt.ord[5][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_6.LO.value.next = snap_cnt.ord[6][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_6.HI.value.next = snap_cnt.ord[6][63:32];
+  assign hwif_in.STRATEGY.RULE_FIRED_7.LO.value.next = snap_cnt.ord[7][31:0];
+  assign hwif_in.STRATEGY.RULE_FIRED_7.HI.value.next = snap_cnt.ord[7][63:32];
+  assign hwif_in.STRATEGY.RULE_ARMED.armed.next = snap_cnt.armed;
+  // RISK: ORDERS_SENT_*, then RISK_REJECT_<reason> at ORD_CNT_REJ + reason - 1.
+  assign hwif_in.RISK.BUDGET.budget.next = snap_cnt.budget;
+  assign hwif_in.RISK.ORDERS_SENT_HW.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][31:0];
+  assign hwif_in.RISK.ORDERS_SENT_HW.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][63:32];
+  assign hwif_in.RISK.ORDERS_SENT_HOST.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][31:0];
+  assign hwif_in.RISK.ORDERS_SENT_HOST.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][63:32];
+  assign hwif_in.RISK.RISK_REJECT_KILL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_KILL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_TX_OFF.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_TX_OFF.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_INVALID.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_INVALID.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_LOCATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_LOCATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_QTY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_QTY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_NOTIONAL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_NOTIONAL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_BUDGET.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_BUDGET.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_RATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_RATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_TX_BUSY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_TX_BUSY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][63:32];
+  assign hwif_in.RISK.RISK_REJECT_RING_FULL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][31:0];
+  assign hwif_in.RISK.RISK_REJECT_RING_FULL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][63:32];
   assign hwif_in.FEED.EXPECTED_SEQ.LO.value.next = snap_cnt.expected_seq[31:0];
   assign hwif_in.FEED.EXPECTED_SEQ.HI.value.next = snap_cnt.expected_seq[63:32];
   assign hwif_in.FEED.FEED_STATE.synced.next = snap_cnt.synced;
@@ -695,6 +871,559 @@ module hft_csr_wrap
   assign cfg_class_en = feed_dst.set.class_en & {ITCH_N_CLASS{feed_loaded_q || feed_dst_valid}};
   assign cfg_class_filter = feed_dst.set.class_filter;
   assign cfg_epoch = feed_dst.set.epoch;
+
+  // ======== order path (decisions 32-38) ========
+  localparam int unsigned CMD_SETTLE = 3;  // cycles after the pulse whose events go in the response
+  localparam int unsigned MBOX_DEPTH_LOG2 = 4;
+  localparam int unsigned PAY_W = 8 * 42 + 32;  // the widest command: TX_COMMIT
+
+  typedef enum logic [3:0] {
+    CMD_RULE_COMMIT,
+    CMD_RULE_ARM,
+    CMD_RULE_DISARM,
+    CMD_RISK_COMMIT,
+    CMD_BUDGET_ADD,
+    CMD_TX_COMMIT,
+    CMD_USERREF_WR,
+    CMD_USERREF_RD,
+    CMD_LOC
+  } cmd_kind_e;
+
+  typedef struct packed {
+    logic [STRAT_RULE_W-1:0] idx;
+    strat_rule_t             rule;
+  } cmd_rule_t;
+
+  typedef struct packed {
+    logic [31:0] max_qty;
+    logic [63:0] max_notional;
+    logic [31:0] rate_refill;
+    logic [31:0] rate_period;
+    logic [31:0] rate_burst;
+  } cmd_lim_t;
+
+  typedef struct packed {
+    logic [8*42-1:0] tmpl;
+    logic [7:0]      display;
+    logic [7:0]      capacity;
+    logic [7:0]      ise;
+    logic [7:0]      cross_type;
+  } cmd_tx_t;
+
+  // One command as it crosses to net: its kind, the host's kill and tx_en when it was written (the fence
+  // waits for them at net) and its payload (cmd_rule_t, cmd_lim_t, cmd_tx_t, sym_req_t or a 32-bit value).
+  typedef struct packed {
+    cmd_kind_e        kind;
+    logic             kill;
+    logic             tx_en;
+    logic [PAY_W-1:0] pay;
+  } cmd_t;
+
+  // A command's response.
+  typedef struct packed {
+    logic [31:0]              rdata;      // TX_USERREF_NEXT read, LOCATE_ALLOW read
+    logic                     refused;    // TX_COMMIT refused
+    logic                     ignored;    // TX_USERREF_NEXT write ignored
+    logic                     cfg_valid;
+    logic [STRAT_N_RULES-1:0] error;
+  } rsp_t;
+
+  // Bytes 4w .. 4w+3 of a register in wire order (byte 4w in [31:24]) to byte i = [8i+7:8i].
+  function automatic logic [31:0] wire_bytes(input logic [31:0] w);
+    return {w[7:0], w[15:8], w[23:16], w[31:24]};
+  endfunction
+
+  // ---- direct controls: kill and tx_en (decision 32) ----
+  logic kill_s, tx_en_s;
+  logic [STAGES:0] ctl_hold_q;  // 1s after net_rst: the synchronizers have no reset
+  logic            ctl_hold;
+
+  sync_bit #(
+      .WIDTH (2),
+      .STAGES(STAGES)
+  ) u_ctl_sync (
+      .clk(net_clk),
+      .d  ({hwif_out.RISK.RISK_CTRL.kill.value, hwif_out.TX.TX_CTRL.tx_en.value}),
+      .q  ({kill_s, tx_en_s})
+  );
+
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      ctl_hold_q <= '1;
+    end else begin
+      ctl_hold_q <= {ctl_hold_q[STAGES-1:0], 1'b0};
+    end
+  end
+
+  assign ctl_hold  = ctl_hold_q[STAGES];
+  assign ctl_kill  = kill_s || ctl_hold;
+  assign ctl_tx_en = tx_en_s && st_tx_cfg_valid && !ctl_hold;
+
+  // ---- mailbox (host -> net) ----
+  typedef struct packed {
+    logic [7:0]   side;
+    logic [31:0]  qty;
+    logic [31:0]  price;
+    logic [15:0]  locate;
+    logic [63:0]  stock;
+    logic [7:0]   tif;
+    logic [111:0] clordid;
+  } mbox_t;
+
+  mbox_t mbox_shadow, mbox_dout;
+  logic mbox_send_write_q, mbox_send, mbox_fits, mbox_wr_q;
+  logic mbox_full, mbox_wr_busy, mbox_empty, mbox_rd_busy;
+  logic
+      mbox_overflow_unused,
+      mbox_underflow_unused;  // a send is only written when it fits; reads only when valid
+  logic [MBOX_DEPTH_LOG2:0] mbox_count;
+  logic                     mbox_dropped_q;
+  logic [             63:0] mbox_drop_q;
+
+  always_comb begin
+    mbox_shadow.side = hwif_out.TX.MBOX_SIDE.side.value;
+    mbox_shadow.qty = hwif_out.TX.MBOX_QTY.qty.value;
+    mbox_shadow.price = hwif_out.TX.MBOX_PRICE.price.value;
+    mbox_shadow.locate = hwif_out.TX.MBOX_LOCATE.locate.value;
+    mbox_shadow.stock = {
+      wire_bytes(hwif_out.TX.MBOX_STOCK_1.bytes.value),
+      wire_bytes(hwif_out.TX.MBOX_STOCK_0.bytes.value)
+    };
+    mbox_shadow.tif = hwif_out.TX.MBOX_TIF.tif.value;
+    mbox_shadow.clordid = {
+      hwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[7:0],  // field [31:16]: byte 12 in value[15:8]
+      hwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[15:8],
+      wire_bytes(hwif_out.TX.MBOX_CLORDID[2].bytes.value),
+      wire_bytes(hwif_out.TX.MBOX_CLORDID[1].bytes.value),
+      wire_bytes(hwif_out.TX.MBOX_CLORDID[0].bytes.value)
+    };
+  end
+
+  // One send per write with byte 0 enabled (swmod), as FEED_COMMIT counts its writes.
+  assign mbox_send = mbox_send_write_q && hwif_out.TX.MBOX_SEND.send.value;
+  assign mbox_fits = !mbox_full && !mbox_wr_busy;
+
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      mbox_send_write_q <= 1'b0;
+      mbox_wr_q         <= 1'b0;
+      mbox_dropped_q    <= 1'b0;
+      mbox_drop_q       <= '0;
+    end else begin
+      mbox_send_write_q <= hwif_out.TX.MBOX_SEND.send.swmod;
+      mbox_wr_q         <= mbox_send;
+      if (mbox_send) begin
+        mbox_dropped_q <= !mbox_fits;
+        mbox_drop_q    <= mbox_drop_q + 64'(!mbox_fits);
+      end
+    end
+  end
+
+  cdc_async_fifo #(
+      .WIDTH     ($bits(mbox_t)),
+      .DEPTH_LOG2(MBOX_DEPTH_LOG2),
+      .WR_COUNT  (1'b1)
+  ) u_mbox_fifo (
+      .rst        (host_rst),
+      .wr_clk     (host_clk),
+      .wr_en      (mbox_send && mbox_fits),
+      .din        (mbox_shadow),
+      .wr_commit  (1'b0),
+      .wr_rollback(1'b0),
+      .full       (mbox_full),
+      .overflow   (mbox_overflow_unused),
+      .wr_rst_busy(mbox_wr_busy),
+      .wr_count   (mbox_count),
+      .rd_clk     (net_clk),
+      .rd_en      (m_host_ready && m_host_valid),
+      .dout       (mbox_dout),
+      .empty      (mbox_empty),
+      .underflow  (mbox_underflow_unused),
+      .rd_rst_busy(mbox_rd_busy)
+  );
+
+  assign m_host_valid                        = !mbox_empty && !mbox_rd_busy;
+  assign m_host_side                         = mbox_dout.side;
+  assign m_host_qty                          = mbox_dout.qty;
+  assign m_host_price                        = mbox_dout.price;
+  assign m_host_locate                       = mbox_dout.locate;
+  assign m_host_stock                        = mbox_dout.stock;
+  assign m_host_tif                          = mbox_dout.tif;
+  assign m_host_clordid                      = mbox_dout.clordid;
+
+  // The send's result in its own cycle already: a read right after the write sees it.
+  assign hwif_in.TX.MBOX_STATUS.dropped.next = mbox_send ? !mbox_fits : mbox_dropped_q;
+  assign hwif_in.TX.MBOX_SPACE.space.next    = 5'(2 ** MBOX_DEPTH_LOG2) - 5'(mbox_count);
+  assign hwif_in.TX.MBOX_DROP.LO.value.next  = mbox_drop_q[31:0];
+  assign hwif_in.TX.MBOX_DROP.HI.value.next  = mbox_drop_q[63:32];
+
+  // ---- command channel, host side ----
+  typedef enum logic [1:0] {
+    H_IDLE,
+    H_FENCE,
+    H_SEND,
+    H_WAIT
+  } host_state_e;
+
+  host_state_e h_state_q;
+  cmd_t cmd_new, cmd_q;
+  logic cmd_req, cmd_nop, nop_ack_q, cmd_src_ready, rsp_landed;
+  logic [STRAT_N_RULES-1:0] rule_err_q;
+  logic tx_cfg_valid_q, tx_refused_q, userref_ignored_q;
+  rsp_t      rsp_dst;
+  cmd_rule_t new_rule;
+  cmd_lim_t  new_lim;
+  cmd_tx_t   new_tx;
+  sym_req_t  new_loc;
+
+  always_comb begin
+    new_rule.idx = hwif_out.STRATEGY.RULE_SEL.idx.value;
+    new_rule.rule.enable = hwif_out.STRATEGY.RULE_CTRL.enable.value;
+    new_rule.rule.msg_mask = hwif_out.STRATEGY.RULE_CTRL.msg_mask.value;
+    new_rule.rule.locate = hwif_out.STRATEGY.RULE_LOCATE.locate.value;
+    new_rule.rule.side_match = hwif_out.STRATEGY.RULE_CTRL.side_match.value;
+    new_rule.rule.price_ge = hwif_out.STRATEGY.RULE_CTRL.price_ge.value;
+    new_rule.rule.price_threshold = hwif_out.STRATEGY.RULE_THRESHOLD.threshold.value;
+    new_rule.rule.min_shares = hwif_out.STRATEGY.RULE_MIN_SHARES.min_shares.value;
+    new_rule.rule.action_side = hwif_out.STRATEGY.RULE_CTRL.action_side.value;
+    new_rule.rule.qty_min = hwif_out.STRATEGY.RULE_CTRL.qty_min.value;
+    new_rule.rule.qty = hwif_out.STRATEGY.RULE_QTY.qty.value;
+    new_rule.rule.price_threshold_mode = hwif_out.STRATEGY.RULE_CTRL.price_threshold_mode.value;
+    new_rule.rule.price_offset = hwif_out.STRATEGY.RULE_OFFSET.offset.value;
+    new_rule.rule.tif = hwif_out.STRATEGY.RULE_CTRL.tif.value;
+
+    new_lim.max_qty = hwif_out.RISK.MAX_QTY.max_qty.value;
+    new_lim.max_notional = {
+      hwif_out.RISK.MAX_NOTIONAL_HI.value.value, hwif_out.RISK.MAX_NOTIONAL_LO.value.value
+    };
+    new_lim.rate_refill = hwif_out.RISK.RATE_REFILL.refill.value;
+    new_lim.rate_period = hwif_out.RISK.RATE_PERIOD.period.value;
+    new_lim.rate_burst = hwif_out.RISK.RATE_BURST.burst.value;
+
+    new_tx.tmpl[8*40+:16] = {  // field [31:16]: byte 40 in value[15:8]
+      hwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[7:0], hwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[15:8]
+    };
+    for (int w = 0; w < 10; w++) begin
+      new_tx.tmpl[32*w+:32] = wire_bytes(hwif_out.TX.TX_TEMPLATE[w].bytes.value);
+    end
+    new_tx.display    = hwif_out.TX.TX_OUCH.display.value;
+    new_tx.capacity   = hwif_out.TX.TX_OUCH.capacity.value;
+    new_tx.ise        = hwif_out.TX.TX_OUCH.ise.value;
+    new_tx.cross_type = hwif_out.TX.TX_OUCH.cross_type.value;
+
+    new_loc.wr        = hwif_out.LOCATE_ALLOW.req_is_wr;
+    new_loc.addr      = hwif_out.LOCATE_ALLOW.addr[12:2];
+    new_loc.wdata     = hwif_out.LOCATE_ALLOW.wr_data;
+    for (int b = 0; b < 4; b++) begin
+      new_loc.wstrb[b] = |hwif_out.LOCATE_ALLOW.wr_biten[8*b+:8];  // AXI strobes: whole bytes
+    end
+  end
+
+  // The command of this cycle's external request (regblock: one at a time) and whether it is a no-op.
+  always_comb begin
+    cmd_new.kill  = hwif_out.RISK.RISK_CTRL.kill.value;
+    cmd_new.tx_en = hwif_out.TX.TX_CTRL.tx_en.value;
+    cmd_new.kind  = CMD_LOC;
+    cmd_new.pay   = PAY_W'(new_loc);
+    cmd_req       = hwif_out.LOCATE_ALLOW.req;
+    cmd_nop       = 1'b0;
+    if (hwif_out.STRATEGY.RULE_COMMIT.req) begin
+      cmd_new.kind = CMD_RULE_COMMIT;
+      cmd_new.pay = PAY_W'(new_rule);
+      cmd_req = 1'b1;
+      cmd_nop      = !(hwif_out.STRATEGY.RULE_COMMIT.wr_data.commit && hwif_out.STRATEGY.RULE_COMMIT.wr_biten.commit);
+    end
+    if (hwif_out.STRATEGY.RULE_ARM.req) begin
+      cmd_new.kind = CMD_RULE_ARM;
+      cmd_new.pay  = PAY_W'(hwif_out.STRATEGY.RULE_ARM.wr_data.mask & hwif_out.STRATEGY.RULE_ARM.wr_biten.mask);
+      cmd_req = 1'b1;
+    end
+    if (hwif_out.STRATEGY.RULE_DISARM.req) begin
+      cmd_new.kind = CMD_RULE_DISARM;
+      cmd_new.pay = PAY_W'(hwif_out.STRATEGY.RULE_DISARM.wr_data.mask & hwif_out.STRATEGY.RULE_DISARM.wr_biten.mask);
+      cmd_req = 1'b1;
+    end
+    if (hwif_out.RISK.RISK_COMMIT.req) begin
+      cmd_new.kind = CMD_RISK_COMMIT;
+      cmd_new.pay = PAY_W'(new_lim);
+      cmd_req = 1'b1;
+      cmd_nop      = !(hwif_out.RISK.RISK_COMMIT.wr_data.commit && hwif_out.RISK.RISK_COMMIT.wr_biten.commit);
+    end
+    if (hwif_out.RISK.BUDGET_ADD.req) begin
+      cmd_new.kind = CMD_BUDGET_ADD;
+      cmd_new.pay = PAY_W'(hwif_out.RISK.BUDGET_ADD.wr_data.amount & hwif_out.RISK.BUDGET_ADD.wr_biten.amount);
+      cmd_req = 1'b1;
+    end
+    if (hwif_out.TX.TX_COMMIT.req) begin
+      cmd_new.kind = CMD_TX_COMMIT;
+      cmd_new.pay = PAY_W'(new_tx);
+      cmd_req = 1'b1;
+      cmd_nop = !(hwif_out.TX.TX_COMMIT.wr_data.commit && hwif_out.TX.TX_COMMIT.wr_biten.commit);
+    end
+    if (hwif_out.TX.TX_USERREF_NEXT.req) begin
+      cmd_new.kind = CMD_USERREF_WR;
+      cmd_new.pay = PAY_W'(hwif_out.TX.TX_USERREF_NEXT.wr_data.value & hwif_out.TX.TX_USERREF_NEXT.wr_biten.value);
+      cmd_req = 1'b1;
+    end
+    if (hwif_out.TX.TX_USERREF.req) begin
+      cmd_new.kind = CMD_USERREF_RD;
+      cmd_req      = 1'b1;
+    end
+  end
+
+  // The fence's host half: the mailbox read empty, and no send in this or the last cycle (wr_count
+  // shows a write from the edge after it).
+  logic mbox_drained;
+  assign mbox_drained = mbox_count == '0 && !mbox_send && !mbox_wr_q;
+
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      h_state_q         <= H_IDLE;
+      nop_ack_q         <= 1'b0;
+      rule_err_q        <= '1;
+      tx_cfg_valid_q    <= 1'b0;
+      tx_refused_q      <= 1'b0;
+      userref_ignored_q <= 1'b0;
+    end else begin
+      nop_ack_q <= 1'b0;
+      unique case (h_state_q)
+        H_IDLE: begin
+          if (cmd_req) begin
+            if (cmd_nop) begin
+              nop_ack_q <= 1'b1;
+            end else begin
+              h_state_q <= H_FENCE;
+            end
+          end
+        end
+        H_FENCE: begin
+          if (mbox_drained) begin
+            h_state_q <= H_SEND;
+          end
+        end
+        H_SEND: begin
+          if (cmd_src_ready) begin
+            h_state_q <= H_WAIT;
+          end
+        end
+        H_WAIT: begin
+          if (rsp_landed) begin
+            h_state_q      <= H_IDLE;
+            rule_err_q     <= rsp_dst.error;
+            tx_cfg_valid_q <= rsp_dst.cfg_valid;
+            if (cmd_q.kind == CMD_TX_COMMIT) begin
+              tx_refused_q <= rsp_dst.refused;
+            end
+            if (cmd_q.kind == CMD_USERREF_WR) begin
+              userref_ignored_q <= rsp_dst.ignored;
+            end
+          end
+        end
+        default: h_state_q <= H_IDLE;
+      endcase
+    end
+  end
+
+  // Datapath: no reset (only sent after a request has loaded it).
+  always_ff @(posedge host_clk) begin
+    if (cmd_req && h_state_q == H_IDLE) begin
+      cmd_q <= cmd_new;
+    end
+  end
+
+  cmd_t cmd_dst;
+  logic cmd_dst_valid;
+
+  cdc_handshake #(
+      .WIDTH ($bits(cmd_t)),
+      .STAGES(STAGES)
+  ) u_cmd_cdc (
+      .src_clk  (host_clk),
+      .src_rst  (host_rst),
+      .src_data (cmd_q),
+      .src_valid(h_state_q == H_SEND),
+      .src_ready(cmd_src_ready),
+      .dst_clk  (net_clk),
+      .dst_rst  (net_rst),
+      .dst_data (cmd_dst),
+      .dst_valid(cmd_dst_valid)
+  );
+
+  // Acks: a no-op in the cycle after its request, a command when its response lands (cmd_q holds its
+  // kind; a no-op's kind is in cmd_q too).
+  logic ack;
+  assign ack                                 = nop_ack_q || (h_state_q == H_WAIT && rsp_landed);
+
+  assign hwif_in.STRATEGY.RULE_COMMIT.wr_ack = ack && cmd_q.kind == CMD_RULE_COMMIT;
+  assign hwif_in.STRATEGY.RULE_ARM.wr_ack    = ack && cmd_q.kind == CMD_RULE_ARM;
+  assign hwif_in.STRATEGY.RULE_DISARM.wr_ack = ack && cmd_q.kind == CMD_RULE_DISARM;
+  assign hwif_in.RISK.RISK_COMMIT.wr_ack     = ack && cmd_q.kind == CMD_RISK_COMMIT;
+  assign hwif_in.RISK.BUDGET_ADD.wr_ack      = ack && cmd_q.kind == CMD_BUDGET_ADD;
+  assign hwif_in.TX.TX_COMMIT.wr_ack         = ack && cmd_q.kind == CMD_TX_COMMIT;
+  assign hwif_in.TX.TX_USERREF_NEXT.wr_ack   = ack && cmd_q.kind == CMD_USERREF_WR;
+  assign hwif_in.TX.TX_USERREF.rd_ack        = ack && cmd_q.kind == CMD_USERREF_RD;
+  assign hwif_in.TX.TX_USERREF.rd_data.value = rsp_dst.rdata;
+  logic host_loc_wr;
+  assign host_loc_wr = cmd_q.pay[$bits(sym_req_t)-1];  // sym_req_t.wr, its first field
+  assign hwif_in.LOCATE_ALLOW.wr_ack = ack && cmd_q.kind == CMD_LOC && host_loc_wr;
+  assign hwif_in.LOCATE_ALLOW.rd_ack = ack && cmd_q.kind == CMD_LOC && !host_loc_wr;
+  assign hwif_in.LOCATE_ALLOW.rd_data = rsp_dst.rdata;
+
+  assign hwif_in.STRATEGY.RULE_STATUS.error.next = rule_err_q;
+  assign hwif_in.TX.TX_STATUS.cfg_valid.next = tx_cfg_valid_q;
+  assign hwif_in.TX.TX_STATUS.cfg_refused.next = tx_refused_q;
+  assign hwif_in.TX.TX_STATUS.userref_ignored.next = userref_ignored_q;
+
+  // ---- command channel, net side ----
+  typedef enum logic [2:0] {
+    N_IDLE,
+    N_FENCE,
+    N_LOC_REQ,
+    N_LOC_RSP,
+    N_SETTLE,
+    N_RESP
+  } net_state_e;
+
+  net_state_e       n_state_q;
+  logic       [2:0] host_take_q;  // a host order taken in each of the last 3 cycles
+  logic host_take, fence_ok, pulse_q, path_closed;
+  logic      [$clog2(CMD_SETTLE+1)-1:0] settle_q;
+  rsp_t                                 rsp_q;
+  logic                                 rsp_src_ready;
+  sym_req_t                             cmd_loc;
+  cmd_tx_t                              cmd_tx;
+  cmd_lim_t                             cmd_lim;
+  cmd_rule_t                            cmd_rule;
+
+  assign host_take = m_host_valid && m_host_ready;
+  assign fence_ok    = host_take_q == '0 && !host_take && kill_s == cmd_dst.kill && tx_en_s == cmd_dst.tx_en;
+  assign path_closed = ctl_kill || !ctl_tx_en;
+  assign cmd_loc = sym_req_t'(cmd_dst.pay[$bits(sym_req_t)-1:0]);
+  assign cmd_tx = cmd_tx_t'(cmd_dst.pay[$bits(cmd_tx_t)-1:0]);
+  assign cmd_lim = cmd_lim_t'(cmd_dst.pay[$bits(cmd_lim_t)-1:0]);
+  assign cmd_rule = cmd_rule_t'(cmd_dst.pay[$bits(cmd_rule_t)-1:0]);
+
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      n_state_q   <= N_IDLE;
+      host_take_q <= '0;
+      pulse_q     <= 1'b0;
+      settle_q    <= '0;
+    end else begin
+      host_take_q <= {host_take_q[1:0], host_take};
+      pulse_q     <= 1'b0;
+      unique case (n_state_q)
+        N_IDLE: begin
+          if (cmd_dst_valid) begin
+            n_state_q <= N_FENCE;
+          end
+        end
+        N_FENCE: begin
+          if (fence_ok) begin
+            if (cmd_dst.kind == CMD_LOC) begin
+              n_state_q <= N_LOC_REQ;
+            end else begin
+              pulse_q   <= 1'b1;
+              settle_q  <= '0;
+              n_state_q <= N_SETTLE;
+            end
+          end
+        end
+        N_LOC_REQ: begin
+          if (loc_req_ready) begin
+            n_state_q <= N_LOC_RSP;
+          end
+        end
+        N_LOC_RSP: begin
+          if (loc_rsp_valid) begin
+            settle_q  <= '0;
+            n_state_q <= N_SETTLE;
+          end
+        end
+        N_SETTLE: begin
+          settle_q <= settle_q + 1'b1;
+          if (settle_q == ($clog2(CMD_SETTLE + 1))'(CMD_SETTLE)) begin
+            n_state_q <= N_RESP;
+          end
+        end
+        N_RESP: begin
+          if (rsp_src_ready) begin
+            n_state_q <= N_IDLE;
+          end
+        end
+        default: n_state_q <= N_IDLE;
+      endcase
+    end
+  end
+
+  // Pulses: the cycle after the fence opened. TX_COMMIT goes only while the path is closed (decision 37).
+  assign cfg_rule_wr       = pulse_q && cmd_dst.kind == CMD_RULE_COMMIT;
+  assign cfg_rule_idx      = cmd_rule.idx;
+  assign cfg_rule          = cmd_rule.rule;
+  assign cmd_arm           = pulse_q && cmd_dst.kind == CMD_RULE_ARM;
+  assign cmd_arm_mask      = cmd_dst.pay[STRAT_N_RULES-1:0];
+  assign cmd_disarm        = pulse_q && cmd_dst.kind == CMD_RULE_DISARM;
+  assign cmd_disarm_mask   = cmd_dst.pay[STRAT_N_RULES-1:0];
+  assign cfg_lim_wr        = pulse_q && cmd_dst.kind == CMD_RISK_COMMIT;
+  assign cfg_max_qty       = cmd_lim.max_qty;
+  assign cfg_max_notional  = cmd_lim.max_notional;
+  assign cfg_rate_refill   = cmd_lim.rate_refill;
+  assign cfg_rate_period   = cmd_lim.rate_period;
+  assign cfg_rate_burst    = cmd_lim.rate_burst;
+  assign cmd_budget_add    = pulse_q && cmd_dst.kind == CMD_BUDGET_ADD;
+  assign cmd_budget_amount = cmd_dst.pay[31:0];
+  assign cmd_userref_wr    = pulse_q && cmd_dst.kind == CMD_USERREF_WR;
+  assign cmd_userref_value = cmd_dst.pay[31:0];
+  assign cfg_tx_wr         = pulse_q && cmd_dst.kind == CMD_TX_COMMIT && path_closed;
+  assign cfg_template      = cmd_tx.tmpl;
+  assign cfg_display       = cmd_tx.display;
+  assign cfg_capacity      = cmd_tx.capacity;
+  assign cfg_ise           = cmd_tx.ise;
+  assign cfg_cross_type    = cmd_tx.cross_type;
+  assign loc_req_valid     = n_state_q == N_LOC_REQ;
+  assign loc_req_wr        = cmd_loc.wr;
+  assign loc_req_addr      = cmd_loc.addr;
+  assign loc_req_wdata     = cmd_loc.wdata;
+  assign loc_req_wstrb     = cmd_loc.wstrb;
+
+  // The response collects the events of the pulse's cycle and the CMD_SETTLE after it, and the status of
+  // the last of them. Datapath: no reset (sent only after a command has loaded it).
+  always_ff @(posedge net_clk) begin
+    if (pulse_q) begin
+      rsp_q.refused <= cmd_dst.kind == CMD_TX_COMMIT && !path_closed;
+      rsp_q.ignored <= 1'b0;
+    end else if (n_state_q == N_SETTLE) begin
+      rsp_q.refused <= rsp_q.refused || (cmd_dst.kind == CMD_TX_COMMIT && ev_cfg_refused);
+      rsp_q.ignored <= rsp_q.ignored || (cmd_dst.kind == CMD_USERREF_WR && ev_userref_ignored);
+    end
+    if (n_state_q == N_LOC_RSP && loc_rsp_valid) begin
+      rsp_q.refused <= 1'b0;
+      rsp_q.ignored <= 1'b0;
+      rsp_q.rdata   <= loc_rsp_rdata;
+    end
+    if (n_state_q == N_SETTLE) begin
+      if (cmd_dst.kind != CMD_LOC) begin
+        rsp_q.rdata <= st_userref;
+      end
+      rsp_q.cfg_valid <= st_tx_cfg_valid;
+      rsp_q.error     <= st_error;
+    end
+  end
+
+  cdc_handshake #(
+      .WIDTH ($bits(rsp_t)),
+      .STAGES(STAGES)
+  ) u_rsp_cdc (
+      .src_clk  (net_clk),
+      .src_rst  (net_rst),
+      .src_data (rsp_q),
+      .src_valid(n_state_q == N_RESP),
+      .src_ready(rsp_src_ready),
+      .dst_clk  (host_clk),
+      .dst_rst  (host_rst),
+      .dst_data (rsp_dst),
+      .dst_valid(rsp_landed)
+  );
 
   // ---- symbol bitmap access: host -> net request, net -> host response ----
   sym_req_t sym_req, sym_req_q, sym_dst;

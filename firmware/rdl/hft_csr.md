@@ -9,19 +9,23 @@ Don't override. Generated from: hft_csr
 
 - Absolute Address: 0x0
 - Base Offset: 0x0
-- Size: 0xA000
+- Size: 0xC000
 
 <p>Host register map. 32-bit registers, 64 KiB window, SLVERR on unmapped addresses and illegal accesses.</p>
 
-|Offset|Identifier|      Name      |
-|------|----------|----------------|
-|0x0000|  GLOBAL  |     Global     |
-|0x0100|    NET   | Network receive|
-|0x0200|   FEED   | MoldUDP64 feed |
-|0x0400|   STATS  |   Statistics   |
-|0x0600|   ITCH   |ITCH 5.0 decoder|
-|0x0800|   RING   | Host event ring|
-|0x8000|  SYMBOL  |  Symbol bitmap |
+|Offset| Identifier |           Name           |
+|------|------------|--------------------------|
+|0x0000|   GLOBAL   |          Global          |
+|0x0100|     NET    |      Network receive     |
+|0x0200|    FEED    |      MoldUDP64 feed      |
+|0x0400|    STATS   |        Statistics        |
+|0x0600|    ITCH    |     ITCH 5.0 decoder     |
+|0x0800|    RING    |      Host event ring     |
+|0x0A00|    RISK    |      Pre-trade risk      |
+|0x1000|  STRATEGY  |      Strategy rules      |
+|0x2000|     TX     |Order transmit and mailbox|
+|0x8000|   SYMBOL   |       Symbol bitmap      |
+|0xA000|LOCATE_ALLOW|    Locate allow bitmap   |
 
 ## GLOBAL register file
 
@@ -59,11 +63,11 @@ Don't override. Generated from: hft_csr
 
 |Bits|Identifier|Access| Reset |Name|
 |----|----------|------|-------|----|
-|31:0|  version |   r  |0x50003|  — |
+|31:0|  version |   r  |0x50004|  — |
 
 #### version field
 
-<p>Major.minor of this map: 0x0005_0003 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap and the F6 RING block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
+<p>Major.minor of this map: 0x0005_0004 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block and the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
 
 ### SCRATCH register
 
@@ -2297,9 +2301,9 @@ Don't override. Generated from: hft_csr
 
 - Absolute Address: 0x800
 - Base Offset: 0x800
-- Size: 0x58
+- Size: 0x64
 
-<p>event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.</p>
+<p>event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES + RING_DROP_ORDERS + RING_ORDER_QUEUED = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS + ORDERS_SENT_HW + ORDERS_SENT_HOST + the sum of RISK_REJECT_<reason>; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.</p>
 
 |Offset|     Identifier    |          Name         |
 |------|-------------------|-----------------------|
@@ -2315,6 +2319,8 @@ Don't override. Generated from: hft_csr
 | 0x40 |RING_COMMIT_ENTRIES|     64-bit counter    |
 | 0x48 |   RING_DROP_PKTS  |     64-bit counter    |
 | 0x50 | RING_DROP_ENTRIES |     64-bit counter    |
+| 0x58 |  RING_DROP_ORDERS |     64-bit counter    |
+| 0x60 | RING_ORDER_QUEUED |  Order entries queued |
 
 ### RING_CTRL register
 
@@ -2614,6 +2620,1826 @@ Don't override. Generated from: hft_csr
 
 <p>Counter bits [63:32] at the last snapshot.</p>
 
+## RING_DROP_ORDERS register file
+
+- Absolute Address: 0x858
+- Base Offset: 0x58
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x858
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x85C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+### RING_ORDER_QUEUED register
+
+- Absolute Address: 0x860
+- Base Offset: 0x60
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 4:0|  queued  |   r  |  —  |  — |
+
+#### queued field
+
+<p>ORDER_SENT and RISK_REJECT entries counted by ORDERS_SENT_* and RISK_REJECT_* and waiting in event_packer's order queue (0..16), at the last snapshot. It keeps the identity above in every snapshot.</p>
+
+## RISK register file
+
+- Absolute Address: 0xA00
+- Base Offset: 0xA00
+- Size: 0xB0
+
+<p>risk_check limits, kill switch, order budget and counters. MAX_QTY .. RATE_BURST are a shadow that RISK_COMMIT moves to the net clock domain in one piece. RISK_COMMIT and BUDGET_ADD are commands: they go to the net clock domain in bus order with the STRATEGY and TX commands, after every MBOX_SEND written before them has been decided and after RISK_CTRL and TX_CTRL written before them are in effect, and their write response comes once they are in effect. While one is in flight every other register access waits. The counters (net clock domain, 64 bit, wrap; cleared only by reset) and BUDGET are updated by STATS_CTRL.snapshot in the same net clock cycle as the other snapshot counters. RISK_REJECT_<reason> is at 0x0A60 + 8 * (reason - 1), reason = risk_reason_e in hft_pkg.sv; it counts the rejects not written to the ring too (RING_DROP_ORDERS).</p>
+
+|Offset|      Identifier     |         Name         |
+|------|---------------------|----------------------|
+| 0x00 |       MAX_QTY       |   Maximum quantity   |
+| 0x04 |   MAX_NOTIONAL_LO   | Maximum notional, low|
+| 0x08 |   MAX_NOTIONAL_HI   |Maximum notional, high|
+| 0x0C |     RATE_REFILL     |     Token refill     |
+| 0x10 |     RATE_PERIOD     |     Token period     |
+| 0x14 |      RATE_BURST     |   Token bucket size  |
+| 0x18 |     RISK_COMMIT     |      Risk commit     |
+| 0x1C |      RISK_CTRL      |     Risk control     |
+| 0x20 |      BUDGET_ADD     |   Add to the budget  |
+| 0x24 |        BUDGET       |        Budget        |
+| 0x40 |    ORDERS_SENT_HW   |    64-bit counter    |
+| 0x48 |   ORDERS_SENT_HOST  |    64-bit counter    |
+| 0x60 |   RISK_REJECT_KILL  |    64-bit counter    |
+| 0x68 |  RISK_REJECT_TX_OFF |    64-bit counter    |
+| 0x70 | RISK_REJECT_INVALID |    64-bit counter    |
+| 0x78 |  RISK_REJECT_LOCATE |    64-bit counter    |
+| 0x80 |   RISK_REJECT_QTY   |    64-bit counter    |
+| 0x88 | RISK_REJECT_NOTIONAL|    64-bit counter    |
+| 0x90 |  RISK_REJECT_BUDGET |    64-bit counter    |
+| 0x98 |   RISK_REJECT_RATE  |    64-bit counter    |
+| 0xA0 | RISK_REJECT_TX_BUSY |    64-bit counter    |
+| 0xA8 |RISK_REJECT_RING_FULL|    64-bit counter    |
+
+### MAX_QTY register
+
+- Absolute Address: 0xA00
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  max_qty |  rw  | 0x0 |  — |
+
+#### max_qty field
+
+<p>An order with qty &gt; max_qty is rejected (QTY). 0 after reset.</p>
+
+### MAX_NOTIONAL_LO register
+
+- Absolute Address: 0xA04
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |  rw  | 0x0 |  — |
+
+#### value field
+
+<p>Bits [31:0] of the maximum qty * price (price in ITCH Price(4) units). An order above it is rejected (NOTIONAL).</p>
+
+### MAX_NOTIONAL_HI register
+
+- Absolute Address: 0xA08
+- Base Offset: 0x8
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |  rw  | 0x0 |  — |
+
+#### value field
+
+<p>Bits [63:32] of the maximum notional.</p>
+
+### RATE_REFILL register
+
+- Absolute Address: 0xA0C
+- Base Offset: 0xC
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  refill  |  rw  | 0x0 |  — |
+
+#### refill field
+
+<p>Tokens added every RATE_PERIOD net clock cycles, up to RATE_BURST.</p>
+
+### RATE_PERIOD register
+
+- Absolute Address: 0xA10
+- Base Offset: 0x10
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  period  |  rw  | 0x0 |  — |
+
+#### period field
+
+<p>Net clock cycles between refills; 0 = no refill (the bucket only empties).</p>
+
+### RATE_BURST register
+
+- Absolute Address: 0xA14
+- Base Offset: 0x14
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   burst  |  rw  | 0x0 |  — |
+
+#### burst field
+
+<p>Bucket size. Each RISK_COMMIT fills the bucket to it and restarts the period. An accepted order takes one token; with none it is rejected (RATE).</p>
+
+### RISK_COMMIT register
+
+- Absolute Address: 0xA18
+- Base Offset: 0x18
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  commit  |   w  |  —  |  — |
+
+#### commit field
+
+<p>Write 1: command that sends MAX_QTY .. RATE_BURST to risk_check in one piece; the write response comes once it is in effect. A write with 0 does nothing.</p>
+
+### RISK_CTRL register
+
+- Absolute Address: 0xA1C
+- Base Offset: 0x1C
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |   kill   |  rw  | 0x1 |  — |
+
+#### kill field
+
+<p>Kill switch, 1 after reset. Not a shadow: it reaches the net clock domain through a synchronizer, without a commit. While 1 every order is rejected (KILL); its rise cancels the TX queue and disarms every rule. Software releases it last, after the whole configuration (software contract after reset).</p>
+
+### BUDGET_ADD register
+
+- Absolute Address: 0xA20
+- Base Offset: 0x20
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  amount  |   w  |  —  |  — |
+
+#### amount field
+
+<p>Command: adds the written value to the order budget (saturating at 2^32 - 1); the write response comes once it is in effect. Each accepted order uses one unit; with 0 an order is rejected (BUDGET). The budget is 0 after reset.</p>
+
+### BUDGET register
+
+- Absolute Address: 0xA24
+- Base Offset: 0x24
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  budget  |   r  |  —  |  — |
+
+#### budget field
+
+<p>Order budget left, at the last snapshot.</p>
+
+## ORDERS_SENT_HW register file
+
+- Absolute Address: 0xA40
+- Base Offset: 0x40
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA40
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA44
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## ORDERS_SENT_HOST register file
+
+- Absolute Address: 0xA48
+- Base Offset: 0x48
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA48
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA4C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_KILL register file
+
+- Absolute Address: 0xA60
+- Base Offset: 0x60
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA60
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA64
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_TX_OFF register file
+
+- Absolute Address: 0xA68
+- Base Offset: 0x68
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA68
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA6C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_INVALID register file
+
+- Absolute Address: 0xA70
+- Base Offset: 0x70
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA70
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA74
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_LOCATE register file
+
+- Absolute Address: 0xA78
+- Base Offset: 0x78
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA78
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA7C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_QTY register file
+
+- Absolute Address: 0xA80
+- Base Offset: 0x80
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA80
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA84
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_NOTIONAL register file
+
+- Absolute Address: 0xA88
+- Base Offset: 0x88
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA88
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA8C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_BUDGET register file
+
+- Absolute Address: 0xA90
+- Base Offset: 0x90
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA90
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA94
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_RATE register file
+
+- Absolute Address: 0xA98
+- Base Offset: 0x98
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xA98
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xA9C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_TX_BUSY register file
+
+- Absolute Address: 0xAA0
+- Base Offset: 0xA0
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xAA0
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xAA4
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RISK_REJECT_RING_FULL register file
+
+- Absolute Address: 0xAA8
+- Base Offset: 0xA8
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0xAA8
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0xAAC
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## STRATEGY register file
+
+- Absolute Address: 0x1000
+- Base Offset: 0x1000
+- Size: 0x80
+
+<p>strategy_engine's 8 rules, written indirectly: RULE_SEL picks a rule, RULE_CTRL .. RULE_OFFSET are one shadow, RULE_COMMIT replaces the selected rule with it in one piece and disarms it. Reads return the shadow, not the rule in effect. RULE_COMMIT, RULE_ARM and RULE_DISARM are commands, in bus order with the RISK and TX commands (see RISK); their write response comes once they are in effect. RULE_ARMED and RULE_FIRED_<n> (net clock domain) are updated by STATS_CTRL.snapshot with the other snapshot counters.</p>
+
+|Offset|   Identifier  |        Name        |
+|------|---------------|--------------------|
+| 0x00 |    RULE_SEL   |     Rule select    |
+| 0x04 |   RULE_CTRL   |    Rule control    |
+| 0x08 |  RULE_LOCATE  |     Rule locate    |
+| 0x0C | RULE_THRESHOLD|Rule price threshold|
+| 0x10 |RULE_MIN_SHARES| Rule minimum shares|
+| 0x14 |    RULE_QTY   |    Rule quantity   |
+| 0x18 |  RULE_OFFSET  |  Rule price offset |
+| 0x1C |  RULE_COMMIT  |     Rule commit    |
+| 0x20 |    RULE_ARM   |      Arm rules     |
+| 0x24 |  RULE_DISARM  |    Disarm rules    |
+| 0x28 |  RULE_STATUS  |     Rule status    |
+| 0x2C |   RULE_ARMED  |     Armed rules    |
+| 0x40 |  RULE_FIRED_0 |   64-bit counter   |
+| 0x48 |  RULE_FIRED_1 |   64-bit counter   |
+| 0x50 |  RULE_FIRED_2 |   64-bit counter   |
+| 0x58 |  RULE_FIRED_3 |   64-bit counter   |
+| 0x60 |  RULE_FIRED_4 |   64-bit counter   |
+| 0x68 |  RULE_FIRED_5 |   64-bit counter   |
+| 0x70 |  RULE_FIRED_6 |   64-bit counter   |
+| 0x78 |  RULE_FIRED_7 |   64-bit counter   |
+
+### RULE_SEL register
+
+- Absolute Address: 0x1000
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 2:0|    idx   |  rw  | 0x0 |  — |
+
+#### idx field
+
+<p>The rule RULE_COMMIT writes.</p>
+
+### RULE_CTRL register
+
+- Absolute Address: 0x1004
+- Base Offset: 0x4
+- Size: 0x4
+
+| Bits|     Identifier     |Access|Reset|Name|
+|-----|--------------------|------|-----|----|
+|  0  |       enable       |  rw  | 0x0 |  — |
+| 3:1 |      msg_mask      |  rw  | 0x0 |  — |
+| 5:4 |     side_match     |  rw  | 0x0 |  — |
+|  6  |      price_ge      |  rw  | 0x0 |  — |
+| 9:8 |     action_side    |  rw  | 0x0 |  — |
+|  10 |       qty_min      |  rw  | 0x0 |  — |
+|  11 |price_threshold_mode|  rw  | 0x0 |  — |
+|23:16|         tif        |  rw  | 0x0 |  — |
+
+#### enable field
+
+<p>Rule enabled.</p>
+
+#### msg_mask field
+
+<p>Message types that can fire it: bit 0 A, bit 1 F, bit 2 P.</p>
+
+#### side_match field
+
+<p>Event sides that match: bit 0 B, bit 1 S.</p>
+
+#### price_ge field
+
+<p>0: event price &lt;= RULE_THRESHOLD matches, 1: &gt;=.</p>
+
+#### action_side field
+
+<p>Order side: 0 buy, 1 sell, 2 the event's opposite; 3 is a static error.</p>
+
+#### qty_min field
+
+<p>0: the order quantity is RULE_QTY; 1: min(event shares, RULE_QTY).</p>
+
+#### price_threshold_mode field
+
+<p>0: the order price is the event price; 1: RULE_THRESHOLD + RULE_OFFSET.</p>
+
+#### tif field
+
+<p>OUCH Time In Force code of the order (0, 3, 5 or E; any other is a static error).</p>
+
+### RULE_LOCATE register
+
+- Absolute Address: 0x1008
+- Base Offset: 0x8
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|15:0|  locate  |  rw  | 0x0 |  — |
+
+#### locate field
+
+<p>Stock locate the rule watches; 0 is a static error.</p>
+
+### RULE_THRESHOLD register
+
+- Absolute Address: 0x100C
+- Base Offset: 0xC
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0| threshold|  rw  | 0x0 |  — |
+
+#### threshold field
+
+<p>Price threshold, ITCH Price(4).</p>
+
+### RULE_MIN_SHARES register
+
+- Absolute Address: 0x1010
+- Base Offset: 0x10
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|min_shares|  rw  | 0x0 |  — |
+
+#### min_shares field
+
+<p>An event matches only with shares &gt;= this.</p>
+
+### RULE_QTY register
+
+- Absolute Address: 0x1014
+- Base Offset: 0x14
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|    qty   |  rw  | 0x0 |  — |
+
+#### qty field
+
+<p>Order quantity, or its maximum with qty_min = 1.</p>
+
+### RULE_OFFSET register
+
+- Absolute Address: 0x1018
+- Base Offset: 0x18
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|  offset  |  rw  | 0x0 |  — |
+
+#### offset field
+
+<p>Signed offset added to RULE_THRESHOLD with price_threshold_mode = 1.</p>
+
+### RULE_COMMIT register
+
+- Absolute Address: 0x101C
+- Base Offset: 0x1C
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  commit  |   w  |  —  |  — |
+
+#### commit field
+
+<p>Write 1: command that replaces rule RULE_SEL with the shadow and disarms it; the write response comes once it is in effect, and RULE_STATUS then shows its static error. A write with 0 does nothing.</p>
+
+### RULE_ARM register
+
+- Absolute Address: 0x1020
+- Base Offset: 0x20
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|   mask   |   w  |  —  |  — |
+
+#### mask field
+
+<p>Command: arms the rules whose bit is 1; the write response comes once it is in effect.</p>
+
+### RULE_DISARM register
+
+- Absolute Address: 0x1024
+- Base Offset: 0x24
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|   mask   |   w  |  —  |  — |
+
+#### mask field
+
+<p>Command: disarms the rules whose bit is 1; the write response comes once it is in effect.</p>
+
+### RULE_STATUS register
+
+- Absolute Address: 0x1028
+- Base Offset: 0x28
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|   error  |   r  |  —  |  — |
+
+#### error field
+
+<p>Bit n: rule n has a static error and never fires (locate 0, a TIF the core does not send, action_side 3, quantity 0 or &gt;= 1,000,000, threshold + offset outside the exchange's price range). As of the last command's response; 0xFF after reset (every rule is cleared).</p>
+
+### RULE_ARMED register
+
+- Absolute Address: 0x102C
+- Base Offset: 0x2C
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|   armed  |   r  |  —  |  — |
+
+#### armed field
+
+<p>Bit n: rule n armed, at the last snapshot.</p>
+
+## RULE_FIRED_0 register file
+
+- Absolute Address: 0x1040
+- Base Offset: 0x40
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1040
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x1044
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_1 register file
+
+- Absolute Address: 0x1048
+- Base Offset: 0x48
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1048
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x104C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_2 register file
+
+- Absolute Address: 0x1050
+- Base Offset: 0x50
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1050
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x1054
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_3 register file
+
+- Absolute Address: 0x1058
+- Base Offset: 0x58
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1058
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x105C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_4 register file
+
+- Absolute Address: 0x1060
+- Base Offset: 0x60
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1060
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x1064
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_5 register file
+
+- Absolute Address: 0x1068
+- Base Offset: 0x68
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1068
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x106C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_6 register file
+
+- Absolute Address: 0x1070
+- Base Offset: 0x70
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1070
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x1074
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## RULE_FIRED_7 register file
+
+- Absolute Address: 0x1078
+- Base Offset: 0x78
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x1078
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x107C
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
+
+## TX register file
+
+- Absolute Address: 0x2000
+- Base Offset: 0x2000
+- Size: 0x98
+
+<p>order_tx_builder configuration, the UserRefNum counter and the host order mailbox. TX_OUCH and TX_TEMPLATE_* are a shadow that TX_COMMIT sends in one piece; TX_COMMIT and TX_USERREF_NEXT are commands in bus order with the RISK and STRATEGY commands (see RISK). MBOX_* fields are a shadow that MBOX_SEND copies into a 16-entry FIFO to the net clock domain (posted).</p>
+
+|Offset|    Identifier   |            Name           |
+|------|-----------------|---------------------------|
+| 0x00 |     TX_CTRL     |      Transmit control     |
+| 0x04 |     TX_OUCH     |       OUCH constants      |
+| 0x08 |    TX_COMMIT    |      Transmit commit      |
+| 0x0C |    TX_STATUS    |      Transmit status      |
+| 0x10 | TX_USERREF_NEXT |  Set the next UserRefNum  |
+| 0x14 |    TX_USERREF   |      Next UserRefNum      |
+| 0x20 |  TX_TEMPLATE[0] |       Frame template      |
+| 0x24 |  TX_TEMPLATE[1] |       Frame template      |
+| 0x28 |  TX_TEMPLATE[2] |       Frame template      |
+| 0x2C |  TX_TEMPLATE[3] |       Frame template      |
+| 0x30 |  TX_TEMPLATE[4] |       Frame template      |
+| 0x34 |  TX_TEMPLATE[5] |       Frame template      |
+| 0x38 |  TX_TEMPLATE[6] |       Frame template      |
+| 0x3C |  TX_TEMPLATE[7] |       Frame template      |
+| 0x40 |  TX_TEMPLATE[8] |       Frame template      |
+| 0x44 |  TX_TEMPLATE[9] |       Frame template      |
+| 0x48 | TX_TEMPLATE_TAIL| Frame template, last bytes|
+| 0x50 |    MBOX_SIDE    |        Mailbox side       |
+| 0x54 |     MBOX_QTY    |      Mailbox quantity     |
+| 0x58 |    MBOX_PRICE   |       Mailbox price       |
+| 0x5C |   MBOX_LOCATE   |       Mailbox locate      |
+| 0x60 |   MBOX_STOCK_0  | Mailbox stock, bytes 0..3 |
+| 0x64 |   MBOX_STOCK_1  | Mailbox stock, bytes 4..7 |
+| 0x68 |     MBOX_TIF    |   Mailbox time in force   |
+| 0x70 | MBOX_CLORDID[0] |      Mailbox ClOrdID      |
+| 0x74 | MBOX_CLORDID[1] |      Mailbox ClOrdID      |
+| 0x78 | MBOX_CLORDID[2] |      Mailbox ClOrdID      |
+| 0x7C |MBOX_CLORDID_TAIL|Mailbox ClOrdID, last bytes|
+| 0x80 |    MBOX_SEND    |        Mailbox send       |
+| 0x84 |    MBOX_SPACE   |       Mailbox space       |
+| 0x88 |   MBOX_STATUS   |       Mailbox status      |
+| 0x90 |    MBOX_DROP    |    64-bit live counter    |
+
+### TX_CTRL register
+
+- Absolute Address: 0x2000
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |   tx_en  |  rw  | 0x0 |  — |
+
+#### tx_en field
+
+<p>Order transmit enabled, 0 after reset. Not a shadow: it reaches the net clock domain through a synchronizer. In effect only after an accepted TX_COMMIT. While 0 every order is rejected (TX_OFF); its fall cancels the TX queue.</p>
+
+### TX_OUCH register
+
+- Absolute Address: 0x2004
+- Base Offset: 0x4
+- Size: 0x4
+
+| Bits|Identifier|Access|Reset|Name|
+|-----|----------|------|-----|----|
+| 7:0 |  display |  rw  | 0x0 |  — |
+| 15:8| capacity |  rw  | 0x0 |  — |
+|23:16|    ise   |  rw  | 0x0 |  — |
+|31:24|cross_type|  rw  | 0x0 |  — |
+
+#### display field
+
+<p>Display: Y, N or A.</p>
+
+#### capacity field
+
+<p>Capacity: A, P, R or O.</p>
+
+#### ise field
+
+<p>Intermarket Sweep Eligibility: N only.</p>
+
+#### cross_type field
+
+<p>CrossType: N only.</p>
+
+### TX_COMMIT register
+
+- Absolute Address: 0x2008
+- Base Offset: 0x8
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  commit  |   w  |  —  |  — |
+
+#### commit field
+
+<p>Write 1: command that sends TX_OUCH and TX_TEMPLATE_* to order_tx_builder; the write response comes once it is decided. Accepted only while the order path is closed (RISK_CTRL.kill = 1 or TX_CTRL.tx_en = 0) and the values are valid (OUCH constants as above; template: EtherType 0x0800, 0x45, total length 78, flags/fragment 0x4000, protocol 17, a correct IPv4 header checksum, UDP length 58, UDP checksum 0); else refused and the previous configuration stays. TX_STATUS shows the outcome. A write with 0 does nothing.</p>
+
+### TX_STATUS register
+
+- Absolute Address: 0x200C
+- Base Offset: 0xC
+- Size: 0x4
+
+|Bits|   Identifier  |Access|Reset|Name|
+|----|---------------|------|-----|----|
+|  0 |   cfg_valid   |   r  |  —  |  — |
+|  1 |  cfg_refused  |   r  |  —  |  — |
+|  2 |userref_ignored|   r  |  —  |  — |
+
+#### cfg_valid field
+
+<p>A TX_COMMIT has been accepted since reset (needed for transmit).</p>
+
+#### cfg_refused field
+
+<p>The last TX_COMMIT was refused. Cleared by an accepted one; 0 after reset.</p>
+
+#### userref_ignored field
+
+<p>The last TX_USERREF_NEXT write was ignored (kill not 1, orders still queued, or 0). Cleared by one that takes effect; 0 after reset.</p>
+
+### TX_USERREF_NEXT register
+
+- Absolute Address: 0x2010
+- Base Offset: 0x10
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   w  |  —  |  — |
+
+#### value field
+
+<p>Command: sets the UserRefNum the next order takes; the write response comes once it is decided. It takes effect only while RISK_CTRL.kill = 1, no order is queued and the value is not 0, else TX_STATUS.userref_ignored. Software writes it before releasing kill (software contract after reset).</p>
+
+### TX_USERREF register
+
+- Absolute Address: 0x2014
+- Base Offset: 0x14
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>The UserRefNum the next order takes, live (read through the command channel, in bus order); 1 after reset, 0 once none is left (2^32).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2020
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2024
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2028
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x202C
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2030
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2034
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2038
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x203C
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2040
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE register
+
+- Absolute Address: 0x2044
+- Base Offset: 0x20
+- Size: 0x4
+- Array Dimensions: [10]
+- Array Stride: 0x4
+- Total Size: 0x28
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).</p>
+
+### TX_TEMPLATE_TAIL register
+
+- Absolute Address: 0x2048
+- Base Offset: 0x48
+- Size: 0x4
+
+| Bits|Identifier|Access|Reset|Name|
+|-----|----------|------|-----|----|
+|31:16|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Template bytes 40 and 41, byte 40 in [31:24].</p>
+
+### MBOX_SIDE register
+
+- Absolute Address: 0x2050
+- Base Offset: 0x50
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|   side   |  rw  | 0x0 |  — |
+
+#### side field
+
+<p>OUCH Side: B or S (any other is rejected INVALID).</p>
+
+### MBOX_QTY register
+
+- Absolute Address: 0x2054
+- Base Offset: 0x54
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|    qty   |  rw  | 0x0 |  — |
+
+#### qty field
+
+<p>Order quantity.</p>
+
+### MBOX_PRICE register
+
+- Absolute Address: 0x2058
+- Base Offset: 0x58
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   price  |  rw  | 0x0 |  — |
+
+#### price field
+
+<p>Limit price, ITCH Price(4).</p>
+
+### MBOX_LOCATE register
+
+- Absolute Address: 0x205C
+- Base Offset: 0x5C
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|15:0|  locate  |  rw  | 0x0 |  — |
+
+#### locate field
+
+<p>Stock locate (for LOCATE_ALLOW and the ring entry; matching it with MBOX_STOCK_* is the host's rule).</p>
+
+### MBOX_STOCK_0 register
+
+- Absolute Address: 0x2060
+- Base Offset: 0x60
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Symbol bytes 0..3 in wire order, byte 0 in [31:24] (space padded, as ITCH Stock).</p>
+
+### MBOX_STOCK_1 register
+
+- Absolute Address: 0x2064
+- Base Offset: 0x64
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>Symbol bytes 4..7, byte 4 in [31:24].</p>
+
+### MBOX_TIF register
+
+- Absolute Address: 0x2068
+- Base Offset: 0x68
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 7:0|    tif   |  rw  | 0x0 |  — |
+
+#### tif field
+
+<p>OUCH Time In Force code.</p>
+
+### MBOX_CLORDID register
+
+- Absolute Address: 0x2070
+- Base Offset: 0x70
+- Size: 0x4
+- Array Dimensions: [3]
+- Array Stride: 0x4
+- Total Size: 0xC
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>ClOrdID bytes 4i .. 4i+3, byte 4i in [31:24]; every byte in [0-9A-Za-z ] (else INVALID).</p>
+
+### MBOX_CLORDID register
+
+- Absolute Address: 0x2074
+- Base Offset: 0x70
+- Size: 0x4
+- Array Dimensions: [3]
+- Array Stride: 0x4
+- Total Size: 0xC
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>ClOrdID bytes 4i .. 4i+3, byte 4i in [31:24]; every byte in [0-9A-Za-z ] (else INVALID).</p>
+
+### MBOX_CLORDID register
+
+- Absolute Address: 0x2078
+- Base Offset: 0x70
+- Size: 0x4
+- Array Dimensions: [3]
+- Array Stride: 0x4
+- Total Size: 0xC
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>ClOrdID bytes 4i .. 4i+3, byte 4i in [31:24]; every byte in [0-9A-Za-z ] (else INVALID).</p>
+
+### MBOX_CLORDID_TAIL register
+
+- Absolute Address: 0x207C
+- Base Offset: 0x7C
+- Size: 0x4
+
+| Bits|Identifier|Access|Reset|Name|
+|-----|----------|------|-----|----|
+|31:16|   bytes  |  rw  | 0x0 |  — |
+
+#### bytes field
+
+<p>ClOrdID bytes 12 and 13, byte 12 in [31:24].</p>
+
+### MBOX_SEND register
+
+- Absolute Address: 0x2080
+- Base Offset: 0x80
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |   send   |   w  | 0x0 |  — |
+
+#### send field
+
+<p>Write 1: copy MBOX_SIDE .. MBOX_CLORDID_TAIL into the mailbox FIFO (posted). With the FIFO full it is dropped: MBOX_STATUS.dropped and MBOX_DROP. Each such write sends once, also two in consecutive bus cycles.</p>
+
+### MBOX_SPACE register
+
+- Absolute Address: 0x2084
+- Base Offset: 0x84
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+| 4:0|   space  |   r  |  —  |  — |
+
+#### space field
+
+<p>Free FIFO entries, live (0 during reset): this many MBOX_SEND writes from now on all fit.</p>
+
+### MBOX_STATUS register
+
+- Absolute Address: 0x2088
+- Base Offset: 0x88
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |  dropped |   r  |  —  |  — |
+
+#### dropped field
+
+<p>The last MBOX_SEND was dropped. Cleared by one that fits; 0 after reset.</p>
+
+## MBOX_DROP register file
+
+- Absolute Address: 0x2090
+- Base Offset: 0x90
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x2090
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0], live. To read the pair: read HI, LO, HI again, and repeat if the two HI differ.</p>
+
+### HI register
+
+- Absolute Address: 0x2094
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32], live.</p>
+
 ## SYMBOL memory
 
 - Absolute Address: 0x8000
@@ -2621,6 +4447,17 @@ Don't override. Generated from: hft_csr
 - Size: 0x2000
 
 <p>Stock-locate subscription bitmap of itch_decoder: bit i of word w is stock locate 32 * w + i (1 = subscribed). Written only by software; the hardware never writes it. After a reset the hardware clears every word (2048 net clock cycles, about 13 us); an access in that time waits until the clearing is done, so the bitmap reads 0 after reset. A write's response (BRESP) comes once it is in effect: every message looked up after it sees the new value. Software keeps its own copy and rewrites all 2048 words after every reset (see the software contract after reset).</p>
+
+No supported members.
+
+
+## LOCATE_ALLOW memory
+
+- Absolute Address: 0xA000
+- Base Offset: 0xA000
+- Size: 0x2000
+
+<p>risk_check's allow bitmap: bit i of word w is stock locate 32 * w + i (1 = orders allowed; 0 = rejected LOCATE). Written only by software. After a reset the hardware clears every word (2048 net clock cycles); an access in that time waits until the clearing is done. An access is in bus order with the RISK, STRATEGY and TX commands, and a write's response comes once it is in effect: every order decided after it sees the new value. Software keeps its own copy and rewrites it after every reset (software contract after reset).</p>
 
 No supported members.
 

@@ -5,7 +5,7 @@ package hft_csr_pkg;
 
     localparam HFT_CSR_DATA_WIDTH = 32;
     localparam HFT_CSR_MIN_ADDR_WIDTH = 16;
-    localparam HFT_CSR_SIZE = 'ha000;
+    localparam HFT_CSR_SIZE = 'hc000;
 
     typedef struct {
         logic next;
@@ -161,6 +161,14 @@ package hft_csr_pkg;
     } hft_csr__counter64_live__in_t;
 
     typedef struct {
+        logic [4:0] next;
+    } hft_csr__RING__RING_ORDER_QUEUED__queued__in_t;
+
+    typedef struct {
+        hft_csr__RING__RING_ORDER_QUEUED__queued__in_t queued;
+    } hft_csr__RING__RING_ORDER_QUEUED__in_t;
+
+    typedef struct {
         hft_csr__RING__PROD_IDX__in_t PROD_IDX;
         hft_csr__RING__RING_STATUS__in_t RING_STATUS;
         hft_csr__counter64_live__in_t RING_WRITTEN;
@@ -168,7 +176,148 @@ package hft_csr_pkg;
         hft_csr__counter64__in_t RING_COMMIT_ENTRIES;
         hft_csr__counter64__in_t RING_DROP_PKTS;
         hft_csr__counter64__in_t RING_DROP_ENTRIES;
+        hft_csr__counter64__in_t RING_DROP_ORDERS;
+        hft_csr__RING__RING_ORDER_QUEUED__in_t RING_ORDER_QUEUED;
     } hft_csr__RING__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__RISK__RISK_COMMIT__external__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__RISK__BUDGET_ADD__external__in_t;
+
+    typedef struct {
+        logic [31:0] next;
+    } hft_csr__RISK__BUDGET__budget__in_t;
+
+    typedef struct {
+        hft_csr__RISK__BUDGET__budget__in_t budget;
+    } hft_csr__RISK__BUDGET__in_t;
+
+    typedef struct {
+        hft_csr__RISK__RISK_COMMIT__external__in_t RISK_COMMIT;
+        hft_csr__RISK__BUDGET_ADD__external__in_t BUDGET_ADD;
+        hft_csr__RISK__BUDGET__in_t BUDGET;
+        hft_csr__counter64__in_t ORDERS_SENT_HW;
+        hft_csr__counter64__in_t ORDERS_SENT_HOST;
+        hft_csr__counter64__in_t RISK_REJECT_KILL;
+        hft_csr__counter64__in_t RISK_REJECT_TX_OFF;
+        hft_csr__counter64__in_t RISK_REJECT_INVALID;
+        hft_csr__counter64__in_t RISK_REJECT_LOCATE;
+        hft_csr__counter64__in_t RISK_REJECT_QTY;
+        hft_csr__counter64__in_t RISK_REJECT_NOTIONAL;
+        hft_csr__counter64__in_t RISK_REJECT_BUDGET;
+        hft_csr__counter64__in_t RISK_REJECT_RATE;
+        hft_csr__counter64__in_t RISK_REJECT_TX_BUSY;
+        hft_csr__counter64__in_t RISK_REJECT_RING_FULL;
+    } hft_csr__RISK__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__STRATEGY__RULE_COMMIT__external__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__STRATEGY__RULE_ARM__external__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__STRATEGY__RULE_DISARM__external__in_t;
+
+    typedef struct {
+        logic [7:0] next;
+    } hft_csr__STRATEGY__RULE_STATUS__error__in_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_STATUS__error__in_t error;
+    } hft_csr__STRATEGY__RULE_STATUS__in_t;
+
+    typedef struct {
+        logic [7:0] next;
+    } hft_csr__STRATEGY__RULE_ARMED__armed__in_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_ARMED__armed__in_t armed;
+    } hft_csr__STRATEGY__RULE_ARMED__in_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_COMMIT__external__in_t RULE_COMMIT;
+        hft_csr__STRATEGY__RULE_ARM__external__in_t RULE_ARM;
+        hft_csr__STRATEGY__RULE_DISARM__external__in_t RULE_DISARM;
+        hft_csr__STRATEGY__RULE_STATUS__in_t RULE_STATUS;
+        hft_csr__STRATEGY__RULE_ARMED__in_t RULE_ARMED;
+        hft_csr__counter64__in_t RULE_FIRED_0;
+        hft_csr__counter64__in_t RULE_FIRED_1;
+        hft_csr__counter64__in_t RULE_FIRED_2;
+        hft_csr__counter64__in_t RULE_FIRED_3;
+        hft_csr__counter64__in_t RULE_FIRED_4;
+        hft_csr__counter64__in_t RULE_FIRED_5;
+        hft_csr__counter64__in_t RULE_FIRED_6;
+        hft_csr__counter64__in_t RULE_FIRED_7;
+    } hft_csr__STRATEGY__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__TX__TX_COMMIT__external__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__TX__TX_STATUS__cfg_valid__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__TX__TX_STATUS__cfg_refused__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__TX__TX_STATUS__userref_ignored__in_t;
+
+    typedef struct {
+        hft_csr__TX__TX_STATUS__cfg_valid__in_t cfg_valid;
+        hft_csr__TX__TX_STATUS__cfg_refused__in_t cfg_refused;
+        hft_csr__TX__TX_STATUS__userref_ignored__in_t userref_ignored;
+    } hft_csr__TX__TX_STATUS__in_t;
+
+    typedef struct {
+        logic wr_ack;
+    } hft_csr__TX__TX_USERREF_NEXT__external__in_t;
+
+    typedef struct packed {
+        logic [31:0] value;
+    } hft_csr__TX__TX_USERREF__external__fields__in_t;
+
+    typedef struct {
+        logic rd_ack;
+        hft_csr__TX__TX_USERREF__external__fields__in_t rd_data;
+    } hft_csr__TX__TX_USERREF__external__in_t;
+
+    typedef struct {
+        logic [4:0] next;
+    } hft_csr__TX__MBOX_SPACE__space__in_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_SPACE__space__in_t space;
+    } hft_csr__TX__MBOX_SPACE__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__TX__MBOX_STATUS__dropped__in_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_STATUS__dropped__in_t dropped;
+    } hft_csr__TX__MBOX_STATUS__in_t;
+
+    typedef struct {
+        hft_csr__TX__TX_COMMIT__external__in_t TX_COMMIT;
+        hft_csr__TX__TX_STATUS__in_t TX_STATUS;
+        hft_csr__TX__TX_USERREF_NEXT__external__in_t TX_USERREF_NEXT;
+        hft_csr__TX__TX_USERREF__external__in_t TX_USERREF;
+        hft_csr__TX__MBOX_SPACE__in_t MBOX_SPACE;
+        hft_csr__TX__MBOX_STATUS__in_t MBOX_STATUS;
+        hft_csr__counter64_live__in_t MBOX_DROP;
+    } hft_csr__TX__in_t;
 
     typedef struct {
         logic rd_ack;
@@ -177,12 +326,22 @@ package hft_csr_pkg;
     } hft_csr__SYMBOL__external__in_t;
 
     typedef struct {
+        logic rd_ack;
+        logic [31:0] rd_data;
+        logic wr_ack;
+    } hft_csr__LOCATE_ALLOW__external__in_t;
+
+    typedef struct {
         hft_csr__NET__in_t NET;
         hft_csr__FEED__in_t FEED;
         hft_csr__STATS__in_t STATS;
         hft_csr__ITCH__in_t ITCH;
         hft_csr__RING__in_t RING;
+        hft_csr__RISK__in_t RISK;
+        hft_csr__STRATEGY__in_t STRATEGY;
+        hft_csr__TX__in_t TX;
         hft_csr__SYMBOL__external__in_t SYMBOL;
+        hft_csr__LOCATE_ALLOW__external__in_t LOCATE_ALLOW;
     } hft_csr__in_t;
 
     typedef struct {
@@ -421,6 +580,413 @@ package hft_csr_pkg;
     } hft_csr__RING__out_t;
 
     typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__MAX_QTY__max_qty__out_t;
+
+    typedef struct {
+        hft_csr__RISK__MAX_QTY__max_qty__out_t max_qty;
+    } hft_csr__RISK__MAX_QTY__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__MAX_NOTIONAL_LO__value__out_t;
+
+    typedef struct {
+        hft_csr__RISK__MAX_NOTIONAL_LO__value__out_t value;
+    } hft_csr__RISK__MAX_NOTIONAL_LO__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__MAX_NOTIONAL_HI__value__out_t;
+
+    typedef struct {
+        hft_csr__RISK__MAX_NOTIONAL_HI__value__out_t value;
+    } hft_csr__RISK__MAX_NOTIONAL_HI__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__RATE_REFILL__refill__out_t;
+
+    typedef struct {
+        hft_csr__RISK__RATE_REFILL__refill__out_t refill;
+    } hft_csr__RISK__RATE_REFILL__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__RATE_PERIOD__period__out_t;
+
+    typedef struct {
+        hft_csr__RISK__RATE_PERIOD__period__out_t period;
+    } hft_csr__RISK__RATE_PERIOD__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__RISK__RATE_BURST__burst__out_t;
+
+    typedef struct {
+        hft_csr__RISK__RATE_BURST__burst__out_t burst;
+    } hft_csr__RISK__RATE_BURST__out_t;
+
+    typedef struct packed {
+        logic [30:0] _reserved_31_1;
+        logic commit;
+    } hft_csr__RISK__RISK_COMMIT__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__RISK__RISK_COMMIT__external__fields__out_t wr_data;
+        hft_csr__RISK__RISK_COMMIT__external__fields__out_t wr_biten;
+    } hft_csr__RISK__RISK_COMMIT__external__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__RISK__RISK_CTRL__kill__out_t;
+
+    typedef struct {
+        hft_csr__RISK__RISK_CTRL__kill__out_t kill;
+    } hft_csr__RISK__RISK_CTRL__out_t;
+
+    typedef struct packed {
+        logic [31:0] amount;
+    } hft_csr__RISK__BUDGET_ADD__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__RISK__BUDGET_ADD__external__fields__out_t wr_data;
+        hft_csr__RISK__BUDGET_ADD__external__fields__out_t wr_biten;
+    } hft_csr__RISK__BUDGET_ADD__external__out_t;
+
+    typedef struct {
+        hft_csr__RISK__MAX_QTY__out_t MAX_QTY;
+        hft_csr__RISK__MAX_NOTIONAL_LO__out_t MAX_NOTIONAL_LO;
+        hft_csr__RISK__MAX_NOTIONAL_HI__out_t MAX_NOTIONAL_HI;
+        hft_csr__RISK__RATE_REFILL__out_t RATE_REFILL;
+        hft_csr__RISK__RATE_PERIOD__out_t RATE_PERIOD;
+        hft_csr__RISK__RATE_BURST__out_t RATE_BURST;
+        hft_csr__RISK__RISK_COMMIT__external__out_t RISK_COMMIT;
+        hft_csr__RISK__RISK_CTRL__out_t RISK_CTRL;
+        hft_csr__RISK__BUDGET_ADD__external__out_t BUDGET_ADD;
+    } hft_csr__RISK__out_t;
+
+    typedef struct {
+        logic [2:0] value;
+    } hft_csr__STRATEGY__RULE_SEL__idx__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_SEL__idx__out_t idx;
+    } hft_csr__STRATEGY__RULE_SEL__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__STRATEGY__RULE_CTRL__enable__out_t;
+
+    typedef struct {
+        logic [2:0] value;
+    } hft_csr__STRATEGY__RULE_CTRL__msg_mask__out_t;
+
+    typedef struct {
+        logic [1:0] value;
+    } hft_csr__STRATEGY__RULE_CTRL__side_match__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__STRATEGY__RULE_CTRL__price_ge__out_t;
+
+    typedef struct {
+        logic [1:0] value;
+    } hft_csr__STRATEGY__RULE_CTRL__action_side__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__STRATEGY__RULE_CTRL__qty_min__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__STRATEGY__RULE_CTRL__price_threshold_mode__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__STRATEGY__RULE_CTRL__tif__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_CTRL__enable__out_t enable;
+        hft_csr__STRATEGY__RULE_CTRL__msg_mask__out_t msg_mask;
+        hft_csr__STRATEGY__RULE_CTRL__side_match__out_t side_match;
+        hft_csr__STRATEGY__RULE_CTRL__price_ge__out_t price_ge;
+        hft_csr__STRATEGY__RULE_CTRL__action_side__out_t action_side;
+        hft_csr__STRATEGY__RULE_CTRL__qty_min__out_t qty_min;
+        hft_csr__STRATEGY__RULE_CTRL__price_threshold_mode__out_t price_threshold_mode;
+        hft_csr__STRATEGY__RULE_CTRL__tif__out_t tif;
+    } hft_csr__STRATEGY__RULE_CTRL__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__STRATEGY__RULE_LOCATE__locate__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_LOCATE__locate__out_t locate;
+    } hft_csr__STRATEGY__RULE_LOCATE__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__STRATEGY__RULE_THRESHOLD__threshold__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_THRESHOLD__threshold__out_t threshold;
+    } hft_csr__STRATEGY__RULE_THRESHOLD__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__STRATEGY__RULE_MIN_SHARES__min_shares__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_MIN_SHARES__min_shares__out_t min_shares;
+    } hft_csr__STRATEGY__RULE_MIN_SHARES__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__STRATEGY__RULE_QTY__qty__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_QTY__qty__out_t qty;
+    } hft_csr__STRATEGY__RULE_QTY__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__STRATEGY__RULE_OFFSET__offset__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_OFFSET__offset__out_t offset;
+    } hft_csr__STRATEGY__RULE_OFFSET__out_t;
+
+    typedef struct packed {
+        logic [30:0] _reserved_31_1;
+        logic commit;
+    } hft_csr__STRATEGY__RULE_COMMIT__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__STRATEGY__RULE_COMMIT__external__fields__out_t wr_data;
+        hft_csr__STRATEGY__RULE_COMMIT__external__fields__out_t wr_biten;
+    } hft_csr__STRATEGY__RULE_COMMIT__external__out_t;
+
+    typedef struct packed {
+        logic [23:0] _reserved_31_8;
+        logic [7:0] mask;
+    } hft_csr__STRATEGY__RULE_ARM__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__STRATEGY__RULE_ARM__external__fields__out_t wr_data;
+        hft_csr__STRATEGY__RULE_ARM__external__fields__out_t wr_biten;
+    } hft_csr__STRATEGY__RULE_ARM__external__out_t;
+
+    typedef struct packed {
+        logic [23:0] _reserved_31_8;
+        logic [7:0] mask;
+    } hft_csr__STRATEGY__RULE_DISARM__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__STRATEGY__RULE_DISARM__external__fields__out_t wr_data;
+        hft_csr__STRATEGY__RULE_DISARM__external__fields__out_t wr_biten;
+    } hft_csr__STRATEGY__RULE_DISARM__external__out_t;
+
+    typedef struct {
+        hft_csr__STRATEGY__RULE_SEL__out_t RULE_SEL;
+        hft_csr__STRATEGY__RULE_CTRL__out_t RULE_CTRL;
+        hft_csr__STRATEGY__RULE_LOCATE__out_t RULE_LOCATE;
+        hft_csr__STRATEGY__RULE_THRESHOLD__out_t RULE_THRESHOLD;
+        hft_csr__STRATEGY__RULE_MIN_SHARES__out_t RULE_MIN_SHARES;
+        hft_csr__STRATEGY__RULE_QTY__out_t RULE_QTY;
+        hft_csr__STRATEGY__RULE_OFFSET__out_t RULE_OFFSET;
+        hft_csr__STRATEGY__RULE_COMMIT__external__out_t RULE_COMMIT;
+        hft_csr__STRATEGY__RULE_ARM__external__out_t RULE_ARM;
+        hft_csr__STRATEGY__RULE_DISARM__external__out_t RULE_DISARM;
+    } hft_csr__STRATEGY__out_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__TX__TX_CTRL__tx_en__out_t;
+
+    typedef struct {
+        hft_csr__TX__TX_CTRL__tx_en__out_t tx_en;
+    } hft_csr__TX__TX_CTRL__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__TX_OUCH__display__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__TX_OUCH__capacity__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__TX_OUCH__ise__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__TX_OUCH__cross_type__out_t;
+
+    typedef struct {
+        hft_csr__TX__TX_OUCH__display__out_t display;
+        hft_csr__TX__TX_OUCH__capacity__out_t capacity;
+        hft_csr__TX__TX_OUCH__ise__out_t ise;
+        hft_csr__TX__TX_OUCH__cross_type__out_t cross_type;
+    } hft_csr__TX__TX_OUCH__out_t;
+
+    typedef struct packed {
+        logic [30:0] _reserved_31_1;
+        logic commit;
+    } hft_csr__TX__TX_COMMIT__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__TX__TX_COMMIT__external__fields__out_t wr_data;
+        hft_csr__TX__TX_COMMIT__external__fields__out_t wr_biten;
+    } hft_csr__TX__TX_COMMIT__external__out_t;
+
+    typedef struct packed {
+        logic [31:0] value;
+    } hft_csr__TX__TX_USERREF_NEXT__external__fields__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+        hft_csr__TX__TX_USERREF_NEXT__external__fields__out_t wr_data;
+        hft_csr__TX__TX_USERREF_NEXT__external__fields__out_t wr_biten;
+    } hft_csr__TX__TX_USERREF_NEXT__external__out_t;
+
+    typedef struct {
+        logic req;
+        logic req_is_wr;
+    } hft_csr__TX__TX_USERREF__external__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__TX_TEMPLATE__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__TX_TEMPLATE__bytes__out_t bytes;
+    } hft_csr__TX__TX_TEMPLATE__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__TX__TX_TEMPLATE_TAIL__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__TX_TEMPLATE_TAIL__bytes__out_t bytes;
+    } hft_csr__TX__TX_TEMPLATE_TAIL__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__MBOX_SIDE__side__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_SIDE__side__out_t side;
+    } hft_csr__TX__MBOX_SIDE__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__MBOX_QTY__qty__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_QTY__qty__out_t qty;
+    } hft_csr__TX__MBOX_QTY__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__MBOX_PRICE__price__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_PRICE__price__out_t price;
+    } hft_csr__TX__MBOX_PRICE__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__TX__MBOX_LOCATE__locate__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_LOCATE__locate__out_t locate;
+    } hft_csr__TX__MBOX_LOCATE__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__MBOX_STOCK_0__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_STOCK_0__bytes__out_t bytes;
+    } hft_csr__TX__MBOX_STOCK_0__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__MBOX_STOCK_1__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_STOCK_1__bytes__out_t bytes;
+    } hft_csr__TX__MBOX_STOCK_1__out_t;
+
+    typedef struct {
+        logic [7:0] value;
+    } hft_csr__TX__MBOX_TIF__tif__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_TIF__tif__out_t tif;
+    } hft_csr__TX__MBOX_TIF__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__TX__MBOX_CLORDID__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_CLORDID__bytes__out_t bytes;
+    } hft_csr__TX__MBOX_CLORDID__out_t;
+
+    typedef struct {
+        logic [15:0] value;
+    } hft_csr__TX__MBOX_CLORDID_TAIL__bytes__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_CLORDID_TAIL__bytes__out_t bytes;
+    } hft_csr__TX__MBOX_CLORDID_TAIL__out_t;
+
+    typedef struct {
+        logic value;
+        logic swmod;
+    } hft_csr__TX__MBOX_SEND__send__out_t;
+
+    typedef struct {
+        hft_csr__TX__MBOX_SEND__send__out_t send;
+    } hft_csr__TX__MBOX_SEND__out_t;
+
+    typedef struct {
+        hft_csr__TX__TX_CTRL__out_t TX_CTRL;
+        hft_csr__TX__TX_OUCH__out_t TX_OUCH;
+        hft_csr__TX__TX_COMMIT__external__out_t TX_COMMIT;
+        hft_csr__TX__TX_USERREF_NEXT__external__out_t TX_USERREF_NEXT;
+        hft_csr__TX__TX_USERREF__external__out_t TX_USERREF;
+        hft_csr__TX__TX_TEMPLATE__out_t TX_TEMPLATE[10];
+        hft_csr__TX__TX_TEMPLATE_TAIL__out_t TX_TEMPLATE_TAIL;
+        hft_csr__TX__MBOX_SIDE__out_t MBOX_SIDE;
+        hft_csr__TX__MBOX_QTY__out_t MBOX_QTY;
+        hft_csr__TX__MBOX_PRICE__out_t MBOX_PRICE;
+        hft_csr__TX__MBOX_LOCATE__out_t MBOX_LOCATE;
+        hft_csr__TX__MBOX_STOCK_0__out_t MBOX_STOCK_0;
+        hft_csr__TX__MBOX_STOCK_1__out_t MBOX_STOCK_1;
+        hft_csr__TX__MBOX_TIF__out_t MBOX_TIF;
+        hft_csr__TX__MBOX_CLORDID__out_t MBOX_CLORDID[3];
+        hft_csr__TX__MBOX_CLORDID_TAIL__out_t MBOX_CLORDID_TAIL;
+        hft_csr__TX__MBOX_SEND__out_t MBOX_SEND;
+    } hft_csr__TX__out_t;
+
+    typedef struct {
         logic req;
         logic [12:0] addr;
         logic req_is_wr;
@@ -429,11 +995,23 @@ package hft_csr_pkg;
     } hft_csr__SYMBOL__external__out_t;
 
     typedef struct {
+        logic req;
+        logic [12:0] addr;
+        logic req_is_wr;
+        logic [31:0] wr_data;
+        logic [31:0] wr_biten;
+    } hft_csr__LOCATE_ALLOW__external__out_t;
+
+    typedef struct {
         hft_csr__NET__out_t NET;
         hft_csr__FEED__out_t FEED;
         hft_csr__STATS__out_t STATS;
         hft_csr__ITCH__out_t ITCH;
         hft_csr__RING__out_t RING;
+        hft_csr__RISK__out_t RISK;
+        hft_csr__STRATEGY__out_t STRATEGY;
+        hft_csr__TX__out_t TX;
         hft_csr__SYMBOL__external__out_t SYMBOL;
+        hft_csr__LOCATE_ALLOW__external__out_t LOCATE_ALLOW;
     } hft_csr__out_t;
 endpackage

@@ -23,16 +23,17 @@ module tb_cdc_fifo_equiv;
   logic [W-1:0] din = '0;
   logic [W-1:0] dout;
   logic full, overflow, wr_rst_busy, empty, underflow, rd_rst_busy;
+  logic [DEPTH_LOG2:0] wr_count_unused;  // WR_COUNT=0 (XPM has none): tested in test_cdc_async_fifo
 
-  logic                run_wr = 1'b0;
-  logic                run_rd = 1'b0;
-  int unsigned         seed = 1;
-  int unsigned         rng = 1;
-  int unsigned         sent = 0;
-  int unsigned         got = 0;
-  int unsigned         errors = 0;
-  int unsigned         rd_pct = 6;  // reader enable probability, in tenths
-  logic        [W-1:0] expq                                                [$];
+  logic run_wr = 1'b0;
+  logic run_rd = 1'b0;
+  int unsigned seed = 1;
+  int unsigned rng = 1;
+  int unsigned sent = 0;
+  int unsigned got = 0;
+  int unsigned errors = 0;
+  int unsigned rd_pct = 6;  // reader enable probability, in tenths
+  logic [W-1:0] expq[$];
 
   // 156.25 MHz write clock, 250 MHz read clock (net -> host direction)
   always begin
@@ -56,6 +57,7 @@ module tb_cdc_fifo_equiv;
       .full       (full),
       .overflow   (overflow),
       .wr_rst_busy(wr_rst_busy),
+      .wr_count   (wr_count_unused),
       .rd_clk     (rd_clk),
       .rd_en      (rd_en),
       .dout       (dout),

@@ -797,7 +797,7 @@ async def tc_bring_up(dut):
     committed, so every payload packet reaches moldudp64_rx as MOLD_DISABLED."""
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0003, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0004, OKAY)
     frames = []
     for i in range(5):  # before any commit: receiver off
         frames.append((await sysm.send(udp_frame(bytes(range(20 + i))), gap=2)).frame)
@@ -1483,7 +1483,7 @@ async def tc_ring_bring_up(dut):
     C = ItchClass
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0003, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0004, OKAY)
     host = RingHost(dut, w, sysm, 4)
     await host.enable()
     assert await w.drv.read(RING_BASE_LO) == (RING_BASE & 0xFFFF_FFFF, OKAY)

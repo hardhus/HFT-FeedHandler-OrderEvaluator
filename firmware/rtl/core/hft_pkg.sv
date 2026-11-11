@@ -193,6 +193,15 @@ package hft_pkg;
     logic [7:0]  tif;
   } strat_rule_t;
 
+  // order_stats counters (hft_csr_wrap snapshot; audit/14 §2.8): RULE_FIRED_<n> at n, then ORDERS_SENT_HW,
+  // ORDERS_SENT_HOST, RISK_REJECT_<reason> at ORD_CNT_REJ + reason - 1, RING_DROP_ORDERS.
+  localparam int unsigned ORD_CNT_SENT_HW = STRAT_N_RULES;
+  localparam int unsigned ORD_CNT_SENT_HOST = STRAT_N_RULES + 1;
+  localparam int unsigned ORD_CNT_REJ = STRAT_N_RULES + 2;
+  localparam int unsigned ORD_N_REASONS = int'(RISK_RING_FULL);  // KILL .. RING_FULL
+  localparam int unsigned ORD_CNT_DROP = ORD_CNT_REJ + ORD_N_REASONS;
+  localparam int unsigned ORD_N_CNT = ORD_CNT_DROP + 1;
+
   // Big-endian unsigned integer of n <= 8 bytes at byte offset ofs of a message vector
   // (byte i = v[8i+7:8i]): the first byte is the most significant (K3).
   function automatic logic [63:0] msg_be(input logic [8*MOLD_MAX_MSG-1:0] v, input int unsigned ofs,

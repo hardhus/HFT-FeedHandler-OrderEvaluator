@@ -227,6 +227,7 @@ module event_path_ooc
   end
 
   logic fifo_wr_en, fifo_commit, fifo_rollback, fifo_full, fifo_wr_busy;
+  logic [DEPTH_LOG2:0] fifo_wr_count_unused;  // the descriptor FIFO needs no fill level (WR_COUNT=0)
   logic [DESC_W-1:0] fifo_din, fifo_dout;
   logic fifo_rd_en, fifo_empty, fifo_rd_rst_busy;
 
@@ -318,6 +319,7 @@ module event_path_ooc
       .full       (fifo_full),
       .overflow   (net_overflow),
       .wr_rst_busy(fifo_wr_busy),
+      .wr_count   (fifo_wr_count_unused),
       .rd_clk     (host_clk),
       .rd_en      (fifo_rd_en),
       .dout       (fifo_dout),

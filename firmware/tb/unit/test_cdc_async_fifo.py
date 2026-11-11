@@ -1,6 +1,6 @@
 """cdc_async_fifo (portable): order, no loss/duplication, full/empty boundaries, overflow and
 underflow, latency, reset/busy protocol and gray pointers, across clock ratios and with the
-CDC jitter model."""
+CDC jitter model. Built with WR_COUNT=1: every test also checks the fill level (FillWatch)."""
 
 import os
 import random
@@ -45,6 +45,57 @@ class Pulses:
                 setattr(self, name, getattr(self, name) + 1)
 
 
+class FillWatch:
+    """wr_count against the true fill level, on every write edge: never below it (the write side sees
+    the read pointer late, so it may only be above), full == (wr_count == depth) and wr_count == depth
+    while busy. The true level counts the words taken (wr_fire) and popped (rd_fire) at each edge,
+    sampled after the falling edge where the tests drive the enables; a reset empties the FIFO, so both
+    counts restart while busy."""
+
+    def __init__(self, dut) -> None:
+        self.dut = dut
+        self.writes = 0
+        self.pops = 0
+        self.checked = 0
+        cocotb.start_soon(self._wr())
+        cocotb.start_soon(self._rd())
+
+    def busy(self) -> bool:
+        return bool(self.dut.wr_rst_busy.value or self.dut.rd_rst_busy.value or self.dut.rst.value)
+
+    async def _rd(self) -> None:
+        while True:
+            await FallingEdge(self.dut.rd_clk)
+            await ReadOnly()
+            fire = bool(self.dut.g_portable.rd_fire.value)
+            await RisingEdge(self.dut.rd_clk)
+            self.pops += fire
+
+    async def _wr(self) -> None:
+        dut = self.dut
+        while True:
+            await FallingEdge(dut.wr_clk)
+            await ReadOnly()
+            fire = bool(dut.g_portable.wr_fire.value)
+            await RisingEdge(dut.wr_clk)
+            self.writes += fire
+            await ReadOnly()
+            count = int(dut.wr_count.value)
+            if dut.wr_rst_busy.value:
+                assert count == depth(), f"wr_count {count} while busy, expected {depth()}"
+            if self.busy():
+                self.writes = self.pops = 0
+                continue
+            level = self.writes - self.pops
+            g = dut.g_portable
+            assert count >= level, (
+                f"wr_count {count} below the fill level {level} ({self.writes} taken, {self.pops} popped; "
+                f"wbin {int(g.wbin_q.value)}, rbin {int(g.rbin_q.value)})"
+            )
+            assert bool(dut.full.value) == (count == depth()), f"full {int(dut.full.value)}, wr_count {count}"
+            self.checked += 1
+
+
 async def start(dut) -> Pulses:
     """Inputs and reset first, then the clocks; power-up reset held long enough (see the module
     header); wait for both busy flags."""
@@ -62,6 +113,7 @@ async def start(dut) -> Pulses:
     assert dut.full.value, "full must be 1 during reset (like XPM FULL_RESET_VALUE=1)"
     dut.rst.value = 0
     await wait_not_busy(dut)
+    FillWatch(dut)
     return Pulses(dut)
 
 
@@ -148,12 +200,15 @@ async def tc_fill_drain(dut):
         sb.push(word)
         accepted += 1
     assert accepted == depth(), f"accepted {accepted} words, depth is {depth()}"
+    await ReadOnly()
+    assert int(dut.wr_count.value) == depth(), f"wr_count {int(dut.wr_count.value)} when full"
     await reader(dut, sb, depth())
     sb.check_empty()
     for _ in range(SYNC_STAGES + 4):
         await RisingEdge(dut.wr_clk)
     await ReadOnly()
     assert dut.empty.value and not dut.full.value, "flags after drain"
+    assert int(dut.wr_count.value) == 0, f"wr_count {int(dut.wr_count.value)} after drain"
 
 
 @cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
@@ -311,6 +366,63 @@ async def tc_capacity_after_wrap(dut):
 
 
 @cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_wr_count_bound(dut):
+    """A producer that reads wr_count once and then writes depth - wr_count words without looking at
+    full again (the mailbox's MBOX_SPACE) never loses one, whatever the reader does meanwhile. Each
+    round reads the count at a random moment, then writes on random cycles; the reader's rate changes
+    per round (stopped included), so rounds find the FIFO empty, partly full and full."""
+    pulses = await start(dut)
+    sb = Scoreboard("space")
+    total = 0
+    done = False
+    p_rd = 0.4
+
+    async def drain() -> None:
+        held = None
+        while not done or sb.checked < total:
+            await FallingEdge(dut.rd_clk)
+            if dut.empty.value or random.random() >= p_rd:
+                dut.rd_en.value = 0
+                held = None if dut.empty.value else int(dut.dout.value)
+                continue
+            word = int(dut.dout.value)
+            assert held is None or word == held, "FWFT dout changed without rd_en"
+            dut.rd_en.value = 1
+            sb.pop_check(word)
+            held = None
+        await FallingEdge(dut.rd_clk)
+        dut.rd_en.value = 0
+
+    rd = cocotb.start_soon(drain())
+    full_rounds = 0
+    for _ in range(300):
+        p_rd = random.choice([0.0, 0.0, 0.1, 0.5, 1.0])
+        for _ in range(random.randint(0, 6)):
+            await FallingEdge(dut.wr_clk)
+            dut.wr_en.value = 0
+        await FallingEdge(dut.wr_clk)
+        space = depth() - int(dut.wr_count.value)
+        full_rounds += space == 0
+        for _ in range(space):
+            dut.wr_en.value = 0
+            while random.random() < 0.3:
+                await FallingEdge(dut.wr_clk)
+            word = random.getrandbits(WIDTH)
+            dut.wr_en.value = 1
+            dut.din.value = word
+            sb.push(word)
+            total += 1
+            await FallingEdge(dut.wr_clk)
+        dut.wr_en.value = 0
+    done = True
+    p_rd = 1.0
+    await rd
+    sb.check_empty()
+    assert pulses.overflow == 0, f"{pulses.overflow} writes lost although wr_count gave room"
+    assert full_rounds > 0 and total > 300, f"no round found the FIFO full ({full_rounds}) or too few words ({total})"
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_throughput(dut):
     """Both sides enabled every cycle: 1 word/cycle on each side, i.e. at least 95 % of the
     slower clock's word rate (module header). Checked at the minimum depth (16)."""
@@ -337,7 +449,7 @@ def test_cdc_async_fifo(depth_log2, width, sync_stages, jitter, ratio):
         toplevel="cdc_async_fifo",
         filelists=["common.f"],
         test_module="test_cdc_async_fifo",
-        parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages},
+        parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "WR_COUNT": 1},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
         extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
                    "SYNC_STAGES": sync_stages},  # fmt: skip

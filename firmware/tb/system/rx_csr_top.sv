@@ -10,6 +10,10 @@
 //                m_fwd_pkt_* the forwarded ones.
 // Ring         : itch_decoder's events and forwarded packet events go through event_packer and the COMMIT=1 FIFO
 //                to event_ring_writer, which writes host memory through m_axi_hmw_* (audit/13 §2.2).
+// Order path   : until S8 (audit/14) there is no strategy_engine, risk_check or order_tx_builder: hft_csr_wrap's
+//                order configuration goes nowhere (order_cfg_unused), its status inputs are constants (no
+//                rule error, budget 0, UserRefNum 1, no TX config), the mailbox is never read, and LOCATE_ALLOW
+//                is a symbol_filter of its own so that its accesses answer. ctl_kill and ctl_tx_en are ports.
 // Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
 module rx_csr_top
   import hft_pkg::*;
@@ -126,6 +130,9 @@ module rx_csr_top
     // event_packer's order queue (its inputs are tied off until S8)
     output logic                         ring_credit_ret,
     output logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued,
+    // Order path controls (hft_csr_wrap; their users come in S8)
+    output logic                         ctl_kill,
+    output logic                         ctl_tx_en,
 
     // Host memory
     output logic [             63:0] m_axi_hmw_awaddr,
@@ -172,8 +179,35 @@ module rx_csr_top
   logic [31:0] ring_cons, ring_prod_idx;
   logic [63:0] ring_commit_entries, ring_drop_pkts, ring_drop_entries;
   logic fifo_wr_en, fifo_commit, fifo_rollback, fifo_full, fifo_wr_busy;
+  logic [RING_DEPTH_LOG2:0] fifo_wr_count_unused;  // the descriptor FIFO needs no fill level (WR_COUNT=0)
   logic fifo_rd_en, fifo_empty, fifo_rd_busy;
   logic [event_desc_pkg::DESC_W-1:0] fifo_din, fifo_dout;
+  // Order path until S8 (header)
+  logic cfg_rule_wr, cmd_arm, cmd_disarm, cfg_lim_wr, cmd_budget_add, cmd_userref_wr, cfg_tx_wr;
+  logic        [STRAT_RULE_W-1:0] cfg_rule_idx;
+  strat_rule_t                    cfg_rule;
+  logic [STRAT_N_RULES-1:0] cmd_arm_mask, cmd_disarm_mask;
+  logic [31:0]
+      cfg_max_qty,
+      cfg_rate_refill,
+      cfg_rate_period,
+      cfg_rate_burst,
+      cmd_budget_amount,
+      cmd_userref_value;
+  logic [    63:0] cfg_max_notional;
+  logic [8*42-1:0] cfg_template;
+  logic [7:0] cfg_display, cfg_capacity, cfg_ise, cfg_cross_type;
+  logic loc_req_valid, loc_req_ready, loc_req_wr, loc_rsp_valid, loc_hit_unused;
+  logic [10:0] loc_req_addr;
+  logic [31:0] loc_req_wdata, loc_rsp_rdata;
+  logic [3:0] loc_req_wstrb;
+  logic       m_host_valid;
+  logic [7:0] m_host_side, m_host_tif;
+  logic [31:0] m_host_qty, m_host_price;
+  logic [ 15:0] m_host_locate;
+  logic [ 63:0] m_host_stock;
+  logic [111:0] m_host_clordid;
+  logic         order_cfg_unused;
 
   reset_sync u_host_rst (
       .clk    (host_clk),
@@ -261,7 +295,89 @@ module rx_csr_top
       .sym_req_wdata          (sym_req_wdata),
       .sym_req_wstrb          (sym_req_wstrb),
       .sym_rsp_valid          (sym_rsp_valid),
-      .sym_rsp_rdata          (sym_rsp_rdata)
+      .sym_rsp_rdata          (sym_rsp_rdata),
+      .ctl_kill               (ctl_kill),
+      .ctl_tx_en              (ctl_tx_en),
+      .cfg_rule_wr            (cfg_rule_wr),
+      .cfg_rule_idx           (cfg_rule_idx),
+      .cfg_rule               (cfg_rule),
+      .cmd_arm                (cmd_arm),
+      .cmd_arm_mask           (cmd_arm_mask),
+      .cmd_disarm             (cmd_disarm),
+      .cmd_disarm_mask        (cmd_disarm_mask),
+      .st_armed               ('0),
+      .st_error               ('0),
+      .cfg_lim_wr             (cfg_lim_wr),
+      .cfg_max_qty            (cfg_max_qty),
+      .cfg_max_notional       (cfg_max_notional),
+      .cfg_rate_refill        (cfg_rate_refill),
+      .cfg_rate_period        (cfg_rate_period),
+      .cfg_rate_burst         (cfg_rate_burst),
+      .cmd_budget_add         (cmd_budget_add),
+      .cmd_budget_amount      (cmd_budget_amount),
+      .cmd_userref_wr         (cmd_userref_wr),
+      .cmd_userref_value      (cmd_userref_value),
+      .ev_userref_ignored     (1'b0),
+      .st_userref             (32'd1),
+      .st_budget              ('0),
+      .loc_req_valid          (loc_req_valid),
+      .loc_req_ready          (loc_req_ready),
+      .loc_req_wr             (loc_req_wr),
+      .loc_req_addr           (loc_req_addr),
+      .loc_req_wdata          (loc_req_wdata),
+      .loc_req_wstrb          (loc_req_wstrb),
+      .loc_rsp_valid          (loc_rsp_valid),
+      .loc_rsp_rdata          (loc_rsp_rdata),
+      .cfg_tx_wr              (cfg_tx_wr),
+      .cfg_template           (cfg_template),
+      .cfg_display            (cfg_display),
+      .cfg_capacity           (cfg_capacity),
+      .cfg_ise                (cfg_ise),
+      .cfg_cross_type         (cfg_cross_type),
+      .st_tx_cfg_valid        (1'b0),
+      .ev_cfg_refused         (1'b0),
+      .m_host_valid           (m_host_valid),
+      .m_host_ready           (1'b0),
+      .m_host_side            (m_host_side),
+      .m_host_qty             (m_host_qty),
+      .m_host_price           (m_host_price),
+      .m_host_locate          (m_host_locate),
+      .m_host_stock           (m_host_stock),
+      .m_host_tif             (m_host_tif),
+      .m_host_clordid         (m_host_clordid),
+      .ord_fire_valid         (1'b0),
+      .ord_fire_rule          ('0),
+      .ord_sent_valid         (1'b0),
+      .ord_sent_source        (ORDER_SRC_RULE),
+      .ord_rej_valid          (1'b0),
+      .ord_rej_reason         (RISK_NONE),
+      .ord_lost_valid         (1'b0),
+      .ord_lost_reason        (RISK_NONE),
+      .ord_queued             (ring_ord_queued)
+  );
+
+  // Until S8: the order configuration has no user, and LOCATE_ALLOW is a bitmap of its own (header).
+  assign order_cfg_unused = ^{
+    cfg_rule_wr, cfg_rule_idx, cfg_rule, cmd_arm, cmd_arm_mask, cmd_disarm, cmd_disarm_mask, cfg_lim_wr,
+    cfg_max_qty, cfg_max_notional, cfg_rate_refill, cfg_rate_period, cfg_rate_burst, cmd_budget_add,
+    cmd_budget_amount, cmd_userref_wr, cmd_userref_value, cfg_tx_wr, cfg_template, cfg_display, cfg_capacity,
+    cfg_ise, cfg_cross_type, m_host_valid, m_host_side, m_host_qty, m_host_price, m_host_locate, m_host_stock,
+    m_host_tif, m_host_clordid
+  };
+
+  symbol_filter u_locate_allow (
+      .clk          (net_clk),
+      .rst          (net_rst),
+      .lk_locate    ('0),
+      .lk_hit       (loc_hit_unused),
+      .sym_req_valid(loc_req_valid),
+      .sym_req_ready(loc_req_ready),
+      .sym_req_wr   (loc_req_wr),
+      .sym_req_addr (loc_req_addr),
+      .sym_req_wdata(loc_req_wdata),
+      .sym_req_wstrb(loc_req_wstrb),
+      .sym_rsp_valid(loc_rsp_valid),
+      .sym_rsp_rdata(loc_rsp_rdata)
   );
 
   eth_ip_udp_rx #(
@@ -498,6 +614,7 @@ module rx_csr_top
       .full       (fifo_full),
       .overflow   (ring_fifo_overflow),
       .wr_rst_busy(fifo_wr_busy),
+      .wr_count   (fifo_wr_count_unused),
       .rd_clk     (host_clk),
       .rd_en      (fifo_rd_en),
       .dout       (fifo_dout),

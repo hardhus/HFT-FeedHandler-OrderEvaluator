@@ -9,9 +9,12 @@ fields) are driven by the test with random values, which the model is told. axil
 bound into every build. tc_smoke keeps a few hand-written values, so a map change that nobody meant
 fails here too.
 
-The SYMBOL memory is external (regblock forwards it on hwif_out.SYMBOL and waits for an ack): a RAM
-responder in the test answers it after a random delay and checks each request (one in flight, word
-address in range, byte-granular bit enables). The model keeps the expected contents.
+The SYMBOL and LOCATE_ALLOW memories and the order command registers are external (regblock forwards
+them on hwif_out and waits for an ack): one responder in the test answers them after a random delay and
+checks each request (one in flight across all of them, word address in range, byte-granular bit
+enables). The memories are RAMs whose expected contents the model keeps; an external register write is
+recorded (with its bit enables) and must equal the model's list in order; TX_USERREF reads a random
+hardware value that the model is told.
 """
 
 import random
@@ -37,6 +40,8 @@ SCRATCH = 0x0008
 STATS_SEQ = 0x0404
 UNMAPPED = 0xFFFC  # top of the 64 KiB window: never mapped
 SYMBOL = mem("SYMBOL")
+LOCATE_ALLOW = mem("LOCATE_ALLOW")
+MEMS = (SYMBOL, LOCATE_ALLOW)
 
 
 def node(root, path: str):
@@ -59,9 +64,13 @@ class Csr:
         self.pulse_high = dict.fromkeys(self.pulses_want, 0)  # cycles with the output high
         self.pulse_rises = dict.fromkeys(self.pulses_want, 0)
         self.seq_incr = 0
-        self.ram: dict[int, int] = {}  # the SYMBOL responder's RAM (word -> value)
-        self.mem_requests = 0  # requests the responder answered
+        self.rams: dict[str, dict[int, int]] = {m.path: {} for m in MEMS}  # the responder's RAMs (word -> value)
+        self.requests: dict[str, int] = {}  # requests the responder answered, per memory or external register
+        self.ext_seen: list[tuple[str, int]] = []  # external register writes the responder saw (wr_data & wr_biten)
+        self.ext_rdata: dict[str, int] = {}  # what a read of a readable external register returns
         self.mem_delay = (1, 8)  # responder delay range, cycles from req to ack
+        self.ext_regs = [r for r in self.model.regs if any(f.external for f in r.fields)]
+        self.ext_fields = {r.path: sum(f.mask for f in r.fields if f.sw_write) for r in self.ext_regs}
 
     def fields(self) -> list[tuple[Reg, Field]]:
         return [(r, f) for r in self.model.regs for f in r.fields]
@@ -70,6 +79,10 @@ class Csr:
         """Random values on every hw=w field input (the model learns them); counter incr low."""
         for r, f in self.fields():
             key = f"{r.path}.{f.name}"
+            if f.external:
+                if f.hw_write:  # a read-only external register: the responder answers this value
+                    self.ext_rdata[r.path] = self.model.hw[key] = rng.getrandbits(f.width)
+                continue
             if f.hw_write and r.path == "STATS.STATS_SEQ":
                 node(self.dut.hwif_in, f"{key}.incr").value = 0
                 self.model.hw[key] = self.seq_incr
@@ -78,46 +91,75 @@ class Csr:
                 node(self.dut.hwif_in, f"{key}.next").value = value
                 self.model.hw[key] = value
 
+    def ext_ports(self) -> list[tuple[str, object, object]]:
+        """(name, hwif_out, hwif_in) of every external target: the memories, then the registers."""
+        ports = [(m.path, getattr(self.dut.hwif_out, m.path), getattr(self.dut.hwif_in, m.path)) for m in MEMS]
+        return ports + [(r.path, node(self.dut.hwif_out, r.path), node(self.dut.hwif_in, r.path)) for r in self.ext_regs]
+
+    def idle_acks(self) -> None:
+        for name, _, inp in self.ext_ports():
+            for sig in ("wr_ack", "rd_ack"):
+                if hasattr(inp, sig):
+                    getattr(inp, sig).value = 0
+            if name in {m.path for m in MEMS}:
+                inp.rd_data.value = 0
+            elif hasattr(inp, "rd_data"):
+                inp.rd_data.value = 0
+
     async def mem_responder(self) -> None:
-        """Answers hwif_out.SYMBOL like an external RAM: one request in flight, the ack (rd_ack
-        with rd_data, or wr_ack) a random number of cycles later, one cycle long."""
-        out, inp = self.dut.hwif_out.SYMBOL, self.dut.hwif_in.SYMBOL
+        """Answers every external target: SYMBOL and LOCATE_ALLOW like RAMs, the external registers by
+        recording writes and answering reads with ext_rdata. One request in flight across all of them;
+        the ack (rd_ack with rd_data, or wr_ack) a random number of cycles later, one cycle long."""
         rng = random.Random(random.getrandbits(32))
+        ports = self.ext_ports()
+        mems = {m.path: m for m in MEMS}
         await RisingEdge(self.dut.clk)
         while True:
             # Every cycle is sampled, also the one right after an ack (regblock may issue the next
             # request there).
             await ReadOnly()
-            if self.dut.rst.value or not out.req.value:
+            reqs = [(n, o, i) for n, o, i in ports if not self.dut.rst.value and o.req.value]
+            if not reqs:
                 await RisingEdge(self.dut.clk)
                 continue
-            is_wr, a = bool(out.req_is_wr.value), int(out.addr.value)
-            data, biten = int(out.wr_data.value), int(out.wr_biten.value)
-            assert a % 4 == 0 and a < SYMBOL.size, f"SYMBOL request address {a:#x}"
-            if is_wr:
-                assert all((biten >> (8 * b) & 0xFF) in (0, 0xFF) for b in range(4)), f"bit enables {biten:#x}"
-            word = a // 4
+            assert len(reqs) == 1, f"external requests in one cycle: {[n for n, _, _ in reqs]}"
+            name, out, inp = reqs[0]
+            is_wr = bool(out.req_is_wr.value) if hasattr(out, "req_is_wr") else True
+            data, biten = (int(out.wr_data.value), int(out.wr_biten.value)) if is_wr else (0, 0)
+            word = None
+            if name in mems:
+                a = int(out.addr.value)  # valid with req only
+                word = a // 4
+                assert a % 4 == 0 and a < mems[name].size, f"{name} request address {a:#x}"
+                if is_wr:
+                    assert all((biten >> (8 * b) & 0xFF) in (0, 0xFF) for b in range(4)), f"bit enables {biten:#x}"
             reset = False
             for _ in range(rng.randint(*self.mem_delay)):
                 await RisingEdge(self.dut.clk)
                 await ReadOnly()
                 reset = reset or bool(self.dut.rst.value)
-                assert reset or not out.req.value, "a second SYMBOL request while one is in flight"
+                assert reset or not any(o.req.value for _, o, _ in ports), "a second external request in flight"
             if reset:  # the block was reset: the access is gone, no ack
                 await RisingEdge(self.dut.clk)
                 continue
             await FallingEdge(self.dut.clk)
-            if is_wr:
-                self.ram[word] = (self.ram.get(word, 0) & ~biten) | (data & biten)
+            if name in mems:
+                ram = self.rams[name]
+                if is_wr:
+                    ram[word] = (ram.get(word, 0) & ~biten) | (data & biten)
+                    inp.wr_ack.value = 1
+                else:
+                    inp.rd_data.value = ram.get(word, 0)
+                    inp.rd_ack.value = 1
+            elif is_wr:  # wr_biten also covers the reserved bits of the register: the fields only
+                self.ext_seen.append((name, data & biten & self.ext_fields[name]))
                 inp.wr_ack.value = 1
             else:
-                inp.rd_data.value = self.ram.get(word, 0)
+                inp.rd_data.value = self.ext_rdata[name]
                 inp.rd_ack.value = 1
-            self.mem_requests += 1
+            self.requests[name] = self.requests.get(name, 0) + 1
             await RisingEdge(self.dut.clk)
-            inp.wr_ack.value = 0
-            inp.rd_ack.value = 0
-            inp.rd_data.value = rng.getrandbits(32)  # only valid with rd_ack
+            self.idle_acks()
 
     async def monitor_pulses(self) -> None:
         handles = {key: node(self.dut.hwif_out, f"{key}.value") for key in self.pulse_high}
@@ -154,6 +196,12 @@ class Csr:
         for _ in range(3):  # last pulse and storage update have landed
             await RisingEdge(self.dut.clk)
         await ReadOnly()
+        seen, want = self.ext_seen, self.model.ext_writes
+        first = next((i for i, (x, y) in enumerate(zip(seen, want)) if x != y), min(len(seen), len(want)))
+        assert seen == want, (
+            f"external register writes differ from the model's at {first}: {seen[first:first + 3]} vs "
+            f"{want[first:first + 3]} ({len(seen)} seen, {len(want)} expected)"
+        )
         for r, f in self.fields():
             if f.storage and f.hw_read:
                 got = int(node(self.dut.hwif_out, f"{r.path}.{f.name}.value").value)
@@ -171,9 +219,7 @@ async def start(dut) -> Csr:
         getattr(dut, f"s_axil_{name}").value = 0
     csr = Csr(dut)
     csr.drive_hw_inputs(random.Random(random.getrandbits(32)))
-    dut.hwif_in.SYMBOL.rd_ack.value = 0
-    dut.hwif_in.SYMBOL.wr_ack.value = 0
-    dut.hwif_in.SYMBOL.rd_data.value = 0
+    csr.idle_acks()
     dut.rst.value = 1
     start_clock(dut.clk, PERIOD_PS)
     for _ in range(4):
@@ -206,15 +252,15 @@ def unmapped(csr: Csr, rng: random.Random, n: int) -> list[int]:
     out = []
     while len(out) < n:
         a = rng.choice(gaps) if rng.random() < 0.5 else rng.randrange(0, WINDOW, 4)
-        if a not in used and SYMBOL.word(a) is None:
+        if a not in used and all(m.word(a) is None for m in MEMS):
             out.append(a)
     return out
 
 
-def symbol_addrs(rng: random.Random, n: int) -> list[int]:
-    """n SYMBOL word addresses: the first, the last and random ones."""
-    edges = [SYMBOL.addr, SYMBOL.addr + SYMBOL.size - 4]
-    return edges + [SYMBOL.addr + 4 * rng.randrange(SYMBOL.entries) for _ in range(n - 2)]
+def symbol_addrs(rng: random.Random, n: int, m=SYMBOL) -> list[int]:
+    """n word addresses of memory m (SYMBOL by default): the first, the last and random ones."""
+    edges = [m.addr, m.addr + m.size - 4]
+    return edges + [m.addr + 4 * rng.randrange(m.entries) for _ in range(n - 2)]
 
 
 async def check_all_reads(csr: Csr, drv: AxilDriver) -> None:
@@ -242,7 +288,7 @@ async def tc_smoke(dut):
         return (await axil.write(addr, value.to_bytes(4, "little"))).resp
 
     assert await read32(ID) == (0x48465431, AxiResp.OKAY)
-    assert await read32(VERSION) == (0x0005_0003, AxiResp.OKAY)
+    assert await read32(VERSION) == (0x0005_0004, AxiResp.OKAY)
     assert await read32(SCRATCH) == (0, AxiResp.OKAY), "SCRATCH reset value"
     for _ in range(8):
         value = random.getrandbits(32)
@@ -453,7 +499,8 @@ async def tc_symbol_mem(dut):
             assert await drv.write(a, data, strb) == csr.expect_write(a, data, strb) == OKAY
             accesses += 1
         for a in words:
-            assert await drv.read(a) == csr.model.read(a), f"read {a:#06x}"
+            got, want = await drv.read(a), csr.model.read(a)
+            assert got == want, f"read {a:#06x}: {got}, model {want}"
             accesses += 1
     for a in rng.sample(words, 4):
         assert await drv.read(a + rng.randrange(1, 4)) == csr.model.read(a), "unaligned read"
@@ -466,7 +513,7 @@ async def tc_symbol_mem(dut):
         assert (await pend[0].wait())[1] == want[0]
         assert await pend[1].wait() == want[1] and await pend[2].wait() == want[2]
         accesses += 2
-    assert csr.mem_requests == accesses, f"{csr.mem_requests} SYMBOL requests for {accesses} accesses"
+    assert csr.requests.get("SYMBOL", 0) == accesses, f"{csr.requests} SYMBOL requests for {accesses} accesses"
     await check_all_reads(csr, drv)
     await csr.check_outputs()
 
@@ -498,7 +545,9 @@ async def tc_reset_mid_traffic(dut):
         dut.rst.value = 0
         await RisingEdge(dut.clk)
         csr.model.reset()
-        csr.ram.clear()  # the bitmap behind hft_csr_wrap is cleared after a reset too
+        for ram in csr.rams.values():  # the bitmaps behind hft_csr_wrap are cleared after a reset too
+            ram.clear()
+        csr.ext_seen.clear()
         dropped += sum(q.dropped for q in pend)
         answered += sum(q.done.is_set() for q in pend)
         assert all(q.dropped != q.done.is_set() for q in pend), "a request both answered and dropped, or neither"
@@ -518,7 +567,7 @@ def axil_bins(csr: Csr) -> list[str]:
     bins += [f"write_{r.path}" for r in csr.model.regs if r.writable]
     bins += [f"wstrb_byte{i}" for i in range(4)] + ["wstrb_none", "wstrb_full", "wstrb_mixed"]
     bins += ["err_read_unmapped", "err_write_unmapped", "err_write_ro", "err_read_wo"]
-    bins += ["read_SYMBOL", "write_SYMBOL"]
+    bins += ["read_SYMBOL", "write_SYMBOL", "read_LOCATE_ALLOW", "write_LOCATE_ALLOW"]
     return bins
 
 
@@ -541,11 +590,13 @@ async def tc_axil_random(dut):
         rng.shuffle(regs)
         a, b = regs[: len(regs) // 2], regs[len(regs) // 2 :]
         phases += [(a, b), (b, a)]
-    sym_w, sym_r = symbol_addrs(rng, 8), symbol_addrs(rng, 8)
-    sym_r = [a for a in sym_r if a not in sym_w] or [SYMBOL.addr + 8]
-    for wbase, rbase in phases:
-        wset = wbase + unmapped(csr, rng, 2) + rng.sample(sym_w, 2)
-        rset = rbase + unmapped(csr, rng, 2) + rng.sample(sym_r, 2)
+    sym_w = symbol_addrs(rng, 8) + symbol_addrs(rng, 8, LOCATE_ALLOW)
+    sym_r = [a for a in symbol_addrs(rng, 8) + symbol_addrs(rng, 8, LOCATE_ALLOW) if a not in sym_w]
+    sym_r = sym_r or [SYMBOL.addr + 8, LOCATE_ALLOW.addr + 8]
+    for i, (wbase, rbase) in enumerate(phases):
+        # Each memory in every phase, in turn the first in each set (so both get read and written).
+        wset = wbase + unmapped(csr, rng, 2) + rng.sample(sym_w, 2) + [sym_w[(8 * i) % len(sym_w)]]
+        rset = rbase + unmapped(csr, rng, 2) + rng.sample(sym_r, 2) + [sym_r[(i * 5) % len(sym_r)]]
         drv.b_ready_p, drv.r_ready_p = rng.choice([1.0, 0.5, 0.15]), rng.choice([1.0, 0.5, 0.15])
         ops = [("w", x) for x in wset] + [("r", x) for x in rset]
         ops += [("w", rng.choice(wset)) for _ in range(5)] + [("r", rng.choice(rset)) for _ in range(5)]
@@ -562,8 +613,9 @@ async def tc_axil_random(dut):
         for p, want, a, strb in writes:
             assert (await p.wait())[1] == want, f"BRESP of write to {a:#06x}"
             reg = by_addr.get(a)
-            if SYMBOL.word(a) is not None:
-                cov.hit("write_SYMBOL")
+            hit = csr.model.mem_at(a)
+            if hit is not None:
+                cov.hit(f"write_{hit[0].path}")
             elif reg is None:
                 cov.hit("err_write_unmapped")
             elif not reg.writable:
@@ -581,8 +633,9 @@ async def tc_axil_random(dut):
         for p, want, a in reads:
             assert await p.wait() == want, f"read {a:#06x}"
             reg = by_addr.get(a)
-            if SYMBOL.word(a) is not None:
-                cov.hit("read_SYMBOL")
+            hit = csr.model.mem_at(a)
+            if hit is not None:
+                cov.hit(f"read_{hit[0].path}")
                 continue
             cov.hit("err_read_unmapped" if reg is None else "err_read_wo" if not reg.readable else f"read_{reg.path}")
     for order in drv.write_orders():

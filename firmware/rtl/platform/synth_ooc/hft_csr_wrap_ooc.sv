@@ -4,7 +4,7 @@
 // Every output is a port, so synthesis keeps (and the gate checks) all of the logic.
 // Not used in simulation.
 // Clock domain : host_clk (s_axil_*, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
-//                cnt_ring_*)
+//                cnt_ring_*, and the order path: ctl_*, cmd_*, loc_*, m_host_*, st_*, ev_*, ord_*)
 module hft_csr_wrap_ooc
   import hft_pkg::*;
 #(
@@ -93,7 +93,67 @@ module hft_csr_wrap_ooc
     output logic [31:0] sym_req_wdata,
     output logic [ 3:0] sym_req_wstrb,
     input  logic        sym_rsp_valid,
-    input  logic [31:0] sym_rsp_rdata
+    input  logic [31:0] sym_rsp_rdata,
+
+    output logic                            ctl_kill,
+    output logic                            ctl_tx_en,
+    output logic                            cfg_rule_wr,
+    output logic        [ STRAT_RULE_W-1:0] cfg_rule_idx,
+    output strat_rule_t                     cfg_rule,
+    output logic                            cmd_arm,
+    output logic        [STRAT_N_RULES-1:0] cmd_arm_mask,
+    output logic                            cmd_disarm,
+    output logic        [STRAT_N_RULES-1:0] cmd_disarm_mask,
+    input  logic        [STRAT_N_RULES-1:0] st_armed,
+    input  logic        [STRAT_N_RULES-1:0] st_error,
+    output logic                            cfg_lim_wr,
+    output logic        [             31:0] cfg_max_qty,
+    output logic        [             63:0] cfg_max_notional,
+    output logic        [             31:0] cfg_rate_refill,
+    output logic        [             31:0] cfg_rate_period,
+    output logic        [             31:0] cfg_rate_burst,
+    output logic                            cmd_budget_add,
+    output logic        [             31:0] cmd_budget_amount,
+    output logic                            cmd_userref_wr,
+    output logic        [             31:0] cmd_userref_value,
+    input  logic                            ev_userref_ignored,
+    input  logic        [             31:0] st_userref,
+    input  logic        [             31:0] st_budget,
+    output logic                            loc_req_valid,
+    input  logic                            loc_req_ready,
+    output logic                            loc_req_wr,
+    output logic        [             10:0] loc_req_addr,
+    output logic        [             31:0] loc_req_wdata,
+    output logic        [              3:0] loc_req_wstrb,
+    input  logic                            loc_rsp_valid,
+    input  logic        [             31:0] loc_rsp_rdata,
+    output logic                            cfg_tx_wr,
+    output logic        [         8*42-1:0] cfg_template,
+    output logic        [              7:0] cfg_display,
+    output logic        [              7:0] cfg_capacity,
+    output logic        [              7:0] cfg_ise,
+    output logic        [              7:0] cfg_cross_type,
+    input  logic                            st_tx_cfg_valid,
+    input  logic                            ev_cfg_refused,
+    output logic                            m_host_valid,
+    input  logic                            m_host_ready,
+    output logic        [              7:0] m_host_side,
+    output logic        [             31:0] m_host_qty,
+    output logic        [             31:0] m_host_price,
+    output logic        [             15:0] m_host_locate,
+    output logic        [             63:0] m_host_stock,
+    output logic        [              7:0] m_host_tif,
+    output logic        [            111:0] m_host_clordid,
+
+    input logic                                 ord_fire_valid,
+    input logic         [     STRAT_RULE_W-1:0] ord_fire_rule,
+    input logic                                 ord_sent_valid,
+    input order_src_e                           ord_sent_source,
+    input logic                                 ord_rej_valid,
+    input risk_reason_e                         ord_rej_reason,
+    input logic                                 ord_lost_valid,
+    input risk_reason_e                         ord_lost_reason,
+    input logic         [RING_ORD_QUEUED_W-1:0] ord_queued
 );
   logic host_rst_q, awvalid_q, wvalid_q, bready_q, arvalid_q, rready_q;
   logic [15:0] awaddr_q, araddr_q;
@@ -115,6 +175,14 @@ module hft_csr_wrap_ooc
   logic ring_bresp_err_q, ring_enable_err_q;
   logic [63:0] ring_cnt_written_q, ring_cnt_bresp_err_q;
   logic [63:0] cnt_ring_commit_entries_q, cnt_ring_drop_pkts_q, cnt_ring_drop_entries_q;
+  logic [STRAT_N_RULES-1:0] st_armed_q, st_error_q;
+  logic ev_userref_ignored_q, loc_req_ready_q, loc_rsp_valid_q, st_tx_cfg_valid_q, ev_cfg_refused_q;
+  logic m_host_ready_q, ord_fire_valid_q, ord_sent_valid_q, ord_rej_valid_q, ord_lost_valid_q;
+  logic [31:0] st_userref_q, st_budget_q, loc_rsp_rdata_q;
+  logic       [STRAT_RULE_W-1:0] ord_fire_rule_q;
+  order_src_e                    ord_sent_source_q;
+  risk_reason_e ord_rej_reason_q, ord_lost_reason_q;
+  logic [RING_ORD_QUEUED_W-1:0] ord_queued_q;
 
   always_ff @(posedge host_clk) begin
     host_rst_q           <= host_rst;
@@ -159,6 +227,26 @@ module hft_csr_wrap_ooc
     cnt_ring_commit_entries_q <= cnt_ring_commit_entries;
     cnt_ring_drop_pkts_q      <= cnt_ring_drop_pkts;
     cnt_ring_drop_entries_q   <= cnt_ring_drop_entries;
+    st_armed_q                <= st_armed;
+    st_error_q                <= st_error;
+    ev_userref_ignored_q      <= ev_userref_ignored;
+    st_userref_q              <= st_userref;
+    st_budget_q               <= st_budget;
+    loc_req_ready_q           <= loc_req_ready;
+    loc_rsp_valid_q           <= loc_rsp_valid;
+    loc_rsp_rdata_q           <= loc_rsp_rdata;
+    st_tx_cfg_valid_q         <= st_tx_cfg_valid;
+    ev_cfg_refused_q          <= ev_cfg_refused;
+    m_host_ready_q            <= m_host_ready;
+    ord_fire_valid_q          <= ord_fire_valid;
+    ord_fire_rule_q           <= ord_fire_rule;
+    ord_sent_valid_q          <= ord_sent_valid;
+    ord_sent_source_q         <= ord_sent_source;
+    ord_rej_valid_q           <= ord_rej_valid;
+    ord_rej_reason_q          <= ord_rej_reason;
+    ord_lost_valid_q          <= ord_lost_valid;
+    ord_lost_reason_q         <= ord_lost_reason;
+    ord_queued_q              <= ord_queued;
   end
 
   hft_csr_wrap u_wrap (
@@ -235,6 +323,64 @@ module hft_csr_wrap_ooc
       .sym_req_wdata          (sym_req_wdata),
       .sym_req_wstrb          (sym_req_wstrb),
       .sym_rsp_valid          (sym_rsp_valid_q),
-      .sym_rsp_rdata          (sym_rsp_rdata_q)
+      .sym_rsp_rdata          (sym_rsp_rdata_q),
+      .ctl_kill               (ctl_kill),
+      .ctl_tx_en              (ctl_tx_en),
+      .cfg_rule_wr            (cfg_rule_wr),
+      .cfg_rule_idx           (cfg_rule_idx),
+      .cfg_rule               (cfg_rule),
+      .cmd_arm                (cmd_arm),
+      .cmd_arm_mask           (cmd_arm_mask),
+      .cmd_disarm             (cmd_disarm),
+      .cmd_disarm_mask        (cmd_disarm_mask),
+      .st_armed               (st_armed_q),
+      .st_error               (st_error_q),
+      .cfg_lim_wr             (cfg_lim_wr),
+      .cfg_max_qty            (cfg_max_qty),
+      .cfg_max_notional       (cfg_max_notional),
+      .cfg_rate_refill        (cfg_rate_refill),
+      .cfg_rate_period        (cfg_rate_period),
+      .cfg_rate_burst         (cfg_rate_burst),
+      .cmd_budget_add         (cmd_budget_add),
+      .cmd_budget_amount      (cmd_budget_amount),
+      .cmd_userref_wr         (cmd_userref_wr),
+      .cmd_userref_value      (cmd_userref_value),
+      .ev_userref_ignored     (ev_userref_ignored_q),
+      .st_userref             (st_userref_q),
+      .st_budget              (st_budget_q),
+      .loc_req_valid          (loc_req_valid),
+      .loc_req_ready          (loc_req_ready_q),
+      .loc_req_wr             (loc_req_wr),
+      .loc_req_addr           (loc_req_addr),
+      .loc_req_wdata          (loc_req_wdata),
+      .loc_req_wstrb          (loc_req_wstrb),
+      .loc_rsp_valid          (loc_rsp_valid_q),
+      .loc_rsp_rdata          (loc_rsp_rdata_q),
+      .cfg_tx_wr              (cfg_tx_wr),
+      .cfg_template           (cfg_template),
+      .cfg_display            (cfg_display),
+      .cfg_capacity           (cfg_capacity),
+      .cfg_ise                (cfg_ise),
+      .cfg_cross_type         (cfg_cross_type),
+      .st_tx_cfg_valid        (st_tx_cfg_valid_q),
+      .ev_cfg_refused         (ev_cfg_refused_q),
+      .m_host_valid           (m_host_valid),
+      .m_host_ready           (m_host_ready_q),
+      .m_host_side            (m_host_side),
+      .m_host_qty             (m_host_qty),
+      .m_host_price           (m_host_price),
+      .m_host_locate          (m_host_locate),
+      .m_host_stock           (m_host_stock),
+      .m_host_tif             (m_host_tif),
+      .m_host_clordid         (m_host_clordid),
+      .ord_fire_valid         (ord_fire_valid_q),
+      .ord_fire_rule          (ord_fire_rule_q),
+      .ord_sent_valid         (ord_sent_valid_q),
+      .ord_sent_source        (ord_sent_source_q),
+      .ord_rej_valid          (ord_rej_valid_q),
+      .ord_rej_reason         (ord_rej_reason_q),
+      .ord_lost_valid         (ord_lost_valid_q),
+      .ord_lost_reason        (ord_lost_reason_q),
+      .ord_queued             (ord_queued_q)
   );
 endmodule

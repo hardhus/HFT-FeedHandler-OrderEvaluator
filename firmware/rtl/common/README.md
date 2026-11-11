@@ -29,7 +29,7 @@ tick-to-trade path; these blocks only affect the host, config and counter paths.
 | `reset_sync` | `STAGES=3` | `clk` | assert immediate, deassert `STAGES` edges | – | `rst_in` async, active-high; any pulse width gives a full reset |
 | `sync_bit` | `WIDTH=1`, `STAGES=2` (≥ 2) | `clk` (destination); `d` asynchronous | `STAGES` edges (+1 in jitter mode) | hold each level > 2 `clk` periods (longest, jitter included) | none (settles to `d`) |
 | `cdc_handshake` | `WIDTH=32`, `STAGES=2` | `src_clk` (`src_*`), `dst_clk` (`dst_*`) | `STAGES+1` dst cycles to `dst_valid` (+1 jitter) | one word per req/ack round trip | `src_rst`, `dst_rst` asserted together |
-| `cdc_async_fifo` | `WIDTH=64`, `DEPTH_LOG2=4` (≥ 4, both implementations), `SYNC_STAGES=2`, `IMPL="portable"`, `COMMIT=0` | `wr_clk` (`rst`, `wr_*`, `full`, `overflow`, `wr_rst_busy`), `rd_clk` (`rd_*`, `dout`, `empty`, `underflow`, `rd_rst_busy`) | write → `!empty` ≤ `SYNC_STAGES+3` rd cycles | 1 word/cycle per side (≥ 95 % of the slower clock) for `SYNC_STAGES` ≤ 3; this is why `DEPTH_LOG2` ≥ 4: a shallower FIFO is shorter than the pointer round trip | `rst` synchronous to `wr_clk`, busy handshake (below) |
+| `cdc_async_fifo` | `WIDTH=64`, `DEPTH_LOG2=4` (≥ 4, both implementations), `SYNC_STAGES=2`, `IMPL="portable"`, `COMMIT=0`, `WR_COUNT=0` | `wr_clk` (`rst`, `wr_*`, `full`, `overflow`, `wr_rst_busy`, `wr_count`), `rd_clk` (`rd_*`, `dout`, `empty`, `underflow`, `rd_rst_busy`) | write → `!empty` ≤ `SYNC_STAGES+3` rd cycles | 1 word/cycle per side (≥ 95 % of the slower clock) for `SYNC_STAGES` ≤ 3; this is why `DEPTH_LOG2` ≥ 4: a shallower FIFO is shorter than the pointer round trip | `rst` synchronous to `wr_clk`, busy handshake (below) |
 | `axis_register` | `DATA_W=64` (multiple of 8), `USER_W=1` | `clk` | 1 cycle | 1 beat/cycle | `rst` sync (control only) |
 | `axis_skid_buffer` | `DATA_W=64` (multiple of 8), `USER_W=1` | `clk` | 1 cycle | 1 beat/cycle | `rst` sync (control only) |
 
@@ -56,6 +56,11 @@ combinational from `m_axis_tready`; in `axis_skid_buffer` it comes straight from
   cycle, because a gray pointer crosses safely only if it changes one bit at a time and a commit jumps by many
   words. The n-th word of a unit is visible within n `wr_clk` cycles plus `SYNC_STAGES+3` `rd_clk` cycles of its
   commit; the walk keeps up with a writer at full rate.
+- **Fill level (`WR_COUNT=1`, portable only).** `wr_count` is the number of words written that the write side has
+  not yet seen read, registered on the same edge and from the same synchronized read pointer as `full`. Outside
+  reset and busy, `full` is `wr_count == 2^DEPTH_LOG2`, and `2^DEPTH_LOG2 - wr_count` writes from this cycle on
+  all fit: reads only free space, so the value is a safe bound for a producer that reads it late (the order
+  mailbox's `MBOX_SPACE`). It reads `2^DEPTH_LOG2` while `wr_rst_busy` is high (from the edge after `rst`). With `WR_COUNT=0` (and with XPM, which refuses `WR_COUNT=1`) it is 0.
 - Both implementations pass the same self-checking testbench (`tb/sv/tb_cdc_fifo_equiv.sv`) under the same
   contract assertions (`tb/sva/fifo_props.sv`).
 
@@ -73,6 +78,7 @@ cdc_async_fifo #(.WIDTH(512), .DEPTH_LOG2(5)) u_desc_fifo (
     .full       (desc_full),
     .overflow   (desc_overflow), // count it: it should never pulse in normal operation
     .wr_rst_busy(desc_wr_busy),
+    .wr_count   (desc_wr_count_unused),  // WR_COUNT=0
     .rd_clk     (host_clk),
     .rd_en      (ring_ready && !desc_rd_busy),
     .dout       (ring_desc),     // valid while !empty (FWFT)

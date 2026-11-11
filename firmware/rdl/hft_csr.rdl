@@ -28,9 +28,9 @@ addrmap hft_csr {
         reg {
             name = "Register map version";
             field {
-                desc = "Major.minor of this map: 0x0005_0003 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap and the F6 RING block. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
+                desc = "Major.minor of this map: 0x0005_0004 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block and the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
                 sw = r; hw = na;
-            } version[31:0] = 32'h0005_0003;
+            } version[31:0] = 32'h0005_0004;
         } VERSION @ 0x4;
 
         reg {
@@ -271,7 +271,7 @@ addrmap hft_csr {
 
     regfile {
         name = "Host event ring";
-        desc = "event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.";
+        desc = "event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES + RING_DROP_ORDERS + RING_ORDER_QUEUED = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS + ORDERS_SENT_HW + ORDERS_SENT_HOST + the sum of RISK_REJECT_<reason>; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.";
 
         reg {
             name = "Ring control";
@@ -340,6 +340,15 @@ addrmap hft_csr {
         counter64 RING_COMMIT_ENTRIES @ 0x40;  // entries committed to the FIFO, GAP and EOS included
         counter64 RING_DROP_PKTS      @ 0x48;  // accepted packets that did not fit the FIFO
         counter64 RING_DROP_ENTRIES   @ 0x50;  // their entries, GAP and EOS included
+        counter64 RING_DROP_ORDERS    @ 0x58;  // decision RISK_REJECT entries with no ring credit, not written
+
+        reg {
+            name = "Order entries queued";
+            field {
+                desc = "ORDER_SENT and RISK_REJECT entries counted by ORDERS_SENT_* and RISK_REJECT_* and waiting in event_packer's order queue (0..16), at the last snapshot. It keeps the identity above in every snapshot.";
+                sw = r; hw = w;
+            } queued[4:0];
+        } RING_ORDER_QUEUED @ 0x60;
     } RING @ 0x0800;
 
     regfile {
@@ -402,6 +411,429 @@ addrmap hft_csr {
         counter64 ITCH_MASKED    @ 0x80;  // dropped by ITCH_CTRL.class_en
     } ITCH @ 0x0600;
 
+    regfile {
+        name = "Pre-trade risk";
+        desc = "risk_check limits, kill switch, order budget and counters. MAX_QTY .. RATE_BURST are a shadow that RISK_COMMIT moves to the net clock domain in one piece. RISK_COMMIT and BUDGET_ADD are commands: they go to the net clock domain in bus order with the STRATEGY and TX commands, after every MBOX_SEND written before them has been decided and after RISK_CTRL and TX_CTRL written before them are in effect, and their write response comes once they are in effect. While one is in flight every other register access waits. The counters (net clock domain, 64 bit, wrap; cleared only by reset) and BUDGET are updated by STATS_CTRL.snapshot in the same net clock cycle as the other snapshot counters. RISK_REJECT_<reason> is at 0x0A60 + 8 * (reason - 1), reason = risk_reason_e in hft_pkg.sv; it counts the rejects not written to the ring too (RING_DROP_ORDERS).";
+
+        reg {
+            name = "Maximum quantity";
+            field {
+                desc = "An order with qty > max_qty is rejected (QTY). 0 after reset.";
+                sw = rw; hw = r;
+            } max_qty[31:0] = 32'h0;
+        } MAX_QTY @ 0x00;
+
+        reg {
+            name = "Maximum notional, low";
+            field {
+                desc = "Bits [31:0] of the maximum qty * price (price in ITCH Price(4) units). An order above it is rejected (NOTIONAL).";
+                sw = rw; hw = r;
+            } value[31:0] = 32'h0;
+        } MAX_NOTIONAL_LO @ 0x04;
+
+        reg {
+            name = "Maximum notional, high";
+            field {
+                desc = "Bits [63:32] of the maximum notional.";
+                sw = rw; hw = r;
+            } value[31:0] = 32'h0;
+        } MAX_NOTIONAL_HI @ 0x08;
+
+        reg {
+            name = "Token refill";
+            field {
+                desc = "Tokens added every RATE_PERIOD net clock cycles, up to RATE_BURST.";
+                sw = rw; hw = r;
+            } refill[31:0] = 32'h0;
+        } RATE_REFILL @ 0x0C;
+
+        reg {
+            name = "Token period";
+            field {
+                desc = "Net clock cycles between refills; 0 = no refill (the bucket only empties).";
+                sw = rw; hw = r;
+            } period[31:0] = 32'h0;
+        } RATE_PERIOD @ 0x10;
+
+        reg {
+            name = "Token bucket size";
+            field {
+                desc = "Bucket size. Each RISK_COMMIT fills the bucket to it and restarts the period. An accepted order takes one token; with none it is rejected (RATE).";
+                sw = rw; hw = r;
+            } burst[31:0] = 32'h0;
+        } RATE_BURST @ 0x14;
+
+        external reg {
+            name = "Risk commit";
+            field {
+                desc = "Write 1: command that sends MAX_QTY .. RATE_BURST to risk_check in one piece; the write response comes once it is in effect. A write with 0 does nothing.";
+                sw = w; hw = r;
+            } commit[0:0];
+        } RISK_COMMIT @ 0x18;
+
+        reg {
+            name = "Risk control";
+            field {
+                desc = "Kill switch, 1 after reset. Not a shadow: it reaches the net clock domain through a synchronizer, without a commit. While 1 every order is rejected (KILL); its rise cancels the TX queue and disarms every rule. Software releases it last, after the whole configuration (software contract after reset).";
+                sw = rw; hw = r;
+            } kill[0:0] = 1'b1;
+        } RISK_CTRL @ 0x1C;
+
+        external reg {
+            name = "Add to the budget";
+            field {
+                desc = "Command: adds the written value to the order budget (saturating at 2^32 - 1); the write response comes once it is in effect. Each accepted order uses one unit; with 0 an order is rejected (BUDGET). The budget is 0 after reset.";
+                sw = w; hw = r;
+            } amount[31:0];
+        } BUDGET_ADD @ 0x20;
+
+        reg {
+            name = "Budget";
+            field {
+                desc = "Order budget left, at the last snapshot.";
+                sw = r; hw = w;
+            } budget[31:0];
+        } BUDGET @ 0x24;
+
+        counter64 ORDERS_SENT_HW     @ 0x40;  // ORDER_SENT entries of rule orders
+        counter64 ORDERS_SENT_HOST   @ 0x48;  // ORDER_SENT entries of mailbox orders
+        counter64 RISK_REJECT_KILL      @ 0x60;  // RISK_REJECT per reason (risk_reason_e)
+        counter64 RISK_REJECT_TX_OFF    @ 0x68;
+        counter64 RISK_REJECT_INVALID   @ 0x70;
+        counter64 RISK_REJECT_LOCATE    @ 0x78;
+        counter64 RISK_REJECT_QTY       @ 0x80;
+        counter64 RISK_REJECT_NOTIONAL  @ 0x88;
+        counter64 RISK_REJECT_BUDGET    @ 0x90;
+        counter64 RISK_REJECT_RATE      @ 0x98;
+        counter64 RISK_REJECT_TX_BUSY   @ 0xA0;
+        counter64 RISK_REJECT_RING_FULL @ 0xA8;
+    } RISK @ 0x0A00;
+
+    regfile {
+        name = "Strategy rules";
+        desc = "strategy_engine's 8 rules, written indirectly: RULE_SEL picks a rule, RULE_CTRL .. RULE_OFFSET are one shadow, RULE_COMMIT replaces the selected rule with it in one piece and disarms it. Reads return the shadow, not the rule in effect. RULE_COMMIT, RULE_ARM and RULE_DISARM are commands, in bus order with the RISK and TX commands (see RISK); their write response comes once they are in effect. RULE_ARMED and RULE_FIRED_<n> (net clock domain) are updated by STATS_CTRL.snapshot with the other snapshot counters.";
+
+        reg {
+            name = "Rule select";
+            field {
+                desc = "The rule RULE_COMMIT writes.";
+                sw = rw; hw = r;
+            } idx[2:0] = 3'h0;
+        } RULE_SEL @ 0x00;
+
+        reg {
+            name = "Rule control";
+            field {
+                desc = "Rule enabled.";
+                sw = rw; hw = r;
+            } enable[0:0] = 1'b0;
+            field {
+                desc = "Message types that can fire it: bit 0 A, bit 1 F, bit 2 P.";
+                sw = rw; hw = r;
+            } msg_mask[3:1] = 3'h0;
+            field {
+                desc = "Event sides that match: bit 0 B, bit 1 S.";
+                sw = rw; hw = r;
+            } side_match[5:4] = 2'h0;
+            field {
+                desc = "0: event price <= RULE_THRESHOLD matches, 1: >=.";
+                sw = rw; hw = r;
+            } price_ge[6:6] = 1'b0;
+            field {
+                desc = "Order side: 0 buy, 1 sell, 2 the event's opposite; 3 is a static error.";
+                sw = rw; hw = r;
+            } action_side[9:8] = 2'h0;
+            field {
+                desc = "0: the order quantity is RULE_QTY; 1: min(event shares, RULE_QTY).";
+                sw = rw; hw = r;
+            } qty_min[10:10] = 1'b0;
+            field {
+                desc = "0: the order price is the event price; 1: RULE_THRESHOLD + RULE_OFFSET.";
+                sw = rw; hw = r;
+            } price_threshold_mode[11:11] = 1'b0;
+            field {
+                desc = "OUCH Time In Force code of the order (0, 3, 5 or E; any other is a static error).";
+                sw = rw; hw = r;
+            } tif[23:16] = 8'h0;
+        } RULE_CTRL @ 0x04;
+
+        reg {
+            name = "Rule locate";
+            field {
+                desc = "Stock locate the rule watches; 0 is a static error.";
+                sw = rw; hw = r;
+            } locate[15:0] = 16'h0;
+        } RULE_LOCATE @ 0x08;
+
+        reg {
+            name = "Rule price threshold";
+            field {
+                desc = "Price threshold, ITCH Price(4).";
+                sw = rw; hw = r;
+            } threshold[31:0] = 32'h0;
+        } RULE_THRESHOLD @ 0x0C;
+
+        reg {
+            name = "Rule minimum shares";
+            field {
+                desc = "An event matches only with shares >= this.";
+                sw = rw; hw = r;
+            } min_shares[31:0] = 32'h0;
+        } RULE_MIN_SHARES @ 0x10;
+
+        reg {
+            name = "Rule quantity";
+            field {
+                desc = "Order quantity, or its maximum with qty_min = 1.";
+                sw = rw; hw = r;
+            } qty[31:0] = 32'h0;
+        } RULE_QTY @ 0x14;
+
+        reg {
+            name = "Rule price offset";
+            field {
+                desc = "Signed offset added to RULE_THRESHOLD with price_threshold_mode = 1.";
+                sw = rw; hw = r;
+            } offset[31:0] = 32'h0;
+        } RULE_OFFSET @ 0x18;
+
+        external reg {
+            name = "Rule commit";
+            field {
+                desc = "Write 1: command that replaces rule RULE_SEL with the shadow and disarms it; the write response comes once it is in effect, and RULE_STATUS then shows its static error. A write with 0 does nothing.";
+                sw = w; hw = r;
+            } commit[0:0];
+        } RULE_COMMIT @ 0x1C;
+
+        external reg {
+            name = "Arm rules";
+            field {
+                desc = "Command: arms the rules whose bit is 1; the write response comes once it is in effect.";
+                sw = w; hw = r;
+            } mask[7:0];
+        } RULE_ARM @ 0x20;
+
+        external reg {
+            name = "Disarm rules";
+            field {
+                desc = "Command: disarms the rules whose bit is 1; the write response comes once it is in effect.";
+                sw = w; hw = r;
+            } mask[7:0];
+        } RULE_DISARM @ 0x24;
+
+        reg {
+            name = "Rule status";
+            field {
+                desc = "Bit n: rule n has a static error and never fires (locate 0, a TIF the core does not send, action_side 3, quantity 0 or >= 1,000,000, threshold + offset outside the exchange's price range). As of the last command's response; 0xFF after reset (every rule is cleared).";
+                sw = r; hw = w;
+            } error[7:0];
+        } RULE_STATUS @ 0x28;
+
+        reg {
+            name = "Armed rules";
+            field {
+                desc = "Bit n: rule n armed, at the last snapshot.";
+                sw = r; hw = w;
+            } armed[7:0];
+        } RULE_ARMED @ 0x2C;
+
+        counter64 RULE_FIRED_0 @ 0x40;  // orders of rule n released by their accepted packet
+        counter64 RULE_FIRED_1 @ 0x48;
+        counter64 RULE_FIRED_2 @ 0x50;
+        counter64 RULE_FIRED_3 @ 0x58;
+        counter64 RULE_FIRED_4 @ 0x60;
+        counter64 RULE_FIRED_5 @ 0x68;
+        counter64 RULE_FIRED_6 @ 0x70;
+        counter64 RULE_FIRED_7 @ 0x78;
+    } STRATEGY @ 0x1000;
+
+    regfile {
+        name = "Order transmit and mailbox";
+        desc = "order_tx_builder configuration, the UserRefNum counter and the host order mailbox. TX_OUCH and TX_TEMPLATE_* are a shadow that TX_COMMIT sends in one piece; TX_COMMIT and TX_USERREF_NEXT are commands in bus order with the RISK and STRATEGY commands (see RISK). MBOX_* fields are a shadow that MBOX_SEND copies into a 16-entry FIFO to the net clock domain (posted).";
+
+        reg {
+            name = "Transmit control";
+            field {
+                desc = "Order transmit enabled, 0 after reset. Not a shadow: it reaches the net clock domain through a synchronizer. In effect only after an accepted TX_COMMIT. While 0 every order is rejected (TX_OFF); its fall cancels the TX queue.";
+                sw = rw; hw = r;
+            } tx_en[0:0] = 1'b0;
+        } TX_CTRL @ 0x00;
+
+        reg {
+            name = "OUCH constants";
+            field {
+                desc = "Display: Y, N or A.";
+                sw = rw; hw = r;
+            } display[7:0] = 8'h0;
+            field {
+                desc = "Capacity: A, P, R or O.";
+                sw = rw; hw = r;
+            } capacity[15:8] = 8'h0;
+            field {
+                desc = "Intermarket Sweep Eligibility: N only.";
+                sw = rw; hw = r;
+            } ise[23:16] = 8'h0;
+            field {
+                desc = "CrossType: N only.";
+                sw = rw; hw = r;
+            } cross_type[31:24] = 8'h0;
+        } TX_OUCH @ 0x04;
+
+        external reg {
+            name = "Transmit commit";
+            field {
+                desc = "Write 1: command that sends TX_OUCH and TX_TEMPLATE_* to order_tx_builder; the write response comes once it is decided. Accepted only while the order path is closed (RISK_CTRL.kill = 1 or TX_CTRL.tx_en = 0) and the values are valid (OUCH constants as above; template: EtherType 0x0800, 0x45, total length 78, flags/fragment 0x4000, protocol 17, a correct IPv4 header checksum, UDP length 58, UDP checksum 0); else refused and the previous configuration stays. TX_STATUS shows the outcome. A write with 0 does nothing.";
+                sw = w; hw = r;
+            } commit[0:0];
+        } TX_COMMIT @ 0x08;
+
+        reg {
+            name = "Transmit status";
+            field {
+                desc = "A TX_COMMIT has been accepted since reset (needed for transmit).";
+                sw = r; hw = w;
+            } cfg_valid[0:0];
+            field {
+                desc = "The last TX_COMMIT was refused. Cleared by an accepted one; 0 after reset.";
+                sw = r; hw = w;
+            } cfg_refused[1:1];
+            field {
+                desc = "The last TX_USERREF_NEXT write was ignored (kill not 1, orders still queued, or 0). Cleared by one that takes effect; 0 after reset.";
+                sw = r; hw = w;
+            } userref_ignored[2:2];
+        } TX_STATUS @ 0x0C;
+
+        external reg {
+            name = "Set the next UserRefNum";
+            field {
+                desc = "Command: sets the UserRefNum the next order takes; the write response comes once it is decided. It takes effect only while RISK_CTRL.kill = 1, no order is queued and the value is not 0, else TX_STATUS.userref_ignored. Software writes it before releasing kill (software contract after reset).";
+                sw = w; hw = r;
+            } value[31:0];
+        } TX_USERREF_NEXT @ 0x10;
+
+        external reg {
+            name = "Next UserRefNum";
+            field {
+                desc = "The UserRefNum the next order takes, live (read through the command channel, in bus order); 1 after reset, 0 once none is left (2^32).";
+                sw = r; hw = w;
+            } value[31:0];
+        } TX_USERREF @ 0x14;
+
+        reg {
+            name = "Frame template";
+            field {
+                desc = "Template bytes 4i .. 4i+3 of the 42-byte Ethernet/IPv4/UDP header, byte 4i in [31:24] (wire order).";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } TX_TEMPLATE[10] @ 0x20 += 0x4;
+
+        reg {
+            name = "Frame template, last bytes";
+            field {
+                desc = "Template bytes 40 and 41, byte 40 in [31:24].";
+                sw = rw; hw = r;
+            } bytes[31:16] = 16'h0;
+        } TX_TEMPLATE_TAIL @ 0x48;
+
+        reg {
+            name = "Mailbox side";
+            field {
+                desc = "OUCH Side: B or S (any other is rejected INVALID).";
+                sw = rw; hw = r;
+            } side[7:0] = 8'h0;
+        } MBOX_SIDE @ 0x50;
+
+        reg {
+            name = "Mailbox quantity";
+            field {
+                desc = "Order quantity.";
+                sw = rw; hw = r;
+            } qty[31:0] = 32'h0;
+        } MBOX_QTY @ 0x54;
+
+        reg {
+            name = "Mailbox price";
+            field {
+                desc = "Limit price, ITCH Price(4).";
+                sw = rw; hw = r;
+            } price[31:0] = 32'h0;
+        } MBOX_PRICE @ 0x58;
+
+        reg {
+            name = "Mailbox locate";
+            field {
+                desc = "Stock locate (for LOCATE_ALLOW and the ring entry; matching it with MBOX_STOCK_* is the host's rule).";
+                sw = rw; hw = r;
+            } locate[15:0] = 16'h0;
+        } MBOX_LOCATE @ 0x5C;
+
+        reg {
+            name = "Mailbox stock, bytes 0..3";
+            field {
+                desc = "Symbol bytes 0..3 in wire order, byte 0 in [31:24] (space padded, as ITCH Stock).";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } MBOX_STOCK_0 @ 0x60;
+
+        reg {
+            name = "Mailbox stock, bytes 4..7";
+            field {
+                desc = "Symbol bytes 4..7, byte 4 in [31:24].";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } MBOX_STOCK_1 @ 0x64;
+
+        reg {
+            name = "Mailbox time in force";
+            field {
+                desc = "OUCH Time In Force code.";
+                sw = rw; hw = r;
+            } tif[7:0] = 8'h0;
+        } MBOX_TIF @ 0x68;
+
+        reg {
+            name = "Mailbox ClOrdID";
+            field {
+                desc = "ClOrdID bytes 4i .. 4i+3, byte 4i in [31:24]; every byte in [0-9A-Za-z ] (else INVALID).";
+                sw = rw; hw = r;
+            } bytes[31:0] = 32'h0;
+        } MBOX_CLORDID[3] @ 0x70 += 0x4;
+
+        reg {
+            name = "Mailbox ClOrdID, last bytes";
+            field {
+                desc = "ClOrdID bytes 12 and 13, byte 12 in [31:24].";
+                sw = rw; hw = r;
+            } bytes[31:16] = 16'h0;
+        } MBOX_CLORDID_TAIL @ 0x7C;
+
+        reg {
+            name = "Mailbox send";
+            field {
+                desc = "Write 1: copy MBOX_SIDE .. MBOX_CLORDID_TAIL into the mailbox FIFO (posted). With the FIFO full it is dropped: MBOX_STATUS.dropped and MBOX_DROP. Each such write sends once, also two in consecutive bus cycles.";
+                sw = w; hw = r; singlepulse; swmod;
+            } send[0:0] = 1'b0;
+        } MBOX_SEND @ 0x80;
+
+        reg {
+            name = "Mailbox space";
+            field {
+                desc = "Free FIFO entries, live (0 during reset): this many MBOX_SEND writes from now on all fit.";
+                sw = r; hw = w;
+            } space[4:0];
+        } MBOX_SPACE @ 0x84;
+
+        reg {
+            name = "Mailbox status";
+            field {
+                desc = "The last MBOX_SEND was dropped. Cleared by one that fits; 0 after reset.";
+                sw = r; hw = w;
+            } dropped[0:0];
+        } MBOX_STATUS @ 0x88;
+
+        counter64_live MBOX_DROP @ 0x90;  // MBOX_SEND writes dropped (host clock domain)
+    } TX @ 0x2000;
+
     external mem {
         name = "Symbol bitmap";
         desc = "Stock-locate subscription bitmap of itch_decoder: bit i of word w is stock locate 32 * w + i (1 = subscribed). Written only by software; the hardware never writes it. After a reset the hardware clears every word (2048 net clock cycles, about 13 us); an access in that time waits until the clearing is done, so the bitmap reads 0 after reset. A write's response (BRESP) comes once it is in effect: every message looked up after it sees the new value. Software keeps its own copy and rewrites all 2048 words after every reset (see the software contract after reset).";
@@ -409,4 +841,12 @@ addrmap hft_csr {
         memwidth = 32;
         sw = rw;
     } SYMBOL @ 0x8000;
+
+    external mem {
+        name = "Locate allow bitmap";
+        desc = "risk_check's allow bitmap: bit i of word w is stock locate 32 * w + i (1 = orders allowed; 0 = rejected LOCATE). Written only by software. After a reset the hardware clears every word (2048 net clock cycles); an access in that time waits until the clearing is done. An access is in bus order with the RISK, STRATEGY and TX commands, and a write's response comes once it is in effect: every order decided after it sees the new value. Software keeps its own copy and rewrites it after every reset (software contract after reset).";
+        mementries = 2048;
+        memwidth = 32;
+        sw = rw;
+    } LOCATE_ALLOW @ 0xA000;
 };

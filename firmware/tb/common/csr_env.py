@@ -1,9 +1,10 @@
 """Test environment of hft_csr_wrap, shared by its unit test (tb/unit/test_hft_csr_wrap.py, the
 wrapper is the DUT) and the system test (tb/system/test_rx_csr.py, the wrapper is u_wrap next to
 eth_ip_udp_rx): NET and FEED configurations (FEED with ITCH_CTRL) and their commit, the cfg_*
-monitors, the resync requests, the snapshot of the rx_stats, mold_stats and itch_stats counters
-and the feed state with its model, and the SYMBOL accesses at the wrapper's sym_* port (audit/10
-§2.3, §2.4; audit/11 §2.7; audit/12 §2.7).
+monitors, the resync requests, the snapshot of the rx_stats, mold_stats, itch_stats and order_stats
+counters and the feed state with its model, the SYMBOL accesses at the wrapper's sym_* port (audit/10
+§2.3, §2.4; audit/11 §2.7; audit/12 §2.7), and the order path blocks (audit/14 S7: RuleCfg, LimCfg, TxCfg,
+MboxOrder and the unit test's net-side models in Ord).
 
 `root` is the hft_csr_wrap instance; the bus is driven at the DUT's s_axil_* ports. The monitors
 read signals inside the wrapper (grey box): the handshakes' acceptance and landing edges.
@@ -17,7 +18,7 @@ from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 
 from common.axil import AxilDriver
-from model.csr import OKAY, addr, mem
+from model.csr import OKAY, addr, mem, regs_by_path
 from model.itch import ItchClass, Outcome
 from model.mold import ACCEPTED, MoldStatus
 from model.net import RxReason
@@ -52,6 +53,13 @@ SNAP_NAMES = [f"STATS.{n}" for n in COUNTERS] + [f"FEED.{n}" for n in MOLD_COUNT
 SNAP_NAMES += [f"ITCH.{n}" for n in ITCH_COUNTERS]
 SNAP_NAMES += [f"RING.RING_{n}" for n in ("COMMIT_ENTRIES", "DROP_PKTS", "DROP_ENTRIES")]
 SNAP_NAMES += ["FEED.EXPECTED_SEQ", "FEED.FEED_STATE"]
+# order_stats (order_stats.sv index order), then the levels the snapshot takes with it.
+REASONS = ("KILL", "TX_OFF", "INVALID", "LOCATE", "QTY", "NOTIONAL", "BUDGET", "RATE", "TX_BUSY", "RING_FULL")
+ORD_NAMES = [f"STRATEGY.RULE_FIRED_{n}" for n in range(8)] + ["RISK.ORDERS_SENT_HW", "RISK.ORDERS_SENT_HOST"]
+ORD_NAMES += [f"RISK.RISK_REJECT_{r}" for r in REASONS] + ["RING.RING_DROP_ORDERS"]
+SNAP_NAMES += ORD_NAMES + ["RING.RING_ORDER_QUEUED", "STRATEGY.RULE_ARMED", "RISK.BUDGET"]
+# Snapshot registers of one word (the others are 64-bit LO/HI pairs).
+SINGLE = {"FEED.FEED_STATE", "RING.RING_ORDER_QUEUED", "STRATEGY.RULE_ARMED", "RISK.BUDGET"}
 N_CNT = len(SNAP_NAMES)
 MASK64 = (1 << 64) - 1
 # hft_csr_wrap delays mpkt_* and mres_* by this many net cycles before the mold and ITCH counters, so that a
@@ -454,7 +462,9 @@ class Snap:
     rx_stats counters of every event sampled before E, the mold and ITCH counters of every event
     sampled more than STATS_DELAY net edges before E, the ring counters sampled on E and the feed state
     sampled FEED_DELAY net edges before E. ITCH counters: a result waits for its packet event, which adds it for OK, HEARTBEAT and EOS
-    and drops it otherwise; a result on the edge of a packet event belongs to the next packet."""
+    and drops it otherwise; a result on the edge of a packet event belongs to the next packet. The order counters
+    count the ord_* events sampled before E (order_stats, no delay), and ord_queued, st_armed and st_budget are
+    the values sampled on E."""
 
     def __init__(self, w: Wrap, drive: bool = True):
         self.w, self.dut = w, w.root
@@ -465,6 +475,8 @@ class Snap:
         self.itch_events: list[tuple[int, tuple[int, int] | None, int | None]] = []
         self.feed_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (E, synced, eos) it sampled
         self.ring_at: dict[int, tuple[int, int, int]] = {}  # net edge -> the cnt_ring_* it sampled
+        self.ord_events: list[tuple[int, list[int]]] = []  # (sampling net edge, order counter increments)
+        self.levels_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (ord_queued, st_armed, st_budget)
         self.edges: list[int] = []  # every net edge, in order
         self.edge_index: dict[int, int] = {}  # net edge -> its index in edges
         self.accepts: list[int] = []  # net edges that take a snapshot (data handshake accepts)
@@ -505,6 +517,19 @@ class Snap:
             dut.mres_outcome.value = int(rng.choice(list(Outcome)))
             for name in ("cnt_ring_commit_entries", "cnt_ring_drop_pkts", "cnt_ring_drop_entries"):
                 getattr(dut, name).value = rng.choice([0, MASK64, rng.getrandbits(64)])
+            # Order events of any rule, source and reason, out-of-enum codes included (they count
+            # nowhere), and the levels the snapshot takes.
+            dut.ord_fire_valid.value = int(rng.random() < self.p_valid)
+            dut.ord_fire_rule.value = rng.getrandbits(3)
+            dut.ord_sent_valid.value = int(rng.random() < self.p_valid)
+            dut.ord_sent_source.value = rng.getrandbits(2)
+            dut.ord_rej_valid.value = int(rng.random() < self.p_valid)
+            dut.ord_rej_reason.value = rng.getrandbits(4)
+            dut.ord_lost_valid.value = int(rng.random() < self.p_valid)
+            dut.ord_lost_reason.value = rng.getrandbits(4)
+            dut.ord_queued.value = rng.randint(0, 16)
+            dut.st_armed.value = rng.getrandbits(8)
+            dut.st_budget.value = rng.choice([0, 0xFFFF_FFFF, rng.getrandbits(32)])
             if rng.random() < 0.1:
                 dut.feed_expected_seq.value = rng.getrandbits(64)
                 dut.feed_synced.value = rng.getrandbits(1)
@@ -534,10 +559,15 @@ class Snap:
             feed = (int(dut.feed_expected_seq.value), int(dut.feed_synced.value), int(dut.feed_eos.value))
             ring = (int(dut.cnt_ring_commit_entries.value), int(dut.cnt_ring_drop_pkts.value),
                     int(dut.cnt_ring_drop_entries.value))  # fmt: skip
+            levels = (int(dut.ord_queued.value), int(dut.st_armed.value), int(dut.st_budget.value))
+            ord_inc = None if dut.net_rst.value else ord_increments(dut)
             await RisingEdge(dut.net_clk)
             edge = get_sim_time()
             self.feed_at[edge] = feed
             self.ring_at[edge] = ring
+            self.levels_at[edge] = levels
+            if ord_inc is not None and any(ord_inc):
+                self.ord_events.append((edge, ord_inc))
             self.edge_index[edge] = len(self.edges)
             self.edges.append(edge)
             if accept:
@@ -607,13 +637,19 @@ class Snap:
         i = at - FEED_DELAY
         assert i >= 0, "snapshot before the feed delay registers were loaded"
         e, synced, eos = self.feed_at[self.edges[i]]
-        return [v & MASK64 for v in c + m + it] + list(self.ring_at[edge]) + [e, synced | eos << 1]
+        o = [0] * len(ORD_NAMES)
+        for t, inc in self.ord_events:
+            if t >= edge:
+                break
+            o = [a + b for a, b in zip(o, inc, strict=True)]
+        base = [v & MASK64 for v in c + m + it] + list(self.ring_at[edge]) + [e, synced | eos << 1]
+        return base + [v & MASK64 for v in o] + list(self.levels_at[edge])
 
     async def read_counters(self) -> list[int]:
         """Every snapshot register, in SNAP_NAMES order (64-bit values from LO and HI)."""
         out = []
         for name in SNAP_NAMES:
-            if name == "FEED.FEED_STATE":
+            if name in SINGLE:
                 data, resp = await self.w.drv.read(addr(name))
                 assert resp == OKAY
                 out.append(data)
@@ -662,6 +698,23 @@ class Snap:
         want = self.model_at(self.accepts[seq - 1])
         diff = {n: (g, x) for n, g, x in zip(SNAP_NAMES, got, want) if g != x}
         assert got == want, f"snapshot {seq}: (read, model) differ: {diff}"
+
+
+def ord_increments(dut) -> list[int]:
+    """The order counter increments of the inputs presented now (order_stats, hand-coded: rule n -> n;
+    source RULE 1 / HOST 2 -> ORDERS_SENT_HW / HOST; reason 1..10 -> RISK_REJECT_<reason>, on both reject
+    inputs; a lost reject -> RING_DROP_ORDERS). Codes outside the enums count nowhere."""
+    inc = [0] * len(ORD_NAMES)
+    if dut.ord_fire_valid.value:
+        inc[int(dut.ord_fire_rule.value)] += 1
+    if dut.ord_sent_valid.value and int(dut.ord_sent_source.value) in (1, 2):
+        inc[7 + int(dut.ord_sent_source.value)] += 1
+    for valid, reason in ((dut.ord_rej_valid, dut.ord_rej_reason), (dut.ord_lost_valid, dut.ord_lost_reason)):
+        if valid.value and 1 <= int(reason.value) <= len(REASONS):
+            inc[9 + int(reason.value)] += 1
+    if dut.ord_lost_valid.value:
+        inc[-1] += 1
+    return inc
 
 
 @dataclass(frozen=True)
@@ -797,3 +850,323 @@ class Sym:
         assert len(self.rsps) == len(cmds) and len(self.acks) == len(cmds), (
             f"{len(cmds)} commands, {len(self.rsps)} responses, {len(self.acks)} acks")
         assert [k for _, k in self.acks] == [bool(c.wr) for c in cmds], "ack kind differs from the request"
+
+
+# ---- order path (audit/14 S7; decisions 32-38) ----
+
+LOCATE_ALLOW = mem("LOCATE_ALLOW")
+RISK_CTRL = addr("RISK.RISK_CTRL")
+TX_CTRL = addr("TX.TX_CTRL")
+MBOX_SEND = addr("TX.MBOX_SEND")
+MBOX_SPACE = addr("TX.MBOX_SPACE")
+MBOX_STATUS = addr("TX.MBOX_STATUS")
+TX_STATUS = addr("TX.TX_STATUS")
+RULE_STATUS = addr("STRATEGY.RULE_STATUS")
+TX_USERREF = addr("TX.TX_USERREF")
+# Commands (external registers) and their net-side pulse, as Ord records it.
+COMMANDS = {
+    "RULE_COMMIT": addr("STRATEGY.RULE_COMMIT"),
+    "RULE_ARM": addr("STRATEGY.RULE_ARM"),
+    "RULE_DISARM": addr("STRATEGY.RULE_DISARM"),
+    "RISK_COMMIT": addr("RISK.RISK_COMMIT"),
+    "BUDGET_ADD": addr("RISK.BUDGET_ADD"),
+    "TX_COMMIT": addr("TX.TX_COMMIT"),
+    "USERREF": addr("TX.TX_USERREF_NEXT"),
+}
+CMD_TX_COMMIT = 5  # hft_csr_wrap cmd_kind_e (grey box: a TX_COMMIT refused while the path is open)
+
+
+def wire_word(b: bytes) -> int:
+    """Register value of up to 4 bytes in wire order: the first byte in [31:24]."""
+    return int.from_bytes(b.ljust(4, b"\0"), "big")
+
+
+def le_int(b: bytes) -> int:
+    """A byte string as an RTL vector with byte i in [8i+7:8i]."""
+    return int.from_bytes(b, "little")
+
+
+@dataclass(frozen=True)
+class RuleCfg:
+    """One rule as software writes it (RULE_CTRL .. RULE_OFFSET) and as strategy_engine gets it (strat_rule_t)."""
+
+    enable: int = 0
+    msg_mask: int = 0
+    locate: int = 0
+    side_match: int = 0
+    price_ge: int = 0
+    threshold: int = 0
+    min_shares: int = 0
+    action_side: int = 0
+    qty_min: int = 0
+    qty: int = 0
+    price_mode: int = 0
+    offset: int = 0
+    tif: int = 0
+
+    @staticmethod
+    def random(rng: random.Random) -> "RuleCfg":
+        return RuleCfg(rng.getrandbits(1), rng.getrandbits(3), rng.getrandbits(16), rng.getrandbits(2),
+                       rng.getrandbits(1), rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(2),
+                       rng.getrandbits(1), rng.getrandbits(32), rng.getrandbits(1), rng.getrandbits(32),
+                       rng.getrandbits(8))  # fmt: skip
+
+    def writes(self) -> list[tuple[int, int]]:
+        ctrl = (self.enable | self.msg_mask << 1 | self.side_match << 4 | self.price_ge << 6 | self.action_side << 8
+                | self.qty_min << 10 | self.price_mode << 11 | self.tif << 16)  # fmt: skip
+        return [(addr("STRATEGY.RULE_CTRL"), ctrl), (addr("STRATEGY.RULE_LOCATE"), self.locate),
+                (addr("STRATEGY.RULE_THRESHOLD"), self.threshold), (addr("STRATEGY.RULE_MIN_SHARES"), self.min_shares),
+                (addr("STRATEGY.RULE_QTY"), self.qty), (addr("STRATEGY.RULE_OFFSET"), self.offset)]  # fmt: skip
+
+    def packed(self) -> int:
+        """strat_rule_t (hft_pkg.sv, first member most significant), hand-written."""
+        fields = [(self.enable, 1), (self.msg_mask, 3), (self.locate, 16), (self.side_match, 2), (self.price_ge, 1),
+                  (self.threshold, 32), (self.min_shares, 32), (self.action_side, 2), (self.qty_min, 1),
+                  (self.qty, 32), (self.price_mode, 1), (self.offset, 32), (self.tif, 8)]  # fmt: skip
+        v = 0
+        for value, width in fields:
+            v = v << width | value
+        return v
+
+
+@dataclass(frozen=True)
+class LimCfg:
+    max_qty: int = 0
+    max_notional: int = 0
+    refill: int = 0
+    period: int = 0
+    burst: int = 0
+
+    @staticmethod
+    def random(rng: random.Random) -> "LimCfg":
+        return LimCfg(rng.getrandbits(32), rng.getrandbits(64), rng.getrandbits(32), rng.getrandbits(32),
+                      rng.getrandbits(32))  # fmt: skip
+
+    def writes(self) -> list[tuple[int, int]]:
+        return [(addr("RISK.MAX_QTY"), self.max_qty), (addr("RISK.MAX_NOTIONAL_LO"), self.max_notional & 0xFFFF_FFFF),
+                (addr("RISK.MAX_NOTIONAL_HI"), self.max_notional >> 32), (addr("RISK.RATE_REFILL"), self.refill),
+                (addr("RISK.RATE_PERIOD"), self.period), (addr("RISK.RATE_BURST"), self.burst)]  # fmt: skip
+
+
+@dataclass(frozen=True)
+class TxCfg:
+    template: bytes = bytes(42)
+    display: int = 0
+    capacity: int = 0
+    ise: int = 0
+    cross_type: int = 0
+
+    @staticmethod
+    def random(rng: random.Random) -> "TxCfg":
+        return TxCfg(rng.randbytes(42), rng.getrandbits(8), rng.getrandbits(8), rng.getrandbits(8), rng.getrandbits(8))
+
+    def writes(self) -> list[tuple[int, int]]:
+        w = [(addr(f"TX.TX_TEMPLATE[{i}]"), wire_word(self.template[4 * i : 4 * i + 4])) for i in range(10)]
+        w.append((addr("TX.TX_TEMPLATE_TAIL"), wire_word(self.template[40:42])))
+        ouch = self.display | self.capacity << 8 | self.ise << 16 | self.cross_type << 24
+        return [*w, (addr("TX.TX_OUCH"), ouch)]
+
+
+@dataclass(frozen=True)
+class MboxOrder:
+    side: int = 0x42
+    qty: int = 0
+    price: int = 0
+    locate: int = 0
+    stock: bytes = b"        "
+    tif: int = 0x30
+    clordid: bytes = b" " * 14
+
+    @staticmethod
+    def random(rng: random.Random) -> "MboxOrder":
+        return MboxOrder(rng.getrandbits(8), rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(16),
+                         rng.randbytes(8), rng.getrandbits(8), rng.randbytes(14))  # fmt: skip
+
+    def writes(self) -> list[tuple[int, int]]:
+        w = [(addr("TX.MBOX_SIDE"), self.side), (addr("TX.MBOX_QTY"), self.qty), (addr("TX.MBOX_PRICE"), self.price),
+             (addr("TX.MBOX_LOCATE"), self.locate), (addr("TX.MBOX_STOCK_0"), wire_word(self.stock[:4])),
+             (addr("TX.MBOX_STOCK_1"), wire_word(self.stock[4:])), (addr("TX.MBOX_TIF"), self.tif)]  # fmt: skip
+        w += [(addr(f"TX.MBOX_CLORDID[{i}]"), wire_word(self.clordid[4 * i : 4 * i + 4])) for i in range(3)]
+        return [*w, (addr("TX.MBOX_CLORDID_TAIL"), wire_word(self.clordid[12:]))]
+
+    def at_port(self) -> tuple[int, ...]:
+        """m_host_* (side, qty, price, locate, stock, tif, clordid) with byte i of stock and ClOrdID in [8i+7:8i]."""
+        return (self.side, self.qty, self.price, self.locate, le_int(self.stock), self.tif, le_int(self.clordid))
+
+
+@dataclass
+class Pulse:
+    edge: int  # the net edge that samples it
+    name: str  # COMMANDS key, or "TX_REFUSED" (a TX_COMMIT refused while the path is open: no cfg_tx_wr)
+    data: tuple
+    kill: int  # ctl_kill and ctl_tx_en in its cycle
+    tx_en: int
+
+
+class Ord:
+    """The order path of hft_csr_wrap in the unit test (grey box).
+
+    Net-side models with the documented timing of the real blocks: strategy_engine (st_error changes on the
+    edge that samples cfg_rule_wr, to a value the test sets in `next_error`), risk_check (ev_userref_ignored
+    and st_userref after the edge that samples cmd_userref_wr, ignored when `ignore_userref`; st_budget adds
+    a BUDGET_ADD), order_tx_builder (a cfg_tx_wr sampled on edge k is decided on edge k+2: ev_cfg_refused for
+    one cycle when `refuse_tx`, else st_tx_cfg_valid set) and the allow bitmap command port (as Sym, with its
+    own RAM and `loc_p_ready`). The mailbox reader takes m_host_* with probability `host_p_ready`. Monitors:
+    every command pulse with its edge and the controls of its cycle; every host order taken; every external
+    ack on the host side."""
+
+    def __init__(self, w: Wrap):
+        self.w, self.r = w, w.root
+        self.pulses: list[Pulse] = []
+        self.taken: list[tuple[int, tuple[int, ...]]] = []  # (net edge that takes it, m_host_* fields)
+        self.acks: list[tuple[int, str]] = []  # (host edge after which an external ack is high, register)
+        self.loc_ram: dict[int, int] = {}
+        self.loc_cmds: list[tuple[int, SymCmd]] = []
+        self.loc_p_ready = 1.0
+        self.host_p_ready = 0.0
+        self.next_error = 0
+        self.ignore_userref = False
+        self.refuse_tx = False
+        self.ctl: list[tuple[int, int, int]] = []  # (time in the cycle, ctl_kill, ctl_tx_en), every net cycle
+        r = self.r
+        r.st_error.value = 0xFF
+        r.st_armed.value = 0
+        r.st_userref.value = 1
+        r.st_budget.value = 0
+        r.st_tx_cfg_valid.value = 0
+        r.ev_cfg_refused.value = 0
+        r.ev_userref_ignored.value = 0
+        r.loc_req_ready.value = 0
+        r.loc_rsp_valid.value = 0
+        r.loc_rsp_rdata.value = 0
+        r.m_host_ready.value = 0
+        cocotb.start_soon(self._net())
+        cocotb.start_soon(self._host())
+
+    def sample(self) -> list[tuple[str, tuple]]:
+        r = self.r
+        out = []
+        if r.cfg_rule_wr.value:
+            out.append(("RULE_COMMIT", (int(r.cfg_rule_idx.value), int(r.cfg_rule.value))))
+        if r.cmd_arm.value:
+            out.append(("RULE_ARM", (int(r.cmd_arm_mask.value),)))
+        if r.cmd_disarm.value:
+            out.append(("RULE_DISARM", (int(r.cmd_disarm_mask.value),)))
+        if r.cfg_lim_wr.value:
+            out.append(("RISK_COMMIT", (int(r.cfg_max_qty.value), int(r.cfg_max_notional.value),
+                                        int(r.cfg_rate_refill.value), int(r.cfg_rate_period.value),
+                                        int(r.cfg_rate_burst.value))))  # fmt: skip
+        if r.cmd_budget_add.value:
+            out.append(("BUDGET_ADD", (int(r.cmd_budget_amount.value),)))
+        if r.cmd_userref_wr.value:
+            out.append(("USERREF", (int(r.cmd_userref_value.value),)))
+        if r.cfg_tx_wr.value:
+            out.append(("TX_COMMIT", (int(r.cfg_template.value), int(r.cfg_display.value), int(r.cfg_capacity.value),
+                                      int(r.cfg_ise.value), int(r.cfg_cross_type.value))))  # fmt: skip
+        elif r.pulse_q.value and int(r.cmd_dst.value) >> (len(r.cmd_dst.value) - 4) == CMD_TX_COMMIT:
+            out.append(("TX_REFUSED", ()))
+        return out
+
+    async def _net(self) -> None:
+        r, rng = self.r, self.w.rng
+        tx_decide: list[int] = []  # countdowns of cfg_tx_wr decisions
+        while True:
+            loc_ready = rng.random() < self.loc_p_ready and not r.net_rst.value
+            r.loc_req_ready.value = int(loc_ready)
+            host_ready = rng.random() < self.host_p_ready
+            r.m_host_ready.value = int(host_ready)
+            await ReadOnly()
+            rst = bool(r.net_rst.value)
+            pulses = [] if rst else self.sample()
+            kill, tx_en = int(r.ctl_kill.value), int(r.ctl_tx_en.value)
+            self.ctl.append((get_sim_time(), kill, tx_en))
+            take = None
+            if not rst and host_ready and r.m_host_valid.value:
+                take = tuple(int(getattr(r, f"m_host_{n}").value)
+                             for n in ("side", "qty", "price", "locate", "stock", "tif", "clordid"))  # fmt: skip
+            loc = None
+            if not rst and loc_ready and r.loc_req_valid.value:
+                loc = SymCmd.of(int(r.loc_req_wr.value), int(r.loc_req_addr.value), int(r.loc_req_wdata.value),
+                                int(r.loc_req_wstrb.value))  # fmt: skip
+            await RisingEdge(r.net_clk)
+            edge = get_sim_time()
+            # Outputs of the models after this edge (one-cycle events back to 0 first).
+            r.ev_cfg_refused.value = 0
+            r.ev_userref_ignored.value = 0
+            r.loc_rsp_valid.value = 0
+            for p in pulses:
+                self.pulses.append(Pulse(edge, p[0], p[1], kill, tx_en))
+                if p[0] == "RULE_COMMIT":
+                    r.st_error.value = self.next_error
+                elif p[0] == "USERREF":
+                    r.ev_userref_ignored.value = int(self.ignore_userref)
+                    if not self.ignore_userref:
+                        r.st_userref.value = p[1][0]
+                elif p[0] == "BUDGET_ADD":
+                    r.st_budget.value = min(int(r.st_budget.value) + p[1][0], 0xFFFF_FFFF)
+                elif p[0] == "TX_COMMIT":
+                    tx_decide.append(2)
+            if tx_decide and tx_decide[0] == 0:  # sampled 2 edges ago: decided on this edge
+                tx_decide.pop(0)
+                if self.refuse_tx:
+                    r.ev_cfg_refused.value = 1
+                else:
+                    r.st_tx_cfg_valid.value = 1
+            tx_decide = [n - 1 for n in tx_decide]
+            if take is not None:
+                self.taken.append((edge, take))
+            if loc is not None:
+                self.loc_cmds.append((edge, loc))
+                old = self.loc_ram.get(loc.addr, 0)
+                r.loc_rsp_valid.value = 1
+                r.loc_rsp_rdata.value = rng.getrandbits(32)
+                if loc.wr:
+                    bits = sum(0xFF << (8 * b) for b in range(4) if loc.wstrb >> b & 1)
+                    self.loc_ram[loc.addr] = (old & ~bits) | (loc.wdata & bits)
+                else:
+                    r.loc_rsp_rdata.value = old
+            if rst:
+                tx_decide = []
+                r.st_tx_cfg_valid.value = 0
+
+    async def _host(self) -> None:
+        r = self.r
+        regs = regs_by_path()
+        ext = [p for p, reg in regs.items() if any(f.external for f in reg.fields)]
+        names = {p: p.split(".")[1] for p in ext} | {"LOCATE_ALLOW": "LOCATE_ALLOW"}
+        handles = []
+        for p in [*ext, "LOCATE_ALLOW"]:
+            h = r.hwif_in
+            for part in p.split("."):
+                h = getattr(h, part)
+            for sig in ("wr_ack", "rd_ack"):
+                if hasattr(h, sig):
+                    handles.append((names[p], getattr(h, sig)))
+        while True:
+            await RisingEdge(r.host_clk)
+            edge = get_sim_time()
+            await ReadOnly()
+            for name, h in handles:
+                if h.value and not r.host_rst.value:
+                    self.acks.append((edge, name))
+
+    def named(self, name: str) -> list[Pulse]:
+        return [p for p in self.pulses if p.name == name]
+
+    async def idle(self, limit: int = 400) -> None:
+        """No command anywhere in the channel and the mailbox empty and out of its reset handshake (wr_count 0: the
+        fence lets a command through at once), grey box; then two more host edges."""
+        r = self.r
+        for _ in range(limit):
+            await ReadOnly()
+            if int(r.mbox_count.value) != 0:
+                await RisingEdge(r.host_clk)
+                continue
+            if int(r.h_state_q.value) == 0 and int(r.n_state_q.value) == 0 and r.u_cmd_cdc.src_ready.value:
+                if r.u_rsp_cdc.src_ready.value and not r.nop_ack_q.value:
+                    break
+            await RisingEdge(r.host_clk)
+        else:
+            raise AssertionError("the command channel never became idle")
+        for _ in range(2):
+            await RisingEdge(r.host_clk)

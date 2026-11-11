@@ -38,6 +38,7 @@ class Field:
     singlepulse: bool
     reset: int | None  # None: no reset (a hardware-driven wire)
     desc: str | None
+    external: bool = False  # of an external register: no storage in the block (the hardware answers)
 
     @property
     def mask(self) -> int:
@@ -45,8 +46,9 @@ class Field:
 
     @property
     def storage(self) -> bool:
-        """Software-written state the model keeps (singlepulse fields read nothing back)."""
-        return self.sw_write and not self.singlepulse
+        """Software-written state the model keeps (singlepulse fields read nothing back, external
+        registers keep nothing in the block)."""
+        return self.sw_write and not self.singlepulse and not self.external
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ def _field(node: FieldNode) -> Field:
         singlepulse=bool(node.get_property("singlepulse")),
         reset=reset if isinstance(reset, int) else None,
         desc=node.get_property("desc"),
+        external=bool(node.parent.external),
     )
 
 
@@ -194,6 +197,7 @@ class CsrModel:
             (r.path, f.name): f.reset or 0 for r in self.regs for f in r.fields if f.storage
         }  # fmt: skip
         self.mem_state: dict[tuple[str, int], int] = {}  # (memory path, word) -> value; missing: 0
+        self.ext_writes: list[tuple[str, int]] = []  # (external register path, data & its bit enables), in order
 
     def mem_at(self, address: int) -> tuple[Mem, int] | None:
         for m in self.mems:
@@ -221,6 +225,10 @@ class CsrModel:
             return SLVERR, set()
         bits = wstrb_mask(strb)
         pulses = set()
+        if any(f.external for f in reg.fields):
+            fields = sum(f.mask for f in reg.fields if f.sw_write)
+            self.ext_writes.append((reg.path, data & bits & fields))
+            return OKAY, pulses
         for f in reg.fields:
             if not f.sw_write:
                 continue

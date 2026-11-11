@@ -20,22 +20,29 @@
 //                cycles. COMMIT=0: wr_commit and wr_rollback are ignored; tie them to 0.
 // Note         : FWFT: dout is valid whenever empty is low; rd_en pops it. Memory is an
 //                async-read array (LUTRAM). IMPL="xpm" selects cdc_async_fifo_xpm (Vivado only).
+// Fill level   : WR_COUNT=1 (portable only): wr_count = words written and not yet seen read by the write
+//                side, registered with full from the same pointers: outside reset and busy, full ==
+//                (wr_count == 2^DEPTH_LOG2), and 2^DEPTH_LOG2 - wr_count writes from this cycle on all fit
+//                (reads only free space). 2^DEPTH_LOG2 while wr_rst_busy (from the edge after rst).
+//                WR_COUNT=0: wr_count is 0.
 module cdc_async_fifo #(
     parameter int unsigned WIDTH       = 64,
     parameter int unsigned DEPTH_LOG2  = 4,
     parameter int unsigned SYNC_STAGES = 2,
     parameter string       IMPL        = "portable",
-    parameter bit          COMMIT      = 1'b0
+    parameter bit          COMMIT      = 1'b0,
+    parameter bit          WR_COUNT    = 1'b0
 ) (
-    input  logic             rst,
-    input  logic             wr_clk,
-    input  logic             wr_en,
-    input  logic [WIDTH-1:0] din,
-    input  logic             wr_commit,
-    input  logic             wr_rollback,
-    output logic             full,
-    output logic             overflow,
-    output logic             wr_rst_busy,
+    input  logic                rst,
+    input  logic                wr_clk,
+    input  logic                wr_en,
+    input  logic [   WIDTH-1:0] din,
+    input  logic                wr_commit,
+    input  logic                wr_rollback,
+    output logic                full,
+    output logic                overflow,
+    output logic                wr_rst_busy,
+    output logic [DEPTH_LOG2:0] wr_count,
 
     input  logic             rd_clk,
     input  logic             rd_en,
@@ -51,7 +58,12 @@ module cdc_async_fifo #(
     $error("cdc_async_fifo: COMMIT=1 needs IMPL=\"portable\" (XPM has no commit)");
   end
 
+  if (WR_COUNT && IMPL == "xpm") begin : g_check_count
+    $error("cdc_async_fifo: WR_COUNT=1 needs IMPL=\"portable\"");
+  end
+
   if (IMPL == "xpm") begin : g_xpm
+    assign wr_count = '0;
 `ifdef HFT_HAVE_XPM
     cdc_async_fifo_xpm #(
         .WIDTH      (WIDTH),
@@ -140,6 +152,30 @@ module cdc_async_fifo #(
         wgray_q <= wgray_next;
         full    <= wgray_next == {~rgray_s[N:N-1], rgray_s[N-2:0]};
       end
+    end
+
+    if (WR_COUNT) begin : g_count
+      logic [N:0] rbin_s, count_q;
+
+      // Read pointer as the write side sees it, in binary (gray to binary: XOR of the higher bits).
+      always_comb begin
+        rbin_s[N] = rgray_s[N];
+        for (int i = N - 1; i >= 0; i--) begin
+          rbin_s[i] = rbin_s[i+1] ^ rgray_s[i];
+        end
+      end
+
+      // Same edge and pointers as full; while busy (writes are ignored) it reads as full.
+      always_ff @(posedge wr_clk) begin
+        if (rst_req_q) begin
+          count_q <= (N + 1)'(2 ** N);
+        end else begin
+          count_q <= wbin_next - rbin_s;
+        end
+      end
+      assign wr_count = wr_rst_busy ? (N + 1)'(2 ** N) : count_q;
+    end else begin : g_no_count
+      assign wr_count = '0;
     end
 
     assign vbin_next = vbin_q + (N + 1)'(vbin_q != cbin_q);
