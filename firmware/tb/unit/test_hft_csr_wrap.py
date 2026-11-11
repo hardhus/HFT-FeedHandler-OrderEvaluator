@@ -811,7 +811,9 @@ async def tc_sym_read_write(dut):
     w = await start(dut)
     sym = w.sym
     sym.p_ready = 0.4
-    words = [0, SYMBOL.entries - 1] + [w.rng.randrange(SYMBOL.entries) for _ in range(6)]
+    # Distinct words: a batch below takes disjoint ones, and a repeated word would put a write and a read of it
+    # in flight together (the order between the write and read channels is not defined).
+    words = [0, SYMBOL.entries - 1] + w.rng.sample(range(1, SYMBOL.entries - 1), 6)
     want: dict[int, int] = {}
     for strb in range(16):
         for word in words:
