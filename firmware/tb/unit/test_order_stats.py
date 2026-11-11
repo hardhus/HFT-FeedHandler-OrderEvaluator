@@ -42,6 +42,9 @@ class Stats:
         self.dut = dut
         self.mask = (1 << cnt_w()) - 1
         self.model = [0] * N_CNT
+        # Events per counter since the last reset, unmasked: at CNT_W=8 a counter that moved 256 times
+        # reads 0 again, so "did it move" is asked here, not of the model.
+        self.events = [0] * N_CNT
         self.cycles = 0
         cocotb.start_soon(self._check())
 
@@ -78,6 +81,7 @@ class Stats:
         d.lost_valid.value = 0
         if d.rst.value:
             self.model = [0] * N_CNT
+            self.events = [0] * N_CNT
             return
         inc = [0] * N_CNT
         if fire is not None:
@@ -91,6 +95,7 @@ class Stats:
             if lost in REJ:
                 inc[REJ[lost]] += 1
         self.model = [(c + i) & self.mask for c, i in zip(self.model, inc, strict=True)]
+        self.events = [e + i for e, i in zip(self.events, inc, strict=True)]
 
     async def sample(self) -> list[int]:
         await FallingEdge(self.dut.clk)
@@ -137,7 +142,7 @@ async def tc_counts(dut):
         await st.cycle(fire=opt(0.5, range(8)), sent=opt(0.5, range(4)), rej=rej, lost=lost)
     await st.sample()
     assert same > 20, f"only {same} cycles with one reason on both reject inputs"
-    assert all(v > 0 for v in st.model), f"a counter never moved: {st.model}"
+    assert all(e > 0 for e in st.events), f"a counter never moved: events {st.events}"
 
 
 @cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
