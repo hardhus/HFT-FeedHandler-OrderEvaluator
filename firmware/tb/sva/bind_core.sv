@@ -112,7 +112,9 @@ bind event_packer packer_props u_packer_props (
     .ord_write      (ord_ok),
     .ord_free       (ord_free),
     .oq_n           (oq_n_q),
-    .ring_credit_ret(ring_credit_ret)
+    .ring_credit_ret(ring_credit_ret),
+    .rp             (rp_q),
+    .pick           (pick_q)
 );
 
 bind itch_stats itch_stats_props #(

@@ -226,8 +226,11 @@ module event_packer
     end
   end
 
-  // The entry in stage 1 is always the oldest (rp_q); the one taken now is the next.
-  assign pick_slot = rp_q + OQ_W'(s1_ord_q);
+  // The entry in stage 1 is always the oldest (rp_q); the one taken now is the next: rp_q + s1_ord_q, kept in
+  // its own register (pick_q, set from both next values) so the queue's read address comes from a flop. The
+  // adder after s1_ord_q (fanout 130 into the LUTRAM address) failed the A7 at 156.25 MHz (-0.052 ns, S9).
+  logic [OQ_W-1:0] pick_q;
+  assign pick_slot = pick_q;
   assign ord_rd = pick_slot[0] ? bank1[pick_slot[OQ_W-1:1]] : bank0[pick_slot[OQ_W-1:1]];
   assign ord_desc = ord_rd.rej ? desc_pack_risk_reject(
       ord_rd.seq,
@@ -430,6 +433,7 @@ module event_packer
       cnt_drop_entries   <= '0;
       wp_q               <= '0;
       rp_q               <= '0;
+      pick_q             <= '0;
       oq_n_q             <= '0;
       lost_pend_q        <= 1'b0;
       ring_credit_ret    <= 1'b0;
@@ -450,6 +454,7 @@ module event_packer
       end
       wp_q <= wp_rej + OQ_W'(s_rej_valid);
       rp_q <= rp_q + OQ_W'(ord_ok);
+      pick_q <= rp_q + OQ_W'(ord_ok) + OQ_W'(ord_pick && !ord_fail);  // next rp_q + next s1_ord_q
       oq_n_q          <= oq_n_q + RING_ORD_QUEUED_W'(s_sent_valid) + RING_ORD_QUEUED_W'(s_rej_valid) - RING_ORD_QUEUED_W'(ord_ok);
       lost_pend_q <= (lost_head && !lost_take) || (s_rej_lost && !mark_sent && !mark_tail);
       ring_credit_ret <= ord_ok;

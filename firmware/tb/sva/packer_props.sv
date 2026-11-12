@@ -5,27 +5,30 @@
 module packer_props
   import hft_pkg::*;
 (
-    input logic                         clk,
-    input logic                         rst,
-    input logic                         s_ev_valid,
-    input logic                         s_pkt_valid,
-    input logic                         pkt_accepted,
-    input logic                         s1_valid,
-    input logic                         fifo_wr_en,
-    input logic                         fifo_commit,
-    input logic                         fifo_rollback,
-    input logic                         fifo_full,
-    input logic                         fifo_wr_busy,
+    input logic                                 clk,
+    input logic                                 rst,
+    input logic                                 s_ev_valid,
+    input logic                                 s_pkt_valid,
+    input logic                                 pkt_accepted,
+    input logic                                 s1_valid,
+    input logic                                 fifo_wr_en,
+    input logic                                 fifo_commit,
+    input logic                                 fifo_rollback,
+    input logic                                 fifo_full,
+    input logic                                 fifo_wr_busy,
     // order entries
-    input logic                         s_sent_valid,
-    input logic                         s_rej_valid,
-    input logic                         s1_commit,
-    input logic                         s1_rollback,
-    input logic                         s1_ord,
-    input logic                         ord_write,
-    input logic                         ord_free,
-    input logic [RING_ORD_QUEUED_W-1:0] oq_n,
-    input logic                         ring_credit_ret
+    input logic                                 s_sent_valid,
+    input logic                                 s_rej_valid,
+    input logic                                 s1_commit,
+    input logic                                 s1_rollback,
+    input logic                                 s1_ord,
+    input logic                                 ord_write,
+    input logic                                 ord_free,
+    input logic [        RING_ORD_QUEUED_W-1:0] oq_n,
+    input logic                                 ring_credit_ret,
+    // the queue's read address: rp + s1_ord, kept in its own register (S9 timing)
+    input logic [$clog2(RISK_RING_CREDITS)-1:0] rp,
+    input logic [$clog2(RISK_RING_CREDITS)-1:0] pick
 );
   // Sim-only: initial + always (not always_ff) on purpose.
   logic        armed;
@@ -147,5 +150,12 @@ module packer_props
       ord_free && 32'(oq_n) > 32'(s1_ord) && !(s1_ord && !ord_write) |=> s1_ord)
   else begin
     $error("packer_props: a queued order entry not taken in a free cycle");
+  end
+
+  // The registered read address equals its definition every cycle.
+  a_pick :
+  assert property (@(posedge clk) disable iff (rst || !armed) pick == rp + $bits(rp)'(s1_ord))
+  else begin
+    $error("packer_props: the order queue read address differs from rp + s1_ord");
   end
 endmodule
