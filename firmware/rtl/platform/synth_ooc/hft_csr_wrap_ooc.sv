@@ -1,7 +1,11 @@
 // hft_csr_wrap_ooc: OOC synthesis harness for hft_csr_wrap. Every input goes through one register in
 // its own clock domain first (the AXI interconnect's and eth_ip_udp_rx's output registers), so the
 // bus decode, read mux and counter paths are register to register and inside the timing gate.
-// Every output is a port, so synthesis keeps (and the gate checks) all of the logic.
+// Every output is a port, so synthesis keeps (and the gate checks) all of the logic. The mailbox outputs
+// (m_host_*, the cdc_async_fifo's LUTRAM read data) go through one net_clk register, risk_check's input
+// register: without it the host_clk write to net_clk read path ended at a port, outside the CDC constraint
+// and the gate (S9). That register takes the FIFO head every cycle, like risk_check, so report_cdc lists the
+// head's LUTRAM read as CDC-26; cdc.tcl waives it for this FIFO only (decision 42).
 // Not used in simulation.
 // Clock domain : host_clk (s_axil_*, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
 //                cnt_ring_*, and the order path: ctl_*, cmd_*, loc_*, m_host_*, st_*, ev_*, ord_*)
@@ -183,6 +187,13 @@ module hft_csr_wrap_ooc
   order_src_e                    ord_sent_source_q;
   risk_reason_e ord_rej_reason_q, ord_lost_reason_q;
   logic [RING_ORD_QUEUED_W-1:0] ord_queued_q;
+  // mailbox outputs before their net_clk register
+  logic                         host_valid_d;
+  logic [7:0] host_side_d, host_tif_d;
+  logic [31:0] host_qty_d, host_price_d;
+  logic [ 15:0] host_locate_d;
+  logic [ 63:0] host_stock_d;
+  logic [111:0] host_clordid_d;
 
   always_ff @(posedge host_clk) begin
     host_rst_q           <= host_rst;
@@ -364,15 +375,15 @@ module hft_csr_wrap_ooc
       .cfg_cross_type         (cfg_cross_type),
       .st_tx_cfg_valid        (st_tx_cfg_valid_q),
       .ev_cfg_refused         (ev_cfg_refused_q),
-      .m_host_valid           (m_host_valid),
+      .m_host_valid           (host_valid_d),
       .m_host_ready           (m_host_ready_q),
-      .m_host_side            (m_host_side),
-      .m_host_qty             (m_host_qty),
-      .m_host_price           (m_host_price),
-      .m_host_locate          (m_host_locate),
-      .m_host_stock           (m_host_stock),
-      .m_host_tif             (m_host_tif),
-      .m_host_clordid         (m_host_clordid),
+      .m_host_side            (host_side_d),
+      .m_host_qty             (host_qty_d),
+      .m_host_price           (host_price_d),
+      .m_host_locate          (host_locate_d),
+      .m_host_stock           (host_stock_d),
+      .m_host_tif             (host_tif_d),
+      .m_host_clordid         (host_clordid_d),
       .ord_fire_valid         (ord_fire_valid_q),
       .ord_fire_rule          (ord_fire_rule_q),
       .ord_sent_valid         (ord_sent_valid_q),
@@ -383,4 +394,15 @@ module hft_csr_wrap_ooc
       .ord_lost_reason        (ord_lost_reason_q),
       .ord_queued             (ord_queued_q)
   );
+
+  always_ff @(posedge net_clk) begin
+    m_host_valid   <= host_valid_d;
+    m_host_side    <= host_side_d;
+    m_host_qty     <= host_qty_d;
+    m_host_price   <= host_price_d;
+    m_host_locate  <= host_locate_d;
+    m_host_stock   <= host_stock_d;
+    m_host_tif     <= host_tif_d;
+    m_host_clordid <= host_clordid_d;
+  end
 endmodule

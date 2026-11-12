@@ -59,7 +59,7 @@ set port_clock {
   {^dst_}                              dst_clk
   {^(s_axis_|m_axis_|q$|rst_out$)}     clk
   {^(cfg_|ts_|stat_|cnt_|[sm]_udp_|[sm]_msg_|[sm]_pkt_|[sm]_ev_|m_res_|sym_|mpkt_|mres_|feed_)} {clk net_clk}
-  {^(ctl_|cmd_|st_|ev_|ring_|[sm]_host_|[sm]_rej_|[sm]_sent_)} {clk net_clk}
+  {^(ctl_|cmd_|st_|ev_|ring_|loc_|ord_|[sm]_host_|[sm]_rej_|[sm]_sent_)} {clk net_clk}
   {^(s_axil_|host_|m_axi_)}           host_clk
   {^net_}                             net_clk
   {^rst$}                              {wr_clk clk}
@@ -173,14 +173,29 @@ if {![regexp {ID\s+Severity\s+Count\s+Description} $cdc_text]
     && ![regexp {All paths are Safely Timed\.} $cdc_text]} {
   lappend fail "cdc.rpt: neither a summary table nor 'All paths are Safely Timed'"
 }
+#   CDC-26 LUTRAM read/write potential collision: allowed only on the endpoints cdc.tcl waived
+#          (hft_cdc26_ends, decision 42). Waived paths should leave the report; if report_cdc still
+#          lists them, every CDC-26 detail row must end at one of those endpoints.
+set cdc26_rows 0
+set cdc26_foreign {}
 foreach line [split $cdc_text "\n"] {
-  if {[regexp {^(CDC-\d+)\s+(Critical|Warning|Info)\s+(\d+)\s} $line -> id sev n]} {
-    lappend cdc_summary "$id:$sev:$n"
-    if {$sev eq "Critical" || ($sev eq "Warning" && $id ni $allowed_warnings)} {
-      lappend fail "report_cdc $id $sev x$n"
+  if {[regexp {^\s*\d+\s+CDC-26\s+\S+\s.*\s(\S+)/D\s*$} $line -> ep_name]} {
+    incr cdc26_rows
+    if {![dict exists $hft_cdc26_ends $ep_name]} {
+      lappend cdc26_foreign $ep_name
     }
   }
 }
+foreach line [split $cdc_text "\n"] {
+  if {[regexp {^(CDC-\d+)\s+(Critical|Warning|Info)\s+(\d+)\s} $line -> id sev n]} {
+    set waived [expr {$id eq "CDC-26" && $sev eq "Warning" && $cdc26_rows == $n && ![llength $cdc26_foreign]}]
+    lappend cdc_summary "$id:$sev:$n[expr {$waived ? {(waived)} : {}}]"
+    if {$sev eq "Critical" || ($sev eq "Warning" && $id ni $allowed_warnings && !$waived)} {
+      lappend fail "report_cdc $id $sev x$n[expr {$id eq "CDC-26" ? " (rows $cdc26_rows, not waived: [lrange $cdc26_foreign 0 4])" : ""}]"
+    }
+  }
+}
+lappend cdc_summary "CDC26_WAIVED_ENDS:[dict size $hft_cdc26_ends]"
 
 # Primitive groups differ per family (7-series | UltraScale+): LUT | CLB.LUT, FLOP_LATCH | REGISTER,
 # DMEM | CLB.LUTRAM; block RAMs by name (RAMB18/36 on both).

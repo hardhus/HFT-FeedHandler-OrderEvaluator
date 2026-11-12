@@ -81,6 +81,14 @@ foreach src $hft_cdc_marked {
 # pointer has crossed); report_cdc still lists these paths for review.
 set hft_cdc_n_ram 0
 set hft_cdc_n_unconstrained 0
+# CDC-26 (LUTRAM read/write potential collision) is waived only for the memories listed here, by
+# instance name: no attribute survives on LUTRAM primitives. UG906 allows the waiver when the logic
+# never reads and writes one address at once while the read is in use. The mailbox FIFO's head is read
+# every cycle by flops without an enable (risk_check's input stage); its read address equals the write
+# address only while the FIFO is empty, when m_host_valid = 0 and the captured value is never used
+# (decision 42, audit 14 S9). Every other LUTRAM crossing still fails the gate on CDC-26.
+set hft_cdc26_waive {*/u_mbox_fifo/*}
+set hft_cdc26_ends [dict create]
 # Primitive groups differ per family: DMEM on 7-series, CLB with subgroup LUTRAM on UltraScale(+).
 foreach ram [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIVE_SUBGROUP == LUTRAM}] {
   set wclk [get_clocks -quiet -of_objects [get_pins -quiet -of_objects $ram -filter {IS_CLOCK}]]
@@ -110,6 +118,15 @@ foreach ram [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIV
     set per [hft_cdc_period [concat $wclk $dst_clk]]
     set_max_delay -datapath_only -from $from -to $ep $per
     incr hft_cdc_n_ram
+    set ep_name [get_property NAME $ep]
+    foreach pat $hft_cdc26_waive {
+      if {[string match $pat [get_property NAME $ram]] && ![dict exists $hft_cdc26_ends $ep_name]} {
+        create_waiver -type CDC -id CDC-26 -from $from -to [get_pins $ep/D] -user hft \
+          -description "mailbox FIFO head read while empty is never used (decision 42, audit 14 S9)"
+        dict set hft_cdc26_ends $ep_name 1
+        break
+      }
+    }
   }
 }
-puts "cdc.tcl: $hft_cdc_n_sync synchronizer first stages; [llength $hft_cdc_marked] hft_cdc_data cells, $hft_cdc_n_data stable-data paths, $hft_cdc_n_ram LUTRAM read paths constrained, $hft_cdc_n_unconstrained unresolved"
+puts "cdc.tcl: $hft_cdc_n_sync synchronizer first stages; [llength $hft_cdc_marked] hft_cdc_data cells, $hft_cdc_n_data stable-data paths, $hft_cdc_n_ram LUTRAM read paths constrained, $hft_cdc_n_unconstrained unresolved, [dict size $hft_cdc26_ends] CDC-26 waived endpoints"
