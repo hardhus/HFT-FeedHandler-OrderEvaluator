@@ -161,6 +161,7 @@ PACKER_VIOLATIONS = {
     "a_credit_ret": (11, "ring_credit_ret is not one per written order entry, one cycle later"),
     "a_order_room": (12, "more order entries than the queue holds"),
     "a_ord_taken": (13, "a queued order entry not taken in a free cycle"),
+    "a_pick": (14, "the order queue read address differs from rp + s1_ord"),
 }
 
 STRATEGY_TB = ["firmware/tb/sva/strategy_props.sv", "firmware/tb/sv/tb_strategy_props.sv"]

@@ -1,7 +1,7 @@
 // tb_packer_props: checks the packer_props checker itself. Drives its ports directly: a message, a write, an
 // accepted packet event and its commit 1 cycle later, then one with 2 entries and its commit 2 cycles
-// later, a rejected event and its rollback, an order entry taken, written and its credit given back, a full
-// queue. Every property's antecedent is hit, so a clean run proves the
+// later, a rejected event and its rollback, an order entry taken, written and its credit given back (the
+// queue read address pick follows rp + s1_ord, with rp away from 0), a full queue. Every property's antecedent is hit, so a clean run proves the
 // checker quiet. With HFT_VIOLATE=<k> exactly one property is violated (numbers in test_sva_checkers.py);
 // its assertion must fire. Values are set after a falling edge and sampled at the next rising edge.
 `timescale 1ns / 1ps
@@ -28,6 +28,7 @@ module tb_packer_props;
   logic                         ord_free = 1'b0;
   logic [RING_ORD_QUEUED_W-1:0] oq_n = '0;
   logic                         ring_credit_ret = 1'b0;
+  logic [$clog2(RISK_RING_CREDITS)-1:0] rp = '0, pick;
 
   always begin
     #3.2 clk = ~clk;
@@ -53,7 +54,9 @@ module tb_packer_props;
       .ord_write      (ord_write),
       .ord_free       (ord_free),
       .oq_n           (oq_n),
-      .ring_credit_ret(ring_credit_ret)
+      .ring_credit_ret(ring_credit_ret),
+      .rp             (rp),
+      .pick           (pick)
   );
 
   // 1 when this run violates property k.
@@ -64,6 +67,9 @@ module tb_packer_props;
     return k < 0;
 `endif  // HFT_VIOLATE
   endfunction
+
+  // The packer's pick_q: rp + s1_ord; one off while an order entry is taken under violation 14 (a_pick).
+  assign pick = rp + $bits(rp)'(s1_ord) + $bits(rp)'(s1_ord && v(14));
 
   task automatic idle(input int unsigned n = 1);
     repeat (n) begin
@@ -173,6 +179,7 @@ module tb_packer_props;
     s_sent_valid = 1'b0;
     oq_n         = 1;
     ord_free     = 1'b1;
+    rp           = 5;
     @(negedge clk);
     s1_ord      = !v(13);  // 13: a_ord_taken
     ord_write   = !v(13);
@@ -191,6 +198,7 @@ module tb_packer_props;
     @(negedge clk);
     ring_credit_ret = 1'b0;
     oq_n            = '0;
+    rp              = '0;
     idle(2);
 
     // A full queue: nothing more may come in.
