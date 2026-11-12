@@ -378,7 +378,9 @@ async def tc_wr_count_bound(dut):
     """A producer that reads wr_count once and then writes depth - wr_count words without looking at
     full again (the mailbox's MBOX_SPACE) never loses one, whatever the reader does meanwhile. Each
     round reads the count at a random moment, then writes on random cycles; the reader's rate changes
-    per round (stopped included), so rounds find the FIFO empty, partly full and full."""
+    per round (stopped included), so rounds find the FIFO empty, partly full and full. Rounds go on until
+    at least 300 rounds, more than 300 words and all three fill states at the count have been seen (a
+    fixed 300 rounds wrote only 298 words with seed 1111410980)."""
     pulses = await start(dut)
     sb = Scoreboard("space")
     total = 0
@@ -402,15 +404,18 @@ async def tc_wr_count_bound(dut):
         dut.rd_en.value = 0
 
     rd = cocotb.start_soon(drain())
-    full_rounds = 0
-    for _ in range(300):
+    rounds = 0
+    seen = set()  # fill state at the count: empty, partly full, full
+    while rounds < 300 or total <= 300 or len(seen) < 3:
+        assert rounds < 3000, f"3000 rounds: {total} words, fill states seen {sorted(seen)}"
+        rounds += 1
         p_rd = random.choice([0.0, 0.0, 0.1, 0.5, 1.0])
         for _ in range(random.randint(0, 6)):
             await FallingEdge(dut.wr_clk)
             dut.wr_en.value = 0
         await FallingEdge(dut.wr_clk)
         space = depth() - int(dut.wr_count.value)
-        full_rounds += space == 0
+        seen.add("empty" if space == depth() else "full" if space == 0 else "partly")
         for _ in range(space):
             dut.wr_en.value = 0
             while random.random() < 0.3:
@@ -427,7 +432,7 @@ async def tc_wr_count_bound(dut):
     await rd
     sb.check_empty()
     assert pulses.overflow == 0, f"{pulses.overflow} writes lost although wr_count gave room"
-    assert full_rounds > 0 and total > 300, f"no round found the FIFO full ({full_rounds}) or too few words ({total})"
+    assert len(seen) == 3 and total > 300, f"fill states seen {sorted(seen)}, {total} words"
 
 
 @cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
