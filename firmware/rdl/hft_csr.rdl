@@ -560,7 +560,7 @@ addrmap hft_csr {
         reg {
             name = "Rule locate";
             field {
-                desc = "Stock locate the rule watches; 0 is a static error.";
+                desc = "Stock locate the rule watches; 0 is a static error. The rule sees only the messages itch_decoder outputs: its locate needs the ORDER or TRADE class enabled in ITCH_CTRL and, if that class is filtered, its SYMBOL bit set, else the rule never fires.";
                 sw = rw; hw = r;
             } locate[15:0] = 16'h0;
         } RULE_LOCATE @ 0x08;

@@ -10,10 +10,13 @@
 //                m_fwd_pkt_* the forwarded ones.
 // Ring         : itch_decoder's events and forwarded packet events go through event_packer and the COMMIT=1 FIFO
 //                to event_ring_writer, which writes host memory through m_axi_hmw_* (audit/13 §2.2).
-// Order path   : until S8 (audit/14) there is no strategy_engine, risk_check or order_tx_builder: hft_csr_wrap's
-//                order configuration goes nowhere (order_cfg_unused), its status inputs are constants (no
-//                rule error, budget 0, UserRefNum 1, no TX config), the mailbox is never read, and LOCATE_ALLOW
-//                is a symbol_filter of its own so that its accesses answer. ctl_kill and ctl_tx_en are ports.
+// Order path   : itch_decoder m_ev_* and m_fwd_pkt_* -> strategy_engine -> risk_check (with the host mailbox)
+//                -> order_tx_builder -> m_axis_tx_* (audit/14 §2.2). strategy_engine sees only the messages that
+//                itch_decoder outputs (m_ev_valid: not MASKED or FILTERED), so a rule's locate must pass the FEED
+//                class and SYMBOL filters (decision 39). The effective tx_en of strategy_engine and risk_check is
+//                ctl_tx_en && st_cfg_valid (decision 26). LOCATE_ALLOW is risk_check's bitmap. ORDER_SENT,
+//                RISK_REJECT and lost rejects go to event_packer's order inputs, and order_stats counts the same
+//                signals (hft_csr_wrap header, audit/14 S7 A5); event_packer returns ring credits to risk_check.
 // Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
 module rx_csr_top
   import hft_pkg::*;
@@ -127,12 +130,20 @@ module rx_csr_top
     // Commit FIFO: a write that found it full (event_packer drops the packet), a read of it empty (never)
     output logic                         ring_fifo_overflow,
     output logic                         ring_fifo_underflow,
-    // event_packer's order queue (its inputs are tied off until S8)
+    // event_packer's order queue
     output logic                         ring_credit_ret,
     output logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued,
-    // Order path controls (hft_csr_wrap; their users come in S8)
+    // Order path controls (hft_csr_wrap) and the effective tx_en (ctl_tx_en && st_cfg_valid, decision 26)
     output logic                         ctl_kill,
     output logic                         ctl_tx_en,
+    output logic                         tx_en_eff,
+
+    // Order frames (order_tx_builder): Eth/IPv4/UDP + SoupBin 'U' + OUCH 5.0 'O', byte 0 = tdata[7:0]
+    output logic [63:0] m_axis_tx_tdata,
+    output logic [ 7:0] m_axis_tx_tkeep,
+    output logic        m_axis_tx_tlast,
+    output logic        m_axis_tx_tvalid,
+    input  logic        m_axis_tx_tready,
 
     // Host memory
     output logic [             63:0] m_axi_hmw_awaddr,
@@ -182,7 +193,7 @@ module rx_csr_top
   logic [RING_DEPTH_LOG2:0] fifo_wr_count_unused;  // the descriptor FIFO needs no fill level (WR_COUNT=0)
   logic fifo_rd_en, fifo_empty, fifo_rd_busy;
   logic [event_desc_pkg::DESC_W-1:0] fifo_din, fifo_dout;
-  // Order path until S8 (header)
+  // Order path (header)
   logic cfg_rule_wr, cmd_arm, cmd_disarm, cfg_lim_wr, cmd_budget_add, cmd_userref_wr, cfg_tx_wr;
   logic        [STRAT_RULE_W-1:0] cfg_rule_idx;
   strat_rule_t                    cfg_rule;
@@ -197,17 +208,62 @@ module rx_csr_top
   logic [    63:0] cfg_max_notional;
   logic [8*42-1:0] cfg_template;
   logic [7:0] cfg_display, cfg_capacity, cfg_ise, cfg_cross_type;
-  logic loc_req_valid, loc_req_ready, loc_req_wr, loc_rsp_valid, loc_hit_unused;
+  logic loc_req_valid, loc_req_ready, loc_req_wr, loc_rsp_valid;
   logic [10:0] loc_req_addr;
   logic [31:0] loc_req_wdata, loc_rsp_rdata;
   logic [3:0] loc_req_wstrb;
-  logic       m_host_valid;
+  logic m_host_valid, m_host_ready;
   logic [7:0] m_host_side, m_host_tif;
   logic [31:0] m_host_qty, m_host_price;
   logic [ 15:0] m_host_locate;
   logic [ 63:0] m_host_stock;
   logic [111:0] m_host_clordid;
-  logic         order_cfg_unused;
+  logic [STRAT_N_RULES-1:0] st_armed, st_error;
+  logic st_userref_ignored, st_tx_cfg_valid, st_cfg_refused;
+  logic [            31:0] st_budget;
+  // strategy_engine -> risk_check
+  logic                    o_valid;
+  logic [STRAT_RULE_W-1:0] o_rule;
+  logic [7:0] o_side, o_tif;
+  logic [31:0] o_qty, o_price;
+  logic [15:0] o_locate;
+  logic [63:0] o_stock, o_seq, o_sof_ts;
+  logic [CFG_EPOCH_W-1:0] o_epoch;
+  // risk_check -> order_tx_builder
+  logic t_valid, t_ready;
+  logic       [            31:0] t_user_ref;
+  order_src_e                    t_source;
+  logic       [STRAT_RULE_W-1:0] t_rule;
+  logic [7:0] t_side, t_tif;
+  logic [31:0] t_qty, t_price;
+  logic [15:0] t_locate;
+  logic [63:0] t_stock, t_seq, t_sof_ts;
+  logic       [           111:0] t_clordid;
+  logic       [ CFG_EPOCH_W-1:0] t_epoch;
+  // order_tx_builder -> event_packer (ORDER_SENT)
+  logic                          sent_valid;
+  logic       [            31:0] sent_user_ref;
+  order_src_e                    sent_source;
+  logic       [STRAT_RULE_W-1:0] sent_rule;
+  logic [7:0] sent_side, sent_tif;
+  logic [31:0] sent_qty, sent_price;
+  logic [15:0] sent_locate;
+  logic [63:0] sent_stock, sent_seq, sent_sof_ts, sent_tx_ts;
+  logic         [           111:0] sent_clordid;
+  logic         [ CFG_EPOCH_W-1:0] sent_epoch;
+  // risk_check -> event_packer (RISK_REJECT, lost rejects)
+  logic                            rej_valid;
+  risk_reason_e                    rej_reason;
+  order_src_e                      rej_source;
+  logic         [STRAT_RULE_W-1:0] rej_rule;
+  logic [7:0] rej_side, rej_tif;
+  logic [31:0] rej_qty, rej_price;
+  logic [15:0] rej_locate;
+  logic [63:0] rej_stock, rej_seq, rej_sof_ts, rej_ts;
+  logic         [          111:0] rej_clordid;
+  logic         [CFG_EPOCH_W-1:0] rej_epoch;
+  logic                           rej_lost;
+  risk_reason_e                   rej_lost_reason;
 
   reset_sync u_host_rst (
       .clk    (host_clk),
@@ -305,8 +361,8 @@ module rx_csr_top
       .cmd_arm_mask           (cmd_arm_mask),
       .cmd_disarm             (cmd_disarm),
       .cmd_disarm_mask        (cmd_disarm_mask),
-      .st_armed               ('0),
-      .st_error               ('0),
+      .st_armed               (st_armed),
+      .st_error               (st_error),
       .cfg_lim_wr             (cfg_lim_wr),
       .cfg_max_qty            (cfg_max_qty),
       .cfg_max_notional       (cfg_max_notional),
@@ -317,9 +373,9 @@ module rx_csr_top
       .cmd_budget_amount      (cmd_budget_amount),
       .cmd_userref_wr         (cmd_userref_wr),
       .cmd_userref_value      (cmd_userref_value),
-      .ev_userref_ignored     (1'b0),
-      .st_userref             (32'd1),
-      .st_budget              ('0),
+      .ev_userref_ignored     (st_userref_ignored),
+      .st_userref             (t_user_ref),
+      .st_budget              (st_budget),
       .loc_req_valid          (loc_req_valid),
       .loc_req_ready          (loc_req_ready),
       .loc_req_wr             (loc_req_wr),
@@ -334,10 +390,10 @@ module rx_csr_top
       .cfg_capacity           (cfg_capacity),
       .cfg_ise                (cfg_ise),
       .cfg_cross_type         (cfg_cross_type),
-      .st_tx_cfg_valid        (1'b0),
-      .ev_cfg_refused         (1'b0),
+      .st_tx_cfg_valid        (st_tx_cfg_valid),
+      .ev_cfg_refused         (st_cfg_refused),
       .m_host_valid           (m_host_valid),
-      .m_host_ready           (1'b0),
+      .m_host_ready           (m_host_ready),
       .m_host_side            (m_host_side),
       .m_host_qty             (m_host_qty),
       .m_host_price           (m_host_price),
@@ -345,39 +401,15 @@ module rx_csr_top
       .m_host_stock           (m_host_stock),
       .m_host_tif             (m_host_tif),
       .m_host_clordid         (m_host_clordid),
-      .ord_fire_valid         (1'b0),
-      .ord_fire_rule          ('0),
-      .ord_sent_valid         (1'b0),
-      .ord_sent_source        (ORDER_SRC_RULE),
-      .ord_rej_valid          (1'b0),
-      .ord_rej_reason         (RISK_NONE),
-      .ord_lost_valid         (1'b0),
-      .ord_lost_reason        (RISK_NONE),
+      .ord_fire_valid         (o_valid),
+      .ord_fire_rule          (o_rule),
+      .ord_sent_valid         (sent_valid),
+      .ord_sent_source        (sent_source),
+      .ord_rej_valid          (rej_valid),
+      .ord_rej_reason         (rej_reason),
+      .ord_lost_valid         (rej_lost),
+      .ord_lost_reason        (rej_lost_reason),
       .ord_queued             (ring_ord_queued)
-  );
-
-  // Until S8: the order configuration has no user, and LOCATE_ALLOW is a bitmap of its own (header).
-  assign order_cfg_unused = ^{
-    cfg_rule_wr, cfg_rule_idx, cfg_rule, cmd_arm, cmd_arm_mask, cmd_disarm, cmd_disarm_mask, cfg_lim_wr,
-    cfg_max_qty, cfg_max_notional, cfg_rate_refill, cfg_rate_period, cfg_rate_burst, cmd_budget_add,
-    cmd_budget_amount, cmd_userref_wr, cmd_userref_value, cfg_tx_wr, cfg_template, cfg_display, cfg_capacity,
-    cfg_ise, cfg_cross_type, m_host_valid, m_host_side, m_host_qty, m_host_price, m_host_locate, m_host_stock,
-    m_host_tif, m_host_clordid
-  };
-
-  symbol_filter u_locate_allow (
-      .clk          (net_clk),
-      .rst          (net_rst),
-      .lk_locate    ('0),
-      .lk_hit       (loc_hit_unused),
-      .sym_req_valid(loc_req_valid),
-      .sym_req_ready(loc_req_ready),
-      .sym_req_wr   (loc_req_wr),
-      .sym_req_addr (loc_req_addr),
-      .sym_req_wdata(loc_req_wdata),
-      .sym_req_wstrb(loc_req_wstrb),
-      .sym_rsp_valid(loc_rsp_valid),
-      .sym_rsp_rdata(loc_rsp_rdata)
   );
 
   eth_ip_udp_rx #(
@@ -525,6 +557,180 @@ module rx_csr_top
       .m_pkt_epoch       (m_fwd_pkt_epoch)
   );
 
+  // ---- Order path (header) ----
+  assign tx_en_eff = ctl_tx_en && st_tx_cfg_valid;
+
+  strategy_engine u_strategy (
+      .clk            (net_clk),
+      .rst            (net_rst),
+      .s_ev_valid     (m_ev_valid),
+      .s_ev_class     (m_ev_class),
+      .s_ev_type      (m_ev_type),
+      .s_ev_seq       (m_ev_seq),
+      .s_ev_sof_ts    (m_ev_sof_ts),
+      .s_ev_epoch     (m_ev_epoch),
+      .s_ev_locate    (m_ev_locate),
+      .s_ev_shares    (m_ev_shares),
+      .s_ev_price     (m_ev_price),
+      .s_ev_side      (m_ev_side),
+      .s_ev_stock     (m_ev_stock),
+      .s_pkt_valid    (m_fwd_pkt_valid),
+      .s_pkt_status   (m_fwd_pkt_status),
+      .ctl_kill       (ctl_kill),
+      .ctl_tx_en      (tx_en_eff),
+      .cfg_rule_wr    (cfg_rule_wr),
+      .cfg_rule_idx   (cfg_rule_idx),
+      .cfg_rule       (cfg_rule),
+      .cmd_disarm     (cmd_disarm),
+      .cmd_disarm_mask(cmd_disarm_mask),
+      .cmd_arm        (cmd_arm),
+      .cmd_arm_mask   (cmd_arm_mask),
+      .m_ord_valid    (o_valid),
+      .m_ord_rule     (o_rule),
+      .m_ord_side     (o_side),
+      .m_ord_qty      (o_qty),
+      .m_ord_price    (o_price),
+      .m_ord_locate   (o_locate),
+      .m_ord_stock    (o_stock),
+      .m_ord_tif      (o_tif),
+      .m_ord_seq      (o_seq),
+      .m_ord_sof_ts   (o_sof_ts),
+      .m_ord_epoch    (o_epoch),
+      .st_armed       (st_armed),
+      .st_error       (st_error)
+  );
+
+  risk_check u_risk (
+      .clk                  (net_clk),
+      .rst                  (net_rst),
+      .ts_now               (ts_now),
+      .epoch_now            (cfg_epoch),
+      .s_hw_valid           (o_valid),
+      .s_hw_rule            (o_rule),
+      .s_hw_side            (o_side),
+      .s_hw_qty             (o_qty),
+      .s_hw_price           (o_price),
+      .s_hw_locate          (o_locate),
+      .s_hw_stock           (o_stock),
+      .s_hw_tif             (o_tif),
+      .s_hw_seq             (o_seq),
+      .s_hw_sof_ts          (o_sof_ts),
+      .s_hw_epoch           (o_epoch),
+      .s_host_valid         (m_host_valid),
+      .s_host_ready         (m_host_ready),
+      .s_host_side          (m_host_side),
+      .s_host_qty           (m_host_qty),
+      .s_host_price         (m_host_price),
+      .s_host_locate        (m_host_locate),
+      .s_host_stock         (m_host_stock),
+      .s_host_tif           (m_host_tif),
+      .s_host_clordid       (m_host_clordid),
+      .ctl_kill             (ctl_kill),
+      .ctl_tx_en            (tx_en_eff),
+      .cfg_lim_wr           (cfg_lim_wr),
+      .cfg_max_qty          (cfg_max_qty),
+      .cfg_max_notional     (cfg_max_notional),
+      .cfg_rate_refill      (cfg_rate_refill),
+      .cfg_rate_period      (cfg_rate_period),
+      .cfg_rate_burst       (cfg_rate_burst),
+      .cmd_budget_add       (cmd_budget_add),
+      .cmd_budget_amount    (cmd_budget_amount),
+      .cmd_userref_wr       (cmd_userref_wr),
+      .cmd_userref_value    (cmd_userref_value),
+      .ev_userref_ignored   (st_userref_ignored),
+      .sym_req_valid        (loc_req_valid),
+      .sym_req_ready        (loc_req_ready),
+      .sym_req_wr           (loc_req_wr),
+      .sym_req_addr         (loc_req_addr),
+      .sym_req_wdata        (loc_req_wdata),
+      .sym_req_wstrb        (loc_req_wstrb),
+      .sym_rsp_valid        (loc_rsp_valid),
+      .sym_rsp_rdata        (loc_rsp_rdata),
+      .m_tx_valid           (t_valid),
+      .m_tx_ready           (t_ready),
+      .m_tx_user_ref        (t_user_ref),
+      .m_tx_source          (t_source),
+      .m_tx_rule            (t_rule),
+      .m_tx_side            (t_side),
+      .m_tx_qty             (t_qty),
+      .m_tx_price           (t_price),
+      .m_tx_locate          (t_locate),
+      .m_tx_stock           (t_stock),
+      .m_tx_tif             (t_tif),
+      .m_tx_clordid         (t_clordid),
+      .m_tx_seq             (t_seq),
+      .m_tx_sof_ts          (t_sof_ts),
+      .m_tx_epoch           (t_epoch),
+      .m_rej_valid          (rej_valid),
+      .m_rej_reason         (rej_reason),
+      .m_rej_source         (rej_source),
+      .m_rej_rule           (rej_rule),
+      .m_rej_side           (rej_side),
+      .m_rej_qty            (rej_qty),
+      .m_rej_price          (rej_price),
+      .m_rej_locate         (rej_locate),
+      .m_rej_stock          (rej_stock),
+      .m_rej_tif            (rej_tif),
+      .m_rej_clordid        (rej_clordid),
+      .m_rej_seq            (rej_seq),
+      .m_rej_sof_ts         (rej_sof_ts),
+      .m_rej_epoch          (rej_epoch),
+      .m_rej_ts             (rej_ts),
+      .ring_credit_ret      (ring_credit_ret),
+      .ev_rej_dropped       (rej_lost),
+      .ev_rej_dropped_reason(rej_lost_reason),
+      .st_budget            (st_budget)
+  );
+
+  order_tx_builder u_tx (
+      .clk             (net_clk),
+      .rst             (net_rst),
+      .ts_now          (ts_now),
+      .cfg_wr          (cfg_tx_wr),
+      .cfg_template    (cfg_template),
+      .cfg_display     (cfg_display),
+      .cfg_capacity    (cfg_capacity),
+      .cfg_ise         (cfg_ise),
+      .cfg_cross_type  (cfg_cross_type),
+      .st_cfg_valid    (st_tx_cfg_valid),
+      .ev_cfg_refused  (st_cfg_refused),
+      .s_ord_valid     (t_valid),
+      .s_ord_ready     (t_ready),
+      .s_ord_user_ref  (t_user_ref),
+      .s_ord_source    (t_source),
+      .s_ord_rule      (t_rule),
+      .s_ord_side      (t_side),
+      .s_ord_qty       (t_qty),
+      .s_ord_price     (t_price),
+      .s_ord_locate    (t_locate),
+      .s_ord_stock     (t_stock),
+      .s_ord_tif       (t_tif),
+      .s_ord_clordid   (t_clordid),
+      .s_ord_seq       (t_seq),
+      .s_ord_sof_ts    (t_sof_ts),
+      .s_ord_epoch     (t_epoch),
+      .m_axis_tx_tdata (m_axis_tx_tdata),
+      .m_axis_tx_tkeep (m_axis_tx_tkeep),
+      .m_axis_tx_tlast (m_axis_tx_tlast),
+      .m_axis_tx_tvalid(m_axis_tx_tvalid),
+      .m_axis_tx_tready(m_axis_tx_tready),
+      .m_sent_valid    (sent_valid),
+      .m_sent_user_ref (sent_user_ref),
+      .m_sent_source   (sent_source),
+      .m_sent_rule     (sent_rule),
+      .m_sent_side     (sent_side),
+      .m_sent_qty      (sent_qty),
+      .m_sent_price    (sent_price),
+      .m_sent_locate   (sent_locate),
+      .m_sent_stock    (sent_stock),
+      .m_sent_tif      (sent_tif),
+      .m_sent_clordid  (sent_clordid),
+      .m_sent_seq      (sent_seq),
+      .m_sent_sof_ts   (sent_sof_ts),
+      .m_sent_epoch    (sent_epoch),
+      .m_sent_tx_ts    (sent_tx_ts)
+  );
+
   event_packer u_packer (
       .clk               (net_clk),
       .rst               (net_rst),
@@ -555,38 +761,37 @@ module rx_csr_top
       .s_pkt_gap         (m_fwd_pkt_gap),
       .s_pkt_sof_ts      (m_fwd_pkt_sof_ts),
       .s_pkt_epoch       (m_fwd_pkt_epoch),
-      // Order entries: wired in S8 (audit/14)
-      .s_sent_valid      ('0),
-      .s_sent_user_ref   ('0),
-      .s_sent_source     (ORDER_SRC_RULE),
-      .s_sent_rule       ('0),
-      .s_sent_side       ('0),
-      .s_sent_qty        ('0),
-      .s_sent_price      ('0),
-      .s_sent_locate     ('0),
-      .s_sent_stock      ('0),
-      .s_sent_tif        ('0),
-      .s_sent_clordid    ('0),
-      .s_sent_seq        ('0),
-      .s_sent_sof_ts     ('0),
-      .s_sent_epoch      ('0),
-      .s_sent_tx_ts      ('0),
-      .s_rej_valid       ('0),
-      .s_rej_reason      (RISK_NONE),
-      .s_rej_source      (ORDER_SRC_RULE),
-      .s_rej_rule        ('0),
-      .s_rej_side        ('0),
-      .s_rej_qty         ('0),
-      .s_rej_price       ('0),
-      .s_rej_locate      ('0),
-      .s_rej_stock       ('0),
-      .s_rej_tif         ('0),
-      .s_rej_clordid     ('0),
-      .s_rej_seq         ('0),
-      .s_rej_sof_ts      ('0),
-      .s_rej_epoch       ('0),
-      .s_rej_ts          ('0),
-      .s_rej_lost        ('0),
+      .s_sent_valid      (sent_valid),
+      .s_sent_user_ref   (sent_user_ref),
+      .s_sent_source     (sent_source),
+      .s_sent_rule       (sent_rule),
+      .s_sent_side       (sent_side),
+      .s_sent_qty        (sent_qty),
+      .s_sent_price      (sent_price),
+      .s_sent_locate     (sent_locate),
+      .s_sent_stock      (sent_stock),
+      .s_sent_tif        (sent_tif),
+      .s_sent_clordid    (sent_clordid),
+      .s_sent_seq        (sent_seq),
+      .s_sent_sof_ts     (sent_sof_ts),
+      .s_sent_epoch      (sent_epoch),
+      .s_sent_tx_ts      (sent_tx_ts),
+      .s_rej_valid       (rej_valid),
+      .s_rej_reason      (rej_reason),
+      .s_rej_source      (rej_source),
+      .s_rej_rule        (rej_rule),
+      .s_rej_side        (rej_side),
+      .s_rej_qty         (rej_qty),
+      .s_rej_price       (rej_price),
+      .s_rej_locate      (rej_locate),
+      .s_rej_stock       (rej_stock),
+      .s_rej_tif         (rej_tif),
+      .s_rej_clordid     (rej_clordid),
+      .s_rej_seq         (rej_seq),
+      .s_rej_sof_ts      (rej_sof_ts),
+      .s_rej_epoch       (rej_epoch),
+      .s_rej_ts          (rej_ts),
+      .s_rej_lost        (rej_lost),
       .ring_credit_ret   (ring_credit_ret),
       .fifo_wr_en        (fifo_wr_en),
       .fifo_din          (fifo_din),

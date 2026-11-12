@@ -3420,7 +3420,7 @@ Don't override. Generated from: hft_csr
 
 #### locate field
 
-<p>Stock locate the rule watches; 0 is a static error.</p>
+<p>Stock locate the rule watches; 0 is a static error. The rule sees only the messages itch_decoder outputs: its locate needs the ORDER or TRADE class enabled in ITCH_CTRL and, if that class is filtered, its SYMBOL bit set, else the rule never fires.</p>
 
 ### RULE_THRESHOLD register
 

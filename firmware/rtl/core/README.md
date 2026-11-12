@@ -767,6 +767,11 @@ During the sweep after a reset (about 13.1 µs) an access waits at the port, and
 one access in flight, so other CSR accesses wait too. This is far below a PCIe completion timeout (50 µs at the
 least).
 
+The FEED class settings and this bitmap also decide what the strategy rules see (decision 39): `strategy_engine`
+takes `itch_decoder`'s output messages only, so a MASKED or FILTERED message fires no rule. Host rule: a rule's
+locate needs the ORDER (A, F) or TRADE (P) class enabled and, if that class is filtered, its SYMBOL bit set;
+otherwise the rule never fires. In return every ORDER_SENT's trigger message is in the ring too.
+
 ### Kill switch latency (`RISK_CTRL.kill`)
 
 `RISK_CTRL.kill` is not a shadow and has no commit: it reaches `ctl_kill` (`strategy_engine` and `risk_check`)
@@ -789,8 +794,7 @@ Measured in `test_hft_csr_wrap.tc_kill_latency` (all five clock profiles), from 
 The last row is the best case of that situation, not its worst. A fenced command waits until every earlier
 `MBOX_SEND` has been taken by `risk_check` and decided, and `risk_check` takes a host order only in a cycle with
 no hardware order and no cancel to write out, so hardware orders and cancels in that time lengthen the wait. They
-are bounded (an analysis from the blocks' contracts, not yet a measurement; S8 checks it with the real blocks):
-while the command waits the bus holds every other access, so no order is sent, no rule is armed and kill and
+are bounded (an analysis from the blocks' contracts): while the command waits the bus holds every other access, so no order is sent, no rule is armed and kill and
 tx_en do not change. At most 16 hardware orders are queued in `strategy_engine` (8 waiting for their packet, 8
 leaving), and each rule fires at most once more (a rule fires once per packet and its packet's acceptance
 disarms it; decision 18 keeps a rule armed only for a fire already queued), so at most 24 hardware orders reach
@@ -798,6 +802,13 @@ disarms it; decision 18 keeps a rule armed only for a fire already queued), so a
 and its reject can delay one cancel write by a cycle: at most 24 + 8 + 24 = 56 net cycles (about 360 ns) on top
 of the case measured above. A kill written behind such a command waits with it. Right after a reset the first command also waits for the mailbox FIFO's reset handshake (a few cycles;
 kill is 1 then anyway).
+
+With the real blocks (`test_rx_order.tc_order_kill_latency_under_burst`, net2host and host2net): 16 `MBOX_SEND`s,
+a command fenced behind them and the kill write behind it, measured from the kill write's W handshake to
+`ctl_kill` at `risk_check`. Without hardware orders: 161–169 ns (net2host), 113–115 ns (host2net). With all 8
+rules armed and a packet of 8 triggers whose orders reach `risk_check` while the fence waits (the packet's start
+swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 221 ns and 146 ns, about 8 net cycles
+over the slowest case without them (one run each), inside the bound above. The test checks the bound in every run.
 
 ### Software contract after reset
 

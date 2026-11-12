@@ -24,7 +24,8 @@ ITCH accounting identities: the ITCH_<class> counters sum to MOLD_MSGS, and ITCH
 ITCH_FILTERED + ITCH_MASKED to the ITCH_<class> sum.
 
 Every packet then goes on to the ring path (audit/13 S7): the ring model (model/ring.py) takes the packet
-event and its OUT messages from the chain model. The one input it needs from the bench is which packets did
+event and its OUT messages from the chain model. Order entries (ORDER_SENT, RISK_REJECT; audit/14) are set apart
+as they are read (ring_orders, checked by the order tests) and must sit between two packets' entries. The one input it needs from the bench is which packets did
 not fit: a write attempt in a cycle when the FIFO's own port says full. Every snapshot holds the ring
 identity RING_COMMIT_ENTRIES + RING_DROP_ENTRIES = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS. A test that
 attaches a RingHost (host memory and the consumer) also reads each entry through the ring protocol and
@@ -248,6 +249,10 @@ class System:
         self.ring_got: deque[tuple[int, bytes]] = deque()  # (index, entry) read, not compared yet
         self.ring_read = 0  # entries read and compared
         self.ring_flags: list[int] = []  # indexes of the entries read with overflow_before
+        self.ring_orders: list[tuple[int, bytes]] = []  # (index, entry) of the order entries read
+        self.ring_order_pos: list[int] = []  # packet entries read before each order entry
+        self.ring_bounds: set[int] = {0}  # packet entries in the model before each packet's first entry
+        self.ring_wanted = 0  # packet entries the model has given so far
         self.ring_log: list[dict] = []  # entries read, decoded (with keep)
         self.ring_size_log2 = 0
         cocotb.start_soon(self._monitor())
@@ -530,12 +535,25 @@ class System:
         self.ring_drop_pkts += r.drop_pkts
         self.ring_drop_entries += r.drop_entries
         self.ring_want.extend(r.entries)
+        self.ring_wanted += len(r.entries)
+        self.ring_bounds.add(self.ring_wanted)
         self._ring_compare()
 
     def ring_entry(self, idx: int, entry: bytes) -> None:
-        """An entry the host read from the ring."""
+        """An entry the host read from the ring. An order entry is set apart with the number of packet entries
+        read before it."""
+        if decode(entry)["kind"] in (Kind.ORDER_SENT, Kind.RISK_REJECT):
+            self.ring_orders.append((idx, entry))
+            self.ring_order_pos.append(self.ring_read + len(self.ring_got))
+            return
         self.ring_got.append((idx, entry))
         self._ring_compare()
+
+    def check_order_positions(self) -> None:
+        """After drain(): every order entry sits between two packets' entries (P8: an order entry never enters a
+        packet unit)."""
+        inside = [(k, pos) for k, pos in enumerate(self.ring_order_pos) if pos not in self.ring_bounds]
+        assert not inside, f"order entries inside a packet's entries (order k, packet entries before): {inside}"
 
     def _ring_compare(self) -> None:
         while self.ring_want and self.ring_got:
@@ -550,9 +568,9 @@ class System:
                 self.ring_log.append(got)
 
     def check_ring_counters(self, v: dict[str, int]) -> None:
-        """A snapshot taken after finish(): the ring counters against the model."""
+        """A snapshot taken after finish(): the ring counters against the model (order entries: those read)."""
         got = (v["RING_COMMIT_ENTRIES"], v["RING_DROP_PKTS"], v["RING_DROP_ENTRIES"])
-        want = (self.ring_commit, self.ring_drop_pkts, self.ring_drop_entries)
+        want = (self.ring_commit + len(self.ring_orders), self.ring_drop_pkts, self.ring_drop_entries)
         assert got == want, f"(commit, drop packets, drop entries) {got}, model {want}"
 
 
@@ -639,22 +657,27 @@ class RingHost:
     async def answered(self) -> int:
         return await self.live(RING_WRITTEN_LO) + await self.live(RING_BRESP_ERR_LO)
 
-    async def drain(self, limit: int = 2_000_000) -> None:
-        """Read until every committed entry is read and answered: then the ring and the FIFO are empty."""
+    async def drain(self, limit: int = 2_000_000, orders: int = 0) -> None:
+        """Read until every committed entry is read and answered: then the ring and the FIFO are empty. orders:
+        the order entries the test expects (they come from the order path, not from the packet model)."""
         sysm = self.sysm
         await sysm.finish()
         self.pacing, self.hold = PACINGS["fast"], False
         for _ in range(limit):
             await RisingEdge(self.dut.host_clk)
-            if sysm.ring_read == sysm.ring_commit:
+            if sysm.ring_read == sysm.ring_commit and len(sysm.ring_orders) >= orders:
                 break
         else:
-            raise AssertionError(f"{sysm.ring_read} ring entries read, {sysm.ring_commit} committed")
+            raise AssertionError(f"{sysm.ring_read} ring entries read, {sysm.ring_commit} committed; "
+                                 f"{len(sysm.ring_orders)} order entries read, {orders} expected")  # fmt: skip
         assert not sysm.ring_want and not sysm.ring_got
+        assert len(sysm.ring_orders) == orders, f"{len(sysm.ring_orders)} order entries read, {orders} expected"
+        total = sysm.ring_commit + orders
         for _ in range(ANSWER_POLLS):  # an entry read is in memory: its answer is a few cycles away
-            if (answered := await self.answered()) == sysm.ring_commit:
+            if (answered := await self.answered()) == total:
+                sysm.check_order_positions()
                 return
-        raise AssertionError(f"{sysm.ring_commit} entries committed and read, the counters answer for {answered}")
+        raise AssertionError(f"{total} entries committed and read, the counters answer for {answered}")
 
     async def check_quiet(self, v: dict[str, int]) -> None:
         """A snapshot taken after drain(): the model's counters and the host side of the identity."""
@@ -678,6 +701,7 @@ async def start(dut) -> tuple[Wrap, System]:
     dut.ts_now.value = 0
     for name in ("awready", "wready", "bvalid", "bresp"):  # no host memory until a test attaches a RingHost
         getattr(dut, f"m_axi_hmw_{name}").value = 0
+    dut.m_axis_tx_tready.value = 1  # the order MAC takes every beat unless a test holds it
     dut.rst_in.value = 1
     start_clock(dut.net_clk, net_ps, jit)
     start_clock(dut.host_clk, host_ps, jit)
@@ -734,15 +758,21 @@ def check_itch_identities(values: list[int]) -> None:
     snapshot holds them absolutely, and every pair of snapshots holds them for the difference):
     the ITCH_<class> counters sum to MOLD_MSGS (the same committed messages), and the outcome
     counters sum to the class counters (one class and one outcome per result). The ring identity too
-    (audit/13 S6): every OUT message, GAP and EOS of an accepted packet is committed or dropped."""
+    (audit/13 S6, audit/14 decision 30): every OUT message, GAP and EOS of an accepted packet, every ORDER_SENT
+    and every RISK_REJECT is committed, dropped (a packet's entries, or a lost reject) or waiting in
+    event_packer's order queue."""
     v = named(values)
     classes = sum(v[f"ITCH_{c.name}"] for c in ItchClass) & MASK64
     outcomes = sum(v[f"ITCH_{o.name}"] for o in Outcome) & MASK64
     assert classes == v["MOLD_MSGS"], f"sum of ITCH_<class> {classes}, MOLD_MSGS {v['MOLD_MSGS']}"
     assert outcomes == classes, f"ITCH_OUT + FILTERED + MASKED {outcomes}, sum of ITCH_<class> {classes}"
-    ring = (v["RING_COMMIT_ENTRIES"] + v["RING_DROP_ENTRIES"]) & MASK64
-    entries = (v["ITCH_OUT"] + v["MOLD_GAP_EVENTS"] + v["MOLD_EOS"]) & MASK64
-    assert ring == entries, f"RING_COMMIT_ENTRIES + RING_DROP_ENTRIES {ring}, ITCH_OUT + GAP_EVENTS + EOS {entries}"
+    ring = (v["RING_COMMIT_ENTRIES"] + v["RING_DROP_ENTRIES"] + v["RING_DROP_ORDERS"] + v["RING_ORDER_QUEUED"]) & MASK64
+    rejects = sum(v[k] for k in v if k.startswith("RISK_REJECT_"))
+    entries = (v["ITCH_OUT"] + v["MOLD_GAP_EVENTS"] + v["MOLD_EOS"] + v["ORDERS_SENT_HW"] + v["ORDERS_SENT_HOST"]
+               + rejects) & MASK64  # fmt: skip
+    assert ring == entries, (
+        f"RING_COMMIT_ENTRIES + DROP_ENTRIES + DROP_ORDERS + ORDER_QUEUED {ring}, "
+        f"ITCH_OUT + GAP_EVENTS + EOS + ORDERS_SENT_* + RISK_REJECT_* {entries} ({v})")
 
 
 def named(values: list[int]) -> dict[str, int]:
