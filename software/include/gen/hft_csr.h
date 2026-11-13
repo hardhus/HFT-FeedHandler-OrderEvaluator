@@ -164,17 +164,17 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bp 0
 #define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bw 1
 
-// reg - hft_csr::counter64::LO
+// reg - hft_csr__counter64::LO
 #define HFT_CSR__COUNTER64__LO__VALUE_bm 0xffffffff
 #define HFT_CSR__COUNTER64__LO__VALUE_bp 0
 #define HFT_CSR__COUNTER64__LO__VALUE_bw 32
 
-// reg - hft_csr::counter64::HI
+// reg - hft_csr__counter64::HI
 #define HFT_CSR__COUNTER64__HI__VALUE_bm 0xffffffff
 #define HFT_CSR__COUNTER64__HI__VALUE_bp 0
 #define HFT_CSR__COUNTER64__HI__VALUE_bw 32
 
-// regfile - hft_csr::counter64
+// regfile - hft_csr__counter64
 typedef struct __attribute__ ((__packed__)) {
     uint32_t LO;
     uint32_t HI;
@@ -317,17 +317,17 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bp 1
 #define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bw 1
 
-// reg - hft_csr::counter64_live::LO
+// reg - hft_csr__counter64_live::LO
 #define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bm 0xffffffff
 #define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bp 0
 #define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bw 32
 
-// reg - hft_csr::counter64_live::HI
+// reg - hft_csr__counter64_live::HI
 #define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bm 0xffffffff
 #define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bp 0
 #define HFT_CSR__COUNTER64_LIVE__HI__VALUE_bw 32
 
-// regfile - hft_csr::counter64_live
+// regfile - hft_csr__counter64_live
 typedef struct __attribute__ ((__packed__)) {
     uint32_t LO;
     uint32_t HI;
@@ -358,64 +358,64 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t RING_ORDER_QUEUED;
 } hft_csr__RING_t;
 
-// reg - hft_csr::RISK::MAX_QTY
+// reg - hft_csr__RISK::MAX_QTY
 #define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bm 0xffffffff
 #define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bp 0
 #define HFT_CSR__RISK__MAX_QTY__MAX_QTY_bw 32
 #define HFT_CSR__RISK__MAX_QTY__MAX_QTY_reset 0x0
 
-// reg - hft_csr::RISK::MAX_NOTIONAL_LO
+// reg - hft_csr__RISK::MAX_NOTIONAL_LO
 #define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bm 0xffffffff
 #define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bp 0
 #define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_bw 32
 #define HFT_CSR__RISK__MAX_NOTIONAL_LO__VALUE_reset 0x0
 
-// reg - hft_csr::RISK::MAX_NOTIONAL_HI
+// reg - hft_csr__RISK::MAX_NOTIONAL_HI
 #define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bm 0xffffffff
 #define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bp 0
 #define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_bw 32
 #define HFT_CSR__RISK__MAX_NOTIONAL_HI__VALUE_reset 0x0
 
-// reg - hft_csr::RISK::RATE_REFILL
+// reg - hft_csr__RISK::RATE_REFILL
 #define HFT_CSR__RISK__RATE_REFILL__REFILL_bm 0xffffffff
 #define HFT_CSR__RISK__RATE_REFILL__REFILL_bp 0
 #define HFT_CSR__RISK__RATE_REFILL__REFILL_bw 32
 #define HFT_CSR__RISK__RATE_REFILL__REFILL_reset 0x0
 
-// reg - hft_csr::RISK::RATE_PERIOD
+// reg - hft_csr__RISK::RATE_PERIOD
 #define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bm 0xffffffff
 #define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bp 0
 #define HFT_CSR__RISK__RATE_PERIOD__PERIOD_bw 32
 #define HFT_CSR__RISK__RATE_PERIOD__PERIOD_reset 0x0
 
-// reg - hft_csr::RISK::RATE_BURST
+// reg - hft_csr__RISK::RATE_BURST
 #define HFT_CSR__RISK__RATE_BURST__BURST_bm 0xffffffff
 #define HFT_CSR__RISK__RATE_BURST__BURST_bp 0
 #define HFT_CSR__RISK__RATE_BURST__BURST_bw 32
 #define HFT_CSR__RISK__RATE_BURST__BURST_reset 0x0
 
-// reg - hft_csr::RISK::RISK_COMMIT
+// reg - hft_csr__RISK::RISK_COMMIT
 #define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bm 0x1
 #define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bp 0
 #define HFT_CSR__RISK__RISK_COMMIT__COMMIT_bw 1
 
-// reg - hft_csr::RISK::RISK_CTRL
+// reg - hft_csr__RISK::RISK_CTRL
 #define HFT_CSR__RISK__RISK_CTRL__KILL_bm 0x1
 #define HFT_CSR__RISK__RISK_CTRL__KILL_bp 0
 #define HFT_CSR__RISK__RISK_CTRL__KILL_bw 1
 #define HFT_CSR__RISK__RISK_CTRL__KILL_reset 0x1
 
-// reg - hft_csr::RISK::BUDGET_ADD
+// reg - hft_csr__RISK::BUDGET_ADD
 #define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bm 0xffffffff
 #define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bp 0
 #define HFT_CSR__RISK__BUDGET_ADD__AMOUNT_bw 32
 
-// reg - hft_csr::RISK::BUDGET
+// reg - hft_csr__RISK::BUDGET
 #define HFT_CSR__RISK__BUDGET__BUDGET_bm 0xffffffff
 #define HFT_CSR__RISK__BUDGET__BUDGET_bp 0
 #define HFT_CSR__RISK__BUDGET__BUDGET_bw 32
 
-// regfile - hft_csr::RISK
+// regfile - hft_csr__RISK
 typedef struct __attribute__ ((__packed__)) {
     uint32_t MAX_QTY;
     uint32_t MAX_NOTIONAL_LO;
@@ -443,13 +443,13 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t RISK_REJECT_RING_FULL;
 } hft_csr__RISK_t;
 
-// reg - hft_csr::STRATEGY::RULE_SEL
+// reg - hft_csr__STRATEGY::RULE_SEL
 #define HFT_CSR__STRATEGY__RULE_SEL__IDX_bm 0x7
 #define HFT_CSR__STRATEGY__RULE_SEL__IDX_bp 0
 #define HFT_CSR__STRATEGY__RULE_SEL__IDX_bw 3
 #define HFT_CSR__STRATEGY__RULE_SEL__IDX_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_CTRL
+// reg - hft_csr__STRATEGY::RULE_CTRL
 #define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bm 0x1
 #define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bp 0
 #define HFT_CSR__STRATEGY__RULE_CTRL__ENABLE_bw 1
@@ -483,62 +483,62 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__STRATEGY__RULE_CTRL__TIF_bw 8
 #define HFT_CSR__STRATEGY__RULE_CTRL__TIF_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_LOCATE
+// reg - hft_csr__STRATEGY::RULE_LOCATE
 #define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bm 0xffff
 #define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bp 0
 #define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_bw 16
 #define HFT_CSR__STRATEGY__RULE_LOCATE__LOCATE_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_THRESHOLD
+// reg - hft_csr__STRATEGY::RULE_THRESHOLD
 #define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bm 0xffffffff
 #define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bp 0
 #define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_bw 32
 #define HFT_CSR__STRATEGY__RULE_THRESHOLD__THRESHOLD_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_MIN_SHARES
+// reg - hft_csr__STRATEGY::RULE_MIN_SHARES
 #define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bm 0xffffffff
 #define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bp 0
 #define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_bw 32
 #define HFT_CSR__STRATEGY__RULE_MIN_SHARES__MIN_SHARES_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_QTY
+// reg - hft_csr__STRATEGY::RULE_QTY
 #define HFT_CSR__STRATEGY__RULE_QTY__QTY_bm 0xffffffff
 #define HFT_CSR__STRATEGY__RULE_QTY__QTY_bp 0
 #define HFT_CSR__STRATEGY__RULE_QTY__QTY_bw 32
 #define HFT_CSR__STRATEGY__RULE_QTY__QTY_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_OFFSET
+// reg - hft_csr__STRATEGY::RULE_OFFSET
 #define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bm 0xffffffff
 #define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bp 0
 #define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_bw 32
 #define HFT_CSR__STRATEGY__RULE_OFFSET__OFFSET_reset 0x0
 
-// reg - hft_csr::STRATEGY::RULE_COMMIT
+// reg - hft_csr__STRATEGY::RULE_COMMIT
 #define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bm 0x1
 #define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bp 0
 #define HFT_CSR__STRATEGY__RULE_COMMIT__COMMIT_bw 1
 
-// reg - hft_csr::STRATEGY::RULE_ARM
+// reg - hft_csr__STRATEGY::RULE_ARM
 #define HFT_CSR__STRATEGY__RULE_ARM__MASK_bm 0xff
 #define HFT_CSR__STRATEGY__RULE_ARM__MASK_bp 0
 #define HFT_CSR__STRATEGY__RULE_ARM__MASK_bw 8
 
-// reg - hft_csr::STRATEGY::RULE_DISARM
+// reg - hft_csr__STRATEGY::RULE_DISARM
 #define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bm 0xff
 #define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bp 0
 #define HFT_CSR__STRATEGY__RULE_DISARM__MASK_bw 8
 
-// reg - hft_csr::STRATEGY::RULE_STATUS
+// reg - hft_csr__STRATEGY::RULE_STATUS
 #define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bm 0xff
 #define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bp 0
 #define HFT_CSR__STRATEGY__RULE_STATUS__ERROR_bw 8
 
-// reg - hft_csr::STRATEGY::RULE_ARMED
+// reg - hft_csr__STRATEGY::RULE_ARMED
 #define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bm 0xff
 #define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bp 0
 #define HFT_CSR__STRATEGY__RULE_ARMED__ARMED_bw 8
 
-// regfile - hft_csr::STRATEGY
+// regfile - hft_csr__STRATEGY
 typedef struct __attribute__ ((__packed__)) {
     uint32_t RULE_SEL;
     uint32_t RULE_CTRL;
@@ -563,13 +563,13 @@ typedef struct __attribute__ ((__packed__)) {
     hft_csr__counter64_t RULE_FIRED_7;
 } hft_csr__STRATEGY_t;
 
-// reg - hft_csr::TX::TX_CTRL
+// reg - hft_csr__TX::TX_CTRL
 #define HFT_CSR__TX__TX_CTRL__TX_EN_bm 0x1
 #define HFT_CSR__TX__TX_CTRL__TX_EN_bp 0
 #define HFT_CSR__TX__TX_CTRL__TX_EN_bw 1
 #define HFT_CSR__TX__TX_CTRL__TX_EN_reset 0x0
 
-// reg - hft_csr::TX::TX_OUCH
+// reg - hft_csr__TX::TX_OUCH
 #define HFT_CSR__TX__TX_OUCH__DISPLAY_bm 0xff
 #define HFT_CSR__TX__TX_OUCH__DISPLAY_bp 0
 #define HFT_CSR__TX__TX_OUCH__DISPLAY_bw 8
@@ -587,12 +587,12 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_bw 8
 #define HFT_CSR__TX__TX_OUCH__CROSS_TYPE_reset 0x0
 
-// reg - hft_csr::TX::TX_COMMIT
+// reg - hft_csr__TX::TX_COMMIT
 #define HFT_CSR__TX__TX_COMMIT__COMMIT_bm 0x1
 #define HFT_CSR__TX__TX_COMMIT__COMMIT_bp 0
 #define HFT_CSR__TX__TX_COMMIT__COMMIT_bw 1
 
-// reg - hft_csr::TX::TX_STATUS
+// reg - hft_csr__TX::TX_STATUS
 #define HFT_CSR__TX__TX_STATUS__CFG_VALID_bm 0x1
 #define HFT_CSR__TX__TX_STATUS__CFG_VALID_bp 0
 #define HFT_CSR__TX__TX_STATUS__CFG_VALID_bw 1
@@ -603,99 +603,99 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__TX__TX_STATUS__USERREF_IGNORED_bp 2
 #define HFT_CSR__TX__TX_STATUS__USERREF_IGNORED_bw 1
 
-// reg - hft_csr::TX::TX_USERREF_NEXT
+// reg - hft_csr__TX::TX_USERREF_NEXT
 #define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bm 0xffffffff
 #define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bp 0
 #define HFT_CSR__TX__TX_USERREF_NEXT__VALUE_bw 32
 
-// reg - hft_csr::TX::TX_USERREF
+// reg - hft_csr__TX::TX_USERREF
 #define HFT_CSR__TX__TX_USERREF__VALUE_bm 0xffffffff
 #define HFT_CSR__TX__TX_USERREF__VALUE_bp 0
 #define HFT_CSR__TX__TX_USERREF__VALUE_bw 32
 
-// reg - hft_csr::TX::TX_TEMPLATE
+// reg - hft_csr__TX::TX_TEMPLATE
 #define HFT_CSR__TX__TX_TEMPLATE__BYTES_bm 0xffffffff
 #define HFT_CSR__TX__TX_TEMPLATE__BYTES_bp 0
 #define HFT_CSR__TX__TX_TEMPLATE__BYTES_bw 32
 #define HFT_CSR__TX__TX_TEMPLATE__BYTES_reset 0x0
 
-// reg - hft_csr::TX::TX_TEMPLATE_TAIL
+// reg - hft_csr__TX::TX_TEMPLATE_TAIL
 #define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bm 0xffff0000
 #define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bp 16
 #define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_bw 16
 #define HFT_CSR__TX__TX_TEMPLATE_TAIL__BYTES_reset 0x0
 
-// reg - hft_csr::TX::MBOX_SIDE
+// reg - hft_csr__TX::MBOX_SIDE
 #define HFT_CSR__TX__MBOX_SIDE__SIDE_bm 0xff
 #define HFT_CSR__TX__MBOX_SIDE__SIDE_bp 0
 #define HFT_CSR__TX__MBOX_SIDE__SIDE_bw 8
 #define HFT_CSR__TX__MBOX_SIDE__SIDE_reset 0x0
 
-// reg - hft_csr::TX::MBOX_QTY
+// reg - hft_csr__TX::MBOX_QTY
 #define HFT_CSR__TX__MBOX_QTY__QTY_bm 0xffffffff
 #define HFT_CSR__TX__MBOX_QTY__QTY_bp 0
 #define HFT_CSR__TX__MBOX_QTY__QTY_bw 32
 #define HFT_CSR__TX__MBOX_QTY__QTY_reset 0x0
 
-// reg - hft_csr::TX::MBOX_PRICE
+// reg - hft_csr__TX::MBOX_PRICE
 #define HFT_CSR__TX__MBOX_PRICE__PRICE_bm 0xffffffff
 #define HFT_CSR__TX__MBOX_PRICE__PRICE_bp 0
 #define HFT_CSR__TX__MBOX_PRICE__PRICE_bw 32
 #define HFT_CSR__TX__MBOX_PRICE__PRICE_reset 0x0
 
-// reg - hft_csr::TX::MBOX_LOCATE
+// reg - hft_csr__TX::MBOX_LOCATE
 #define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bm 0xffff
 #define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bp 0
 #define HFT_CSR__TX__MBOX_LOCATE__LOCATE_bw 16
 #define HFT_CSR__TX__MBOX_LOCATE__LOCATE_reset 0x0
 
-// reg - hft_csr::TX::MBOX_STOCK_0
+// reg - hft_csr__TX::MBOX_STOCK_0
 #define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bm 0xffffffff
 #define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bp 0
 #define HFT_CSR__TX__MBOX_STOCK_0__BYTES_bw 32
 #define HFT_CSR__TX__MBOX_STOCK_0__BYTES_reset 0x0
 
-// reg - hft_csr::TX::MBOX_STOCK_1
+// reg - hft_csr__TX::MBOX_STOCK_1
 #define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bm 0xffffffff
 #define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bp 0
 #define HFT_CSR__TX__MBOX_STOCK_1__BYTES_bw 32
 #define HFT_CSR__TX__MBOX_STOCK_1__BYTES_reset 0x0
 
-// reg - hft_csr::TX::MBOX_TIF
+// reg - hft_csr__TX::MBOX_TIF
 #define HFT_CSR__TX__MBOX_TIF__TIF_bm 0xff
 #define HFT_CSR__TX__MBOX_TIF__TIF_bp 0
 #define HFT_CSR__TX__MBOX_TIF__TIF_bw 8
 #define HFT_CSR__TX__MBOX_TIF__TIF_reset 0x0
 
-// reg - hft_csr::TX::MBOX_CLORDID
+// reg - hft_csr__TX::MBOX_CLORDID
 #define HFT_CSR__TX__MBOX_CLORDID__BYTES_bm 0xffffffff
 #define HFT_CSR__TX__MBOX_CLORDID__BYTES_bp 0
 #define HFT_CSR__TX__MBOX_CLORDID__BYTES_bw 32
 #define HFT_CSR__TX__MBOX_CLORDID__BYTES_reset 0x0
 
-// reg - hft_csr::TX::MBOX_CLORDID_TAIL
+// reg - hft_csr__TX::MBOX_CLORDID_TAIL
 #define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bm 0xffff0000
 #define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bp 16
 #define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_bw 16
 #define HFT_CSR__TX__MBOX_CLORDID_TAIL__BYTES_reset 0x0
 
-// reg - hft_csr::TX::MBOX_SEND
+// reg - hft_csr__TX::MBOX_SEND
 #define HFT_CSR__TX__MBOX_SEND__SEND_bm 0x1
 #define HFT_CSR__TX__MBOX_SEND__SEND_bp 0
 #define HFT_CSR__TX__MBOX_SEND__SEND_bw 1
 #define HFT_CSR__TX__MBOX_SEND__SEND_reset 0x0
 
-// reg - hft_csr::TX::MBOX_SPACE
+// reg - hft_csr__TX::MBOX_SPACE
 #define HFT_CSR__TX__MBOX_SPACE__SPACE_bm 0x1f
 #define HFT_CSR__TX__MBOX_SPACE__SPACE_bp 0
 #define HFT_CSR__TX__MBOX_SPACE__SPACE_bw 5
 
-// reg - hft_csr::TX::MBOX_STATUS
+// reg - hft_csr__TX::MBOX_STATUS
 #define HFT_CSR__TX__MBOX_STATUS__DROPPED_bm 0x1
 #define HFT_CSR__TX__MBOX_STATUS__DROPPED_bp 0
 #define HFT_CSR__TX__MBOX_STATUS__DROPPED_bw 1
 
-// regfile - hft_csr::TX
+// regfile - hft_csr__TX
 typedef struct __attribute__ ((__packed__)) {
     uint32_t TX_CTRL;
     uint32_t TX_OUCH;

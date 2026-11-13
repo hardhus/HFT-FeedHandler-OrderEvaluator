@@ -14,7 +14,11 @@ mkdir -p "$out/firmware/rtl/core/gen" "$out/software/include/gen" "$out/firmware
 # when blocks are added and every unmapped address in it answers SLVERR.
 # --rt-read-fanin: one register stage inside the read mux (read latency +1 cycle). Without it the
 # read path missed timing after place & route on the A7 at 125 MHz (-0.462 ns, 80 % routing).
-"${peakrdl[@]}" regblock "$rdl" "${cfg[@]}" -o "$out/firmware/rtl/core/gen" \
-  --cpuif axi4-lite-flat --addr-width 16 --rt-read-fanin
+# Two register blocks with the same options: hft_csr (the whole map, the RDL's last addrmap, so the tools
+# below take it without --top) and hft_order_csr (RISK, STRATEGY, TX at their absolute addresses, decision 41).
+for top in hft_csr hft_order_csr; do
+  "${peakrdl[@]}" regblock "$rdl" "${cfg[@]}" --top "$top" -o "$out/firmware/rtl/core/gen" \
+    --cpuif axi4-lite-flat --addr-width 16 --rt-read-fanin
+done
 "${peakrdl[@]}" c-header "$rdl" "${cfg[@]}" -o "$out/software/include/gen/hft_csr.h"
 "${peakrdl[@]}" markdown "$rdl" "${cfg[@]}" -o "$out/firmware/rdl/hft_csr.md"

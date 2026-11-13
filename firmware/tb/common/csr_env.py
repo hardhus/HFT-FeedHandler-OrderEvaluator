@@ -1136,7 +1136,7 @@ class Ord:
         names = {p: p.split(".")[1] for p in ext} | {"LOCATE_ALLOW": "LOCATE_ALLOW"}
         handles = []
         for p in [*ext, "LOCATE_ALLOW"]:
-            h = r.hwif_in
+            h = r.ohwif_in if p.split(".")[0] in ("RISK", "STRATEGY", "TX") else r.hwif_in  # hft_order_csr (decision 41)
             for part in p.split("."):
                 h = getattr(h, part)
             for sig in ("wr_ack", "rd_ack"):

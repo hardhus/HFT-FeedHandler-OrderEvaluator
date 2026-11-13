@@ -371,6 +371,50 @@ def test_locate_allow_memory():
     assert m.read(0xBFFC) == (0, OKAY)
 
 
+def _router_windows() -> list[tuple[int, int]]:
+    """(base, mask) of hft_csr_regs' router windows, read from hft_pkg (CSR_ORDER_WIN_*, window 0 in the low bits)."""
+    text = HFT_PKG.read_text(encoding="utf-8")
+
+    def words(name: str) -> list[int]:
+        m = re.search(rf"localparam logic \[[^\]]+\] {name} = \{{([^}}]+)\}};", text)
+        assert m, f"{name} not found in hft_pkg.sv"
+        return [int(w.strip().split("'h")[1], 16) for w in m[1].split(",")][::-1]
+
+    n = int(re.search(r"localparam int unsigned CSR_ORDER_N_WIN = (\d+);", text)[1])
+    base, mask = words("CSR_ORDER_WIN_BASE"), words("CSR_ORDER_WIN_MASK")
+    assert len(base) == len(mask) == n
+    return list(zip(base, mask, strict=True))
+
+
+def test_router_windows_hold_exactly_the_order_blocks():
+    """Decision 41: the router sends an access to hft_order_csr when its address is in a window. Every RISK,
+    STRATEGY and TX register is in one, and no other register or memory word is (a block placed there later
+    would answer SLVERR from hft_order_csr). hft_order_csr has exactly those registers at the same addresses."""
+    from systemrdl import RDLCompiler
+    from systemrdl.node import RegNode
+
+    from model.csr import RDL
+
+    wins = _router_windows()
+    assert wins == [(0x0A00, 0xFE00), (0x1000, 0xF000), (0x2000, 0xF000)], "hand-written: RISK, STRATEGY, TX"
+
+    def in_win(a: int) -> bool:
+        return any(a & m == b for b, m in wins)
+
+    order = {"RISK", "STRATEGY", "TX"}
+    wrong = [(r.path, hex(r.addr)) for r in csr_map() if in_win(r.addr) != (r.path.split(".")[0] in order)]
+    assert not wrong, f"registers on the wrong side of the router windows: {wrong}"
+    for m in csr_mems():
+        assert not [a for a in range(m.addr, m.addr + m.size, 4) if in_win(a)], f"{m.path} overlaps a window"
+    rdlc = RDLCompiler()
+    rdlc.compile_file(str(RDL))
+    top = rdlc.elaborate(top_def_name="hft_order_csr").top
+    got = sorted((n.get_path().split(".", 1)[1], n.absolute_address) for n in top.descendants(unroll=True)
+                 if isinstance(n, RegNode))  # fmt: skip
+    want = sorted((r.path, r.addr) for r in csr_map() if r.path.split(".")[0] in order)
+    assert got == want, "hft_order_csr differs from hft_csr's RISK, STRATEGY and TX"
+
+
 def test_layout_rules():
     """32-bit registers, 4-byte aligned, no overlap, only inside the F5 blocks, a desc on every field."""
     regs = csr_map()

@@ -6,3 +6,4 @@
 ../rtl/common/axis_skid_buffer.sv
 ../rtl/common/cdc_handshake.sv
 ../rtl/common/cdc_async_fifo.sv
+../rtl/common/axil_route2.sv

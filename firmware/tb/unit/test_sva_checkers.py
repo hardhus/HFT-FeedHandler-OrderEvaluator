@@ -236,6 +236,16 @@ AXIS_VIOLATIONS = {
     "a_last_keep": (2, "tlast beat with empty tkeep"),
 }
 
+ROUTE_TB = ["firmware/tb/sva/route_props.sv", "firmware/tb/sv/tb_route_props.sv"]
+ROUTE_VIOLATIONS = {
+    "a_route_aw": (1, "a write went to the slave its address is not routed to"),
+    "a_route_ar": (2, "a read went to the slave its address is not routed to"),
+    "a_one_slave": (3, "requests to both slaves in one cycle"),
+    "a_switch_drained": (4, "a request went to the other slave while accesses were in flight"),
+    "a_resp_owned": (5, "a response from a slave that has no access in flight"),
+    "a_m0_win_quiet": (6, "m0 got a request for an address in the windows"),
+}
+
 AXIL_TB = ["firmware/tb/sva/axil_props.sv", "firmware/tb/sv/tb_axil_props.sv"]
 AXIL_VIOLATIONS = {
     "a_aw_stable": (1, "AW changed or AWVALID dropped before AWREADY"),
@@ -259,6 +269,7 @@ CHECKERS = {
     "ring": ("tb_ring_props", RING_TB, RING_VIOLATIONS),
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
+    "route": ("tb_route_props", ROUTE_TB, ROUTE_VIOLATIONS),
 }
 
 

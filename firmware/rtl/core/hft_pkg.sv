@@ -215,4 +215,11 @@ package hft_pkg;
     end
     return r;
   endfunction
+
+  // CSR address windows of hft_order_csr (RISK, STRATEGY, TX; decision 41): hft_csr_regs' router sends an
+  // access with (addr & MASK) == BASE to it. Window 0 in the low 16 bits. test_csr_map checks that exactly the
+  // order blocks of hft_csr.rdl lie in them.
+  localparam int unsigned CSR_ORDER_N_WIN = 3;
+  localparam logic [CSR_ORDER_N_WIN*16-1:0] CSR_ORDER_WIN_BASE = {16'h2000, 16'h1000, 16'h0A00};
+  localparam logic [CSR_ORDER_N_WIN*16-1:0] CSR_ORDER_WIN_MASK = {16'hF000, 16'hF000, 16'hFE00};
 endpackage

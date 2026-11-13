@@ -1312,9 +1312,9 @@ async def tc_cmd_latency(dut):
     rsp_acc: list[int] = []  # net edges that accept a response transfer
 
     async def host_mon():
-        reqs = [r.hwif_out.STRATEGY.RULE_COMMIT, r.hwif_out.STRATEGY.RULE_ARM, r.hwif_out.STRATEGY.RULE_DISARM,
-                r.hwif_out.RISK.RISK_COMMIT, r.hwif_out.RISK.BUDGET_ADD, r.hwif_out.TX.TX_COMMIT,
-                r.hwif_out.TX.TX_USERREF_NEXT]  # fmt: skip
+        reqs = [r.ohwif_out.STRATEGY.RULE_COMMIT, r.ohwif_out.STRATEGY.RULE_ARM, r.ohwif_out.STRATEGY.RULE_DISARM,
+                r.ohwif_out.RISK.RISK_COMMIT, r.ohwif_out.RISK.BUDGET_ADD, r.ohwif_out.TX.TX_COMMIT,
+                r.ohwif_out.TX.TX_USERREF_NEXT]  # fmt: skip
         accept = False
         while True:
             await RisingEdge(r.host_clk)
@@ -1593,7 +1593,7 @@ async def tc_kill_latency(dut):
     w = await start(dut)
     o = w.ord
     r = w.root
-    kill_reg = r.hwif_out.RISK.RISK_CTRL.kill.value  # struct member `value` (a handle)
+    kill_reg = r.ohwif_out.RISK.RISK_CTRL.kill.value  # struct member `value` (a handle)
     await open_path(w)
     results: dict[str, list[int]] = {"idle": [], "behind a command": [], "behind a full mailbox": []}
     sync = set()

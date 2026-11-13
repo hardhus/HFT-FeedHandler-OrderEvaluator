@@ -92,7 +92,7 @@ class Mem:
         return None
 
 
-def _field(node: FieldNode) -> Field:
+def _field(node: FieldNode, external: bool) -> Field:
     hw_write = node.is_hw_writable or any(node.get_property(p) for p in ("counter", "hwset", "hwclr"))
     reset = node.get_property("reset")
     return Field(
@@ -106,8 +106,42 @@ def _field(node: FieldNode) -> Field:
         singlepulse=bool(node.get_property("singlepulse")),
         reset=reset if isinstance(reset, int) else None,
         desc=node.get_property("desc"),
-        external=bool(node.parent.external),
+        external=external,
     )
+
+
+def _own_externals(rdlc: RDLCompiler, top_name: str) -> dict[str, bool]:
+    """Register path -> external, as implemented: a register under an external block of the top map
+    (RISK, STRATEGY, TX in hft_csr, decision 41) is implemented by the other root addrmap that places that
+    block internally (hft_order_csr), so its own external flag comes from there. systemrdl marks every child of
+    an external block external, which says nothing about the register itself."""
+    own: dict[str, bool] = {}
+    for comp in rdlc.root.comp_defs.values():
+        if comp.type_name == top_name or type(comp).__name__ != "Addrmap":
+            continue
+        other = rdlc.elaborate(top_def_name=comp.type_name).top
+        for node in other.descendants(unroll=True):
+            if isinstance(node, RegNode) and not any(a.external for a in _block_ancestors(node)):
+                own[node.get_path().split(".", 1)[1]] = bool(node.external)
+    return own
+
+
+def _block_ancestors(node) -> list:
+    """The regfiles and addrmaps between a register and its top (the top excluded)."""
+    out = []
+    cur = node.parent
+    while cur is not None and cur.parent is not None and cur.parent.parent is not None:
+        out.append(cur)
+        cur = cur.parent
+    return out
+
+
+def _reg_external(node: RegNode, own: dict[str, bool]) -> bool:
+    path = node.get_path().split(".", 1)[1]
+    if any(a.external for a in _block_ancestors(node)):
+        assert path in own, f"{path}: under an external block that no other addrmap implements"
+        return own[path]
+    return bool(node.external)
 
 
 def load_map(rdl: Path = RDL) -> tuple[Reg, ...]:
@@ -115,12 +149,13 @@ def load_map(rdl: Path = RDL) -> tuple[Reg, ...]:
     rdlc = RDLCompiler()
     rdlc.compile_file(str(rdl))
     top = rdlc.elaborate().top
+    own = _own_externals(rdlc, top.type_name)
     regs = [
         Reg(
             path=node.get_path().split(".", 1)[1],
             addr=node.absolute_address,
             width=node.get_property("regwidth"),
-            fields=tuple(_field(f) for f in node.fields()),
+            fields=tuple(_field(f, _reg_external(node, own)) for f in node.fields()),
         )
         for node in top.descendants(unroll=True)
         if isinstance(node, RegNode)

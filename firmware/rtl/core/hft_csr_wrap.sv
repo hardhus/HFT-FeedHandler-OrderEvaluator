@@ -300,14 +300,17 @@ module hft_csr_wrap
     logic      resync;
   } feed_cfg_t;
 
-  hft_csr_pkg::hft_csr__in_t  hwif_in;
-  hft_csr_pkg::hft_csr__out_t hwif_out;
+  hft_csr_pkg::hft_csr__in_t              hwif_in;
+  hft_csr_pkg::hft_csr__out_t             hwif_out;
+  // RISK, STRATEGY and TX: hft_order_csr (decision 41)
+  hft_order_csr_pkg::hft_order_csr__in_t  ohwif_in;
+  hft_order_csr_pkg::hft_order_csr__out_t ohwif_out;
 
   if ($size(hwif_out.NET.FILTER) != N_FILTERS) begin : g_check
     $error("hft_csr_wrap: N_FILTERS differs from NET.FILTER[] in hft_csr.rdl");
   end
 
-  hft_csr u_csr (
+  hft_csr_regs u_csr (
       .clk           (host_clk),
       .rst           (host_rst),
       .s_axil_awready(s_axil_awready),
@@ -330,7 +333,9 @@ module hft_csr_wrap
       .s_axil_rdata  (s_axil_rdata),
       .s_axil_rresp  (s_axil_rresp),
       .hwif_in       (hwif_in),
-      .hwif_out      (hwif_out)
+      .hwif_out      (hwif_out),
+      .ohwif_in      (ohwif_in),
+      .ohwif_out     (ohwif_out)
   );
 
   // ---- config commit (host_clk) ----
@@ -732,49 +737,49 @@ module hft_csr_wrap
   assign hwif_in.RING.RING_DROP_ORDERS.HI.value.next = snap_cnt.ord[ORD_CNT_DROP][63:32];
   assign hwif_in.RING.RING_ORDER_QUEUED.queued.next = snap_cnt.ord_queued;
   // STRATEGY: RULE_FIRED_<n> at index n.
-  assign hwif_in.STRATEGY.RULE_FIRED_0.LO.value.next = snap_cnt.ord[0][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_0.HI.value.next = snap_cnt.ord[0][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_1.LO.value.next = snap_cnt.ord[1][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_1.HI.value.next = snap_cnt.ord[1][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_2.LO.value.next = snap_cnt.ord[2][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_2.HI.value.next = snap_cnt.ord[2][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_3.LO.value.next = snap_cnt.ord[3][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_3.HI.value.next = snap_cnt.ord[3][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_4.LO.value.next = snap_cnt.ord[4][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_4.HI.value.next = snap_cnt.ord[4][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_5.LO.value.next = snap_cnt.ord[5][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_5.HI.value.next = snap_cnt.ord[5][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_6.LO.value.next = snap_cnt.ord[6][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_6.HI.value.next = snap_cnt.ord[6][63:32];
-  assign hwif_in.STRATEGY.RULE_FIRED_7.LO.value.next = snap_cnt.ord[7][31:0];
-  assign hwif_in.STRATEGY.RULE_FIRED_7.HI.value.next = snap_cnt.ord[7][63:32];
-  assign hwif_in.STRATEGY.RULE_ARMED.armed.next = snap_cnt.armed;
+  assign ohwif_in.STRATEGY.RULE_FIRED_0.LO.value.next = snap_cnt.ord[0][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_0.HI.value.next = snap_cnt.ord[0][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_1.LO.value.next = snap_cnt.ord[1][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_1.HI.value.next = snap_cnt.ord[1][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_2.LO.value.next = snap_cnt.ord[2][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_2.HI.value.next = snap_cnt.ord[2][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_3.LO.value.next = snap_cnt.ord[3][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_3.HI.value.next = snap_cnt.ord[3][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_4.LO.value.next = snap_cnt.ord[4][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_4.HI.value.next = snap_cnt.ord[4][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_5.LO.value.next = snap_cnt.ord[5][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_5.HI.value.next = snap_cnt.ord[5][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_6.LO.value.next = snap_cnt.ord[6][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_6.HI.value.next = snap_cnt.ord[6][63:32];
+  assign ohwif_in.STRATEGY.RULE_FIRED_7.LO.value.next = snap_cnt.ord[7][31:0];
+  assign ohwif_in.STRATEGY.RULE_FIRED_7.HI.value.next = snap_cnt.ord[7][63:32];
+  assign ohwif_in.STRATEGY.RULE_ARMED.armed.next = snap_cnt.armed;
   // RISK: ORDERS_SENT_*, then RISK_REJECT_<reason> at ORD_CNT_REJ + reason - 1.
-  assign hwif_in.RISK.BUDGET.budget.next = snap_cnt.budget;
-  assign hwif_in.RISK.ORDERS_SENT_HW.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][31:0];
-  assign hwif_in.RISK.ORDERS_SENT_HW.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][63:32];
-  assign hwif_in.RISK.ORDERS_SENT_HOST.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][31:0];
-  assign hwif_in.RISK.ORDERS_SENT_HOST.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][63:32];
-  assign hwif_in.RISK.RISK_REJECT_KILL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_KILL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_TX_OFF.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_TX_OFF.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_INVALID.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_INVALID.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_LOCATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_LOCATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_QTY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_QTY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_NOTIONAL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_NOTIONAL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_BUDGET.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_BUDGET.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_RATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_RATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_TX_BUSY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_TX_BUSY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][63:32];
-  assign hwif_in.RISK.RISK_REJECT_RING_FULL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][31:0];
-  assign hwif_in.RISK.RISK_REJECT_RING_FULL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][63:32];
+  assign ohwif_in.RISK.BUDGET.budget.next = snap_cnt.budget;
+  assign ohwif_in.RISK.ORDERS_SENT_HW.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][31:0];
+  assign ohwif_in.RISK.ORDERS_SENT_HW.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HW][63:32];
+  assign ohwif_in.RISK.ORDERS_SENT_HOST.LO.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][31:0];
+  assign ohwif_in.RISK.ORDERS_SENT_HOST.HI.value.next = snap_cnt.ord[ORD_CNT_SENT_HOST][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_KILL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_KILL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_KILL)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_TX_OFF.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_TX_OFF.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_OFF)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_INVALID.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_INVALID.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_INVALID)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_LOCATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_LOCATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_LOCATE)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_QTY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_QTY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_QTY)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_NOTIONAL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_NOTIONAL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_NOTIONAL)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_BUDGET.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_BUDGET.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_BUDGET)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_RATE.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_RATE.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RATE)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_TX_BUSY.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_TX_BUSY.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_TX_BUSY)-1][63:32];
+  assign ohwif_in.RISK.RISK_REJECT_RING_FULL.LO.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][31:0];
+  assign ohwif_in.RISK.RISK_REJECT_RING_FULL.HI.value.next = snap_cnt.ord[ORD_CNT_REJ+int'(RISK_RING_FULL)-1][63:32];
   assign hwif_in.FEED.EXPECTED_SEQ.LO.value.next = snap_cnt.expected_seq[31:0];
   assign hwif_in.FEED.EXPECTED_SEQ.HI.value.next = snap_cnt.expected_seq[63:32];
   assign hwif_in.FEED.FEED_STATE.synced.next = snap_cnt.synced;
@@ -943,7 +948,7 @@ module hft_csr_wrap
       .STAGES(STAGES)
   ) u_ctl_sync (
       .clk(net_clk),
-      .d  ({hwif_out.RISK.RISK_CTRL.kill.value, hwif_out.TX.TX_CTRL.tx_en.value}),
+      .d  ({ohwif_out.RISK.RISK_CTRL.kill.value, ohwif_out.TX.TX_CTRL.tx_en.value}),
       .q  ({kill_s, tx_en_s})
   );
 
@@ -981,26 +986,26 @@ module hft_csr_wrap
   logic [             63:0] mbox_drop_q;
 
   always_comb begin
-    mbox_shadow.side = hwif_out.TX.MBOX_SIDE.side.value;
-    mbox_shadow.qty = hwif_out.TX.MBOX_QTY.qty.value;
-    mbox_shadow.price = hwif_out.TX.MBOX_PRICE.price.value;
-    mbox_shadow.locate = hwif_out.TX.MBOX_LOCATE.locate.value;
+    mbox_shadow.side = ohwif_out.TX.MBOX_SIDE.side.value;
+    mbox_shadow.qty = ohwif_out.TX.MBOX_QTY.qty.value;
+    mbox_shadow.price = ohwif_out.TX.MBOX_PRICE.price.value;
+    mbox_shadow.locate = ohwif_out.TX.MBOX_LOCATE.locate.value;
     mbox_shadow.stock = {
-      wire_bytes(hwif_out.TX.MBOX_STOCK_1.bytes.value),
-      wire_bytes(hwif_out.TX.MBOX_STOCK_0.bytes.value)
+      wire_bytes(ohwif_out.TX.MBOX_STOCK_1.bytes.value),
+      wire_bytes(ohwif_out.TX.MBOX_STOCK_0.bytes.value)
     };
-    mbox_shadow.tif = hwif_out.TX.MBOX_TIF.tif.value;
+    mbox_shadow.tif = ohwif_out.TX.MBOX_TIF.tif.value;
     mbox_shadow.clordid = {
-      hwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[7:0],  // field [31:16]: byte 12 in value[15:8]
-      hwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[15:8],
-      wire_bytes(hwif_out.TX.MBOX_CLORDID[2].bytes.value),
-      wire_bytes(hwif_out.TX.MBOX_CLORDID[1].bytes.value),
-      wire_bytes(hwif_out.TX.MBOX_CLORDID[0].bytes.value)
+      ohwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[7:0],  // field [31:16]: byte 12 in value[15:8]
+      ohwif_out.TX.MBOX_CLORDID_TAIL.bytes.value[15:8],
+      wire_bytes(ohwif_out.TX.MBOX_CLORDID[2].bytes.value),
+      wire_bytes(ohwif_out.TX.MBOX_CLORDID[1].bytes.value),
+      wire_bytes(ohwif_out.TX.MBOX_CLORDID[0].bytes.value)
     };
   end
 
   // One send per write with byte 0 enabled (swmod), as FEED_COMMIT counts its writes.
-  assign mbox_send = mbox_send_write_q && hwif_out.TX.MBOX_SEND.send.value;
+  assign mbox_send = mbox_send_write_q && ohwif_out.TX.MBOX_SEND.send.value;
   assign mbox_fits = !mbox_full && !mbox_wr_busy;
 
   always_ff @(posedge host_clk) begin
@@ -1010,7 +1015,7 @@ module hft_csr_wrap
       mbox_dropped_q    <= 1'b0;
       mbox_drop_q       <= '0;
     end else begin
-      mbox_send_write_q <= hwif_out.TX.MBOX_SEND.send.swmod;
+      mbox_send_write_q <= ohwif_out.TX.MBOX_SEND.send.swmod;
       mbox_wr_q         <= mbox_send;
       if (mbox_send) begin
         mbox_dropped_q <= !mbox_fits;
@@ -1042,20 +1047,20 @@ module hft_csr_wrap
       .rd_rst_busy(mbox_rd_busy)
   );
 
-  assign m_host_valid                        = !mbox_empty && !mbox_rd_busy;
-  assign m_host_side                         = mbox_dout.side;
-  assign m_host_qty                          = mbox_dout.qty;
-  assign m_host_price                        = mbox_dout.price;
-  assign m_host_locate                       = mbox_dout.locate;
-  assign m_host_stock                        = mbox_dout.stock;
-  assign m_host_tif                          = mbox_dout.tif;
-  assign m_host_clordid                      = mbox_dout.clordid;
+  assign m_host_valid                         = !mbox_empty && !mbox_rd_busy;
+  assign m_host_side                          = mbox_dout.side;
+  assign m_host_qty                           = mbox_dout.qty;
+  assign m_host_price                         = mbox_dout.price;
+  assign m_host_locate                        = mbox_dout.locate;
+  assign m_host_stock                         = mbox_dout.stock;
+  assign m_host_tif                           = mbox_dout.tif;
+  assign m_host_clordid                       = mbox_dout.clordid;
 
   // The send's result in its own cycle already: a read right after the write sees it.
-  assign hwif_in.TX.MBOX_STATUS.dropped.next = mbox_send ? !mbox_fits : mbox_dropped_q;
-  assign hwif_in.TX.MBOX_SPACE.space.next    = 5'(2 ** MBOX_DEPTH_LOG2) - 5'(mbox_count);
-  assign hwif_in.TX.MBOX_DROP.LO.value.next  = mbox_drop_q[31:0];
-  assign hwif_in.TX.MBOX_DROP.HI.value.next  = mbox_drop_q[63:32];
+  assign ohwif_in.TX.MBOX_STATUS.dropped.next = mbox_send ? !mbox_fits : mbox_dropped_q;
+  assign ohwif_in.TX.MBOX_SPACE.space.next    = 5'(2 ** MBOX_DEPTH_LOG2) - 5'(mbox_count);
+  assign ohwif_in.TX.MBOX_DROP.LO.value.next  = mbox_drop_q[31:0];
+  assign ohwif_in.TX.MBOX_DROP.HI.value.next  = mbox_drop_q[63:32];
 
   // ---- command channel, host side ----
   typedef enum logic [1:0] {
@@ -1077,39 +1082,40 @@ module hft_csr_wrap
   sym_req_t  new_loc;
 
   always_comb begin
-    new_rule.idx = hwif_out.STRATEGY.RULE_SEL.idx.value;
-    new_rule.rule.enable = hwif_out.STRATEGY.RULE_CTRL.enable.value;
-    new_rule.rule.msg_mask = hwif_out.STRATEGY.RULE_CTRL.msg_mask.value;
-    new_rule.rule.locate = hwif_out.STRATEGY.RULE_LOCATE.locate.value;
-    new_rule.rule.side_match = hwif_out.STRATEGY.RULE_CTRL.side_match.value;
-    new_rule.rule.price_ge = hwif_out.STRATEGY.RULE_CTRL.price_ge.value;
-    new_rule.rule.price_threshold = hwif_out.STRATEGY.RULE_THRESHOLD.threshold.value;
-    new_rule.rule.min_shares = hwif_out.STRATEGY.RULE_MIN_SHARES.min_shares.value;
-    new_rule.rule.action_side = hwif_out.STRATEGY.RULE_CTRL.action_side.value;
-    new_rule.rule.qty_min = hwif_out.STRATEGY.RULE_CTRL.qty_min.value;
-    new_rule.rule.qty = hwif_out.STRATEGY.RULE_QTY.qty.value;
-    new_rule.rule.price_threshold_mode = hwif_out.STRATEGY.RULE_CTRL.price_threshold_mode.value;
-    new_rule.rule.price_offset = hwif_out.STRATEGY.RULE_OFFSET.offset.value;
-    new_rule.rule.tif = hwif_out.STRATEGY.RULE_CTRL.tif.value;
+    new_rule.idx = ohwif_out.STRATEGY.RULE_SEL.idx.value;
+    new_rule.rule.enable = ohwif_out.STRATEGY.RULE_CTRL.enable.value;
+    new_rule.rule.msg_mask = ohwif_out.STRATEGY.RULE_CTRL.msg_mask.value;
+    new_rule.rule.locate = ohwif_out.STRATEGY.RULE_LOCATE.locate.value;
+    new_rule.rule.side_match = ohwif_out.STRATEGY.RULE_CTRL.side_match.value;
+    new_rule.rule.price_ge = ohwif_out.STRATEGY.RULE_CTRL.price_ge.value;
+    new_rule.rule.price_threshold = ohwif_out.STRATEGY.RULE_THRESHOLD.threshold.value;
+    new_rule.rule.min_shares = ohwif_out.STRATEGY.RULE_MIN_SHARES.min_shares.value;
+    new_rule.rule.action_side = ohwif_out.STRATEGY.RULE_CTRL.action_side.value;
+    new_rule.rule.qty_min = ohwif_out.STRATEGY.RULE_CTRL.qty_min.value;
+    new_rule.rule.qty = ohwif_out.STRATEGY.RULE_QTY.qty.value;
+    new_rule.rule.price_threshold_mode = ohwif_out.STRATEGY.RULE_CTRL.price_threshold_mode.value;
+    new_rule.rule.price_offset = ohwif_out.STRATEGY.RULE_OFFSET.offset.value;
+    new_rule.rule.tif = ohwif_out.STRATEGY.RULE_CTRL.tif.value;
 
-    new_lim.max_qty = hwif_out.RISK.MAX_QTY.max_qty.value;
+    new_lim.max_qty = ohwif_out.RISK.MAX_QTY.max_qty.value;
     new_lim.max_notional = {
-      hwif_out.RISK.MAX_NOTIONAL_HI.value.value, hwif_out.RISK.MAX_NOTIONAL_LO.value.value
+      ohwif_out.RISK.MAX_NOTIONAL_HI.value.value, ohwif_out.RISK.MAX_NOTIONAL_LO.value.value
     };
-    new_lim.rate_refill = hwif_out.RISK.RATE_REFILL.refill.value;
-    new_lim.rate_period = hwif_out.RISK.RATE_PERIOD.period.value;
-    new_lim.rate_burst = hwif_out.RISK.RATE_BURST.burst.value;
+    new_lim.rate_refill = ohwif_out.RISK.RATE_REFILL.refill.value;
+    new_lim.rate_period = ohwif_out.RISK.RATE_PERIOD.period.value;
+    new_lim.rate_burst = ohwif_out.RISK.RATE_BURST.burst.value;
 
     new_tx.tmpl[8*40+:16] = {  // field [31:16]: byte 40 in value[15:8]
-      hwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[7:0], hwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[15:8]
+      ohwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[7:0],
+      ohwif_out.TX.TX_TEMPLATE_TAIL.bytes.value[15:8]
     };
     for (int w = 0; w < 10; w++) begin
-      new_tx.tmpl[32*w+:32] = wire_bytes(hwif_out.TX.TX_TEMPLATE[w].bytes.value);
+      new_tx.tmpl[32*w+:32] = wire_bytes(ohwif_out.TX.TX_TEMPLATE[w].bytes.value);
     end
-    new_tx.display    = hwif_out.TX.TX_OUCH.display.value;
-    new_tx.capacity   = hwif_out.TX.TX_OUCH.capacity.value;
-    new_tx.ise        = hwif_out.TX.TX_OUCH.ise.value;
-    new_tx.cross_type = hwif_out.TX.TX_OUCH.cross_type.value;
+    new_tx.display    = ohwif_out.TX.TX_OUCH.display.value;
+    new_tx.capacity   = ohwif_out.TX.TX_OUCH.capacity.value;
+    new_tx.ise        = ohwif_out.TX.TX_OUCH.ise.value;
+    new_tx.cross_type = ohwif_out.TX.TX_OUCH.cross_type.value;
 
     new_loc.wr        = hwif_out.LOCATE_ALLOW.req_is_wr;
     new_loc.addr      = hwif_out.LOCATE_ALLOW.addr[12:2];
@@ -1121,51 +1127,51 @@ module hft_csr_wrap
 
   // The command of this cycle's external request (regblock: one at a time) and whether it is a no-op.
   always_comb begin
-    cmd_new.kill  = hwif_out.RISK.RISK_CTRL.kill.value;
-    cmd_new.tx_en = hwif_out.TX.TX_CTRL.tx_en.value;
+    cmd_new.kill  = ohwif_out.RISK.RISK_CTRL.kill.value;
+    cmd_new.tx_en = ohwif_out.TX.TX_CTRL.tx_en.value;
     cmd_new.kind  = CMD_LOC;
     cmd_new.pay   = PAY_W'(new_loc);
     cmd_req       = hwif_out.LOCATE_ALLOW.req;
     cmd_nop       = 1'b0;
-    if (hwif_out.STRATEGY.RULE_COMMIT.req) begin
+    if (ohwif_out.STRATEGY.RULE_COMMIT.req) begin
       cmd_new.kind = CMD_RULE_COMMIT;
       cmd_new.pay = PAY_W'(new_rule);
       cmd_req = 1'b1;
-      cmd_nop      = !(hwif_out.STRATEGY.RULE_COMMIT.wr_data.commit && hwif_out.STRATEGY.RULE_COMMIT.wr_biten.commit);
+      cmd_nop      = !(ohwif_out.STRATEGY.RULE_COMMIT.wr_data.commit && ohwif_out.STRATEGY.RULE_COMMIT.wr_biten.commit);
     end
-    if (hwif_out.STRATEGY.RULE_ARM.req) begin
+    if (ohwif_out.STRATEGY.RULE_ARM.req) begin
       cmd_new.kind = CMD_RULE_ARM;
-      cmd_new.pay  = PAY_W'(hwif_out.STRATEGY.RULE_ARM.wr_data.mask & hwif_out.STRATEGY.RULE_ARM.wr_biten.mask);
+      cmd_new.pay  = PAY_W'(ohwif_out.STRATEGY.RULE_ARM.wr_data.mask & ohwif_out.STRATEGY.RULE_ARM.wr_biten.mask);
       cmd_req = 1'b1;
     end
-    if (hwif_out.STRATEGY.RULE_DISARM.req) begin
+    if (ohwif_out.STRATEGY.RULE_DISARM.req) begin
       cmd_new.kind = CMD_RULE_DISARM;
-      cmd_new.pay = PAY_W'(hwif_out.STRATEGY.RULE_DISARM.wr_data.mask & hwif_out.STRATEGY.RULE_DISARM.wr_biten.mask);
+      cmd_new.pay = PAY_W'(ohwif_out.STRATEGY.RULE_DISARM.wr_data.mask & ohwif_out.STRATEGY.RULE_DISARM.wr_biten.mask);
       cmd_req = 1'b1;
     end
-    if (hwif_out.RISK.RISK_COMMIT.req) begin
+    if (ohwif_out.RISK.RISK_COMMIT.req) begin
       cmd_new.kind = CMD_RISK_COMMIT;
       cmd_new.pay = PAY_W'(new_lim);
       cmd_req = 1'b1;
-      cmd_nop      = !(hwif_out.RISK.RISK_COMMIT.wr_data.commit && hwif_out.RISK.RISK_COMMIT.wr_biten.commit);
+      cmd_nop      = !(ohwif_out.RISK.RISK_COMMIT.wr_data.commit && ohwif_out.RISK.RISK_COMMIT.wr_biten.commit);
     end
-    if (hwif_out.RISK.BUDGET_ADD.req) begin
+    if (ohwif_out.RISK.BUDGET_ADD.req) begin
       cmd_new.kind = CMD_BUDGET_ADD;
-      cmd_new.pay = PAY_W'(hwif_out.RISK.BUDGET_ADD.wr_data.amount & hwif_out.RISK.BUDGET_ADD.wr_biten.amount);
+      cmd_new.pay = PAY_W'(ohwif_out.RISK.BUDGET_ADD.wr_data.amount & ohwif_out.RISK.BUDGET_ADD.wr_biten.amount);
       cmd_req = 1'b1;
     end
-    if (hwif_out.TX.TX_COMMIT.req) begin
+    if (ohwif_out.TX.TX_COMMIT.req) begin
       cmd_new.kind = CMD_TX_COMMIT;
       cmd_new.pay = PAY_W'(new_tx);
       cmd_req = 1'b1;
-      cmd_nop = !(hwif_out.TX.TX_COMMIT.wr_data.commit && hwif_out.TX.TX_COMMIT.wr_biten.commit);
+      cmd_nop = !(ohwif_out.TX.TX_COMMIT.wr_data.commit && ohwif_out.TX.TX_COMMIT.wr_biten.commit);
     end
-    if (hwif_out.TX.TX_USERREF_NEXT.req) begin
+    if (ohwif_out.TX.TX_USERREF_NEXT.req) begin
       cmd_new.kind = CMD_USERREF_WR;
-      cmd_new.pay = PAY_W'(hwif_out.TX.TX_USERREF_NEXT.wr_data.value & hwif_out.TX.TX_USERREF_NEXT.wr_biten.value);
+      cmd_new.pay = PAY_W'(ohwif_out.TX.TX_USERREF_NEXT.wr_data.value & ohwif_out.TX.TX_USERREF_NEXT.wr_biten.value);
       cmd_req = 1'b1;
     end
-    if (hwif_out.TX.TX_USERREF.req) begin
+    if (ohwif_out.TX.TX_USERREF.req) begin
       cmd_new.kind = CMD_USERREF_RD;
       cmd_req      = 1'b1;
     end
@@ -1252,27 +1258,27 @@ module hft_csr_wrap
   // Acks: a no-op in the cycle after its request, a command when its response lands (cmd_q holds its
   // kind; a no-op's kind is in cmd_q too).
   logic ack;
-  assign ack                                 = nop_ack_q || (h_state_q == H_WAIT && rsp_landed);
+  assign ack                                  = nop_ack_q || (h_state_q == H_WAIT && rsp_landed);
 
-  assign hwif_in.STRATEGY.RULE_COMMIT.wr_ack = ack && cmd_q.kind == CMD_RULE_COMMIT;
-  assign hwif_in.STRATEGY.RULE_ARM.wr_ack    = ack && cmd_q.kind == CMD_RULE_ARM;
-  assign hwif_in.STRATEGY.RULE_DISARM.wr_ack = ack && cmd_q.kind == CMD_RULE_DISARM;
-  assign hwif_in.RISK.RISK_COMMIT.wr_ack     = ack && cmd_q.kind == CMD_RISK_COMMIT;
-  assign hwif_in.RISK.BUDGET_ADD.wr_ack      = ack && cmd_q.kind == CMD_BUDGET_ADD;
-  assign hwif_in.TX.TX_COMMIT.wr_ack         = ack && cmd_q.kind == CMD_TX_COMMIT;
-  assign hwif_in.TX.TX_USERREF_NEXT.wr_ack   = ack && cmd_q.kind == CMD_USERREF_WR;
-  assign hwif_in.TX.TX_USERREF.rd_ack        = ack && cmd_q.kind == CMD_USERREF_RD;
-  assign hwif_in.TX.TX_USERREF.rd_data.value = rsp_dst.rdata;
+  assign ohwif_in.STRATEGY.RULE_COMMIT.wr_ack = ack && cmd_q.kind == CMD_RULE_COMMIT;
+  assign ohwif_in.STRATEGY.RULE_ARM.wr_ack    = ack && cmd_q.kind == CMD_RULE_ARM;
+  assign ohwif_in.STRATEGY.RULE_DISARM.wr_ack = ack && cmd_q.kind == CMD_RULE_DISARM;
+  assign ohwif_in.RISK.RISK_COMMIT.wr_ack     = ack && cmd_q.kind == CMD_RISK_COMMIT;
+  assign ohwif_in.RISK.BUDGET_ADD.wr_ack      = ack && cmd_q.kind == CMD_BUDGET_ADD;
+  assign ohwif_in.TX.TX_COMMIT.wr_ack         = ack && cmd_q.kind == CMD_TX_COMMIT;
+  assign ohwif_in.TX.TX_USERREF_NEXT.wr_ack   = ack && cmd_q.kind == CMD_USERREF_WR;
+  assign ohwif_in.TX.TX_USERREF.rd_ack        = ack && cmd_q.kind == CMD_USERREF_RD;
+  assign ohwif_in.TX.TX_USERREF.rd_data.value = rsp_dst.rdata;
   logic host_loc_wr;
   assign host_loc_wr = cmd_q.pay[$bits(sym_req_t)-1];  // sym_req_t.wr, its first field
   assign hwif_in.LOCATE_ALLOW.wr_ack = ack && cmd_q.kind == CMD_LOC && host_loc_wr;
   assign hwif_in.LOCATE_ALLOW.rd_ack = ack && cmd_q.kind == CMD_LOC && !host_loc_wr;
   assign hwif_in.LOCATE_ALLOW.rd_data = rsp_dst.rdata;
 
-  assign hwif_in.STRATEGY.RULE_STATUS.error.next = rule_err_q;
-  assign hwif_in.TX.TX_STATUS.cfg_valid.next = tx_cfg_valid_q;
-  assign hwif_in.TX.TX_STATUS.cfg_refused.next = tx_refused_q;
-  assign hwif_in.TX.TX_STATUS.userref_ignored.next = userref_ignored_q;
+  assign ohwif_in.STRATEGY.RULE_STATUS.error.next = rule_err_q;
+  assign ohwif_in.TX.TX_STATUS.cfg_valid.next = tx_cfg_valid_q;
+  assign ohwif_in.TX.TX_STATUS.cfg_refused.next = tx_refused_q;
+  assign ohwif_in.TX.TX_STATUS.userref_ignored.next = userref_ignored_q;
 
   // ---- command channel, net side ----
   typedef enum logic [2:0] {

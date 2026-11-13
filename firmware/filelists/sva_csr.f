@@ -3,4 +3,5 @@
 # untouched. Paths are relative to this file.
 ../tb/sva/axil_props.sv
 ../tb/sva/assert_arm.sv
+../tb/sva/route_props.sv
 ../tb/sva/bind_csr.sv

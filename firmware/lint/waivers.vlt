@@ -1,26 +1,36 @@
 `verilator_config
 // Project-wide Verilator lint waivers. Every waiver needs a one-line reason.
 
-// Generated CSR block (firmware/rtl/core/gen, PeakRDL-regblock): waived per rule and message,
+// Generated CSR blocks hft_csr and hft_order_csr (firmware/rtl/core/gen, PeakRDL-regblock, same options):
+// waived per rule and message, for both files alike,
 // never edited by hand. Each waiver names what the generator emits and why it is harmless.
 // AXI4-Lite AxPROT is part of the port list; the register block grants every access.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_?rprot'"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Signal is not used: 's_axil_?rprot'"
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
 // Registers are 32-bit aligned: the two byte-address bits are not decoded.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
 // Read fan-in retiming (--rt-read-fanin): stage 1 groups the read mux by the address high bits,
 // stage 2 selects by the low bits, so each stage uses only its part of the address.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of function variable are not used: 'addr'*"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Bits of function variable are not used: 'addr'*"
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'readback_addr_rt'*"
+lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Bits of signal are not used: 'readback_addr_rt'*"
 // The next-state logic and the storage of each field is its own always block that writes one
 // member of the shared field_combo and field_storage structs. Different members, so no real
 // multiple driver. Verilator documents that this warning only costs speed, not correctness.
 lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_csr.sv" -match "*'field_combo'"
+lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_order_csr.sv" -match "*'field_combo'"
 lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_csr.sv" -match "*'field_storage'"
+lint_off -rule MULTIDRIVEN -file "*/rtl/core/gen/hft_order_csr.sv" -match "*'field_storage'"
 // Register arrays (NET.FILTER[]) are generate loops without a block name.
 lint_off -rule GENUNNAMED -file "*/rtl/core/gen/hft_csr.sv"
+lint_off -rule GENUNNAMED -file "*/rtl/core/gen/hft_order_csr.sv"
 // Map constants for users of the package; a build need not use all of them.
 lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_csr_pkg.sv" -match "*Parameter is not used: 'HFT_CSR_*'"
+lint_off -rule UNUSEDPARAM -file "*/rtl/core/gen/hft_order_csr_pkg.sv" -match "*Parameter is not used: 'HFT_ORDER_CSR_*'"
 
 // Generated descriptor package (scripts/gen_desc.py): the offsets and sizes of every field for its
 // users; a build need not use all of them.

@@ -777,7 +777,8 @@ otherwise the rule never fires. In return every ORDER_SENT's trigger message is 
 `RISK_CTRL.kill` is not a shadow and has no commit: it reaches `ctl_kill` (`strategy_engine` and `risk_check`)
 through a `sync_bit`, `STAGES` `net_clk` edges after the register changes (one more with CDC jitter). It is a bus
 write like any other, though: regblock keeps one external access in flight and holds every other access behind
-it, and the order path commands (RULE_*, RISK_COMMIT, BUDGET_ADD, TX_COMMIT, TX_USERREF*, LOCATE_ALLOW) are external
+it (the RISK, STRATEGY and TX register block, `hft_order_csr`, does; `hft_csr_regs`' router, decision 41, starts an
+access to the other register block only after every earlier access has been answered), and the order path commands (RULE_*, RISK_COMMIT, BUDGET_ADD, TX_COMMIT, TX_USERREF*, LOCATE_ALLOW) are external
 accesses answered once in effect. A kill write behind one of them waits for it. There is no bypass (decision 38): a
 reset sweep runs with kill already 1, and live the wait is the command's round trip, plus its fence when it is
 fenced.
@@ -787,9 +788,9 @@ Measured in `test_hft_csr_wrap.tc_kill_latency` (all five clock profiles), from 
 
 | Kill write | Time | Conditions |
 |---|---|---|
-| on an idle bus | 9.8–23.6 ns | |
-| behind a command in flight | 69–106 ns | mailbox empty, so the command is not fenced |
-| behind a command fenced by a full mailbox | 158–232 ns | 16 orders, `risk_check` taking one every cycle, no hardware order in between |
+| on an idle bus | 13.4–27.4 ns | |
+| behind a command in flight | 68–108 ns | mailbox empty, so the command is not fenced |
+| behind a command fenced by a full mailbox | 164–228 ns | 16 orders, `risk_check` taking one every cycle, no hardware order in between |
 
 The last row is the best case of that situation, not its worst. A fenced command waits until every earlier
 `MBOX_SEND` has been taken by `risk_check` and decided, and `risk_check` takes a host order only in a cycle with
@@ -805,9 +806,9 @@ kill is 1 then anyway).
 
 With the real blocks (`test_rx_order.tc_order_kill_latency_under_burst`, net2host and host2net): 16 `MBOX_SEND`s,
 a command fenced behind them and the kill write behind it, measured from the kill write's W handshake to
-`ctl_kill` at `risk_check`. Without hardware orders: 161–169 ns (net2host), 113–115 ns (host2net). With all 8
+`ctl_kill` at `risk_check`. Without hardware orders: 164–169 ns (net2host), 115–120 ns (host2net). With all 8
 rules armed and a packet of 8 triggers whose orders reach `risk_check` while the fence waits (the packet's start
-swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 221 ns and 146 ns, about 8 net cycles
+swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 221 ns and 153 ns, about 8 net cycles
 over the slowest case without them (one run each), inside the bound above. The test checks the bound in every run.
 
 ### Software contract after reset

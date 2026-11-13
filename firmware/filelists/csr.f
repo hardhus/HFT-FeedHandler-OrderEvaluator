@@ -2,6 +2,9 @@
 # Files under gen/ are generated from firmware/rdl/hft_csr.rdl (just gen) and never edited.
 # Order matters: packages first.
 ../rtl/core/gen/hft_csr_pkg.sv
+../rtl/core/gen/hft_order_csr_pkg.sv
 ../rtl/core/gen/hft_csr.sv
+../rtl/core/gen/hft_order_csr.sv
+../rtl/core/hft_csr_regs.sv
 ../rtl/core/rx_stats.sv
 ../rtl/core/hft_csr_wrap.sv
