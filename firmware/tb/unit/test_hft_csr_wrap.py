@@ -204,7 +204,9 @@ async def tc_commit_atomic(dut):
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_commit_while_busy(dut):
     """Commits while the handshake is busy: bursts of 2..6 commits with 0..3 shadow writes between
-    them. No commit is lost (the newest is applied), coalesced commits skip older configurations,
+    them, each write waiting for its response, or (half the bursts) the commits back to back without waiting, so
+    some always meet a busy handshake (waiting for each response alone coalesced nothing with seed 1524155026 in
+    host2net once the router added a cycle per access). No commit is lost (the newest is applied), coalesced commits skip older configurations,
     each committed shadow arrives whole, shadow writes after the last commit of a burst never reach
     cfg_*, and commit_busy reads 1 while a commit is in flight."""
     w = await start(dut)
@@ -212,10 +214,15 @@ async def tc_commit_while_busy(dut):
     regs = [a for a, _ in NetCfg().writes()]
     for _ in range(40):
         await w.write_cfg(NetCfg.random(w.rng))
-        for _ in range(w.rng.randint(2, 6)):
-            await w.commit()
-            for _ in range(w.rng.randint(0, 3)):
-                await w.write(w.rng.choice(regs), w.rng.getrandbits(32))
+        if w.rng.random() < 0.5:
+            pend = [w.commit_nowait() for _ in range(w.rng.randint(2, 6))]
+            for p in pend:
+                assert (await p.wait())[1] == OKAY
+        else:
+            for _ in range(w.rng.randint(2, 6)):
+                await w.commit()
+                for _ in range(w.rng.randint(0, 3)):
+                    await w.write(w.rng.choice(regs), w.rng.getrandbits(32))
         busy_seen += await w.busy()
         for _ in range(w.rng.randint(1, 4)):  # not committed: must never reach cfg_*
             await w.write(w.rng.choice(regs), w.rng.getrandbits(32))

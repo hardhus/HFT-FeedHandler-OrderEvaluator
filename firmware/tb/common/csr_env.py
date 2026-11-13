@@ -278,6 +278,12 @@ class Wrap:
         self.committed.append(NetCfg.from_regs(self.regs))
         await self.write(NET_COMMIT, 1)
 
+    def commit_nowait(self):
+        """NET_COMMIT queued without waiting for its response (the next one may follow at once); returns the
+        pending write. The expected configuration is the shadow at this moment."""
+        self.committed.append(NetCfg.from_regs(self.regs))
+        return self.drv.write_nowait(NET_COMMIT, 1)
+
     async def busy(self) -> int:
         data, resp = await self.drv.read(NET_STATUS)
         assert resp == OKAY
