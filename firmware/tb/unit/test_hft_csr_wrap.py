@@ -660,7 +660,9 @@ async def tc_feed_commit_atomic(dut):
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_feed_commit_while_busy(dut):
     """FEED commits and resyncs while the handshake is busy: bursts of 2..6 requests (a third of
-    them resyncs) with 0..3 shadow writes between them. No commit is lost (the newest is applied),
+    them resyncs) with 0..3 shadow writes between them, each write waiting for its response, or (half the bursts)
+    the requests back to back without waiting, so some always meet a busy handshake (as tc_commit_while_busy:
+    seeds 540247531 and 1434550900 in host2net coalesced nothing once the router added a cycle). No commit is lost (the newest is applied),
     coalesced commits skip older configurations, resync requests merge into one transfer but are
     never lost, shadow writes after the last request never reach cfg_*, and commit_busy reads 1
     while a request is in flight."""
@@ -669,10 +671,21 @@ async def tc_feed_commit_while_busy(dut):
     regs = [a for a, _ in FeedCfg().writes()]
     for _ in range(40):
         await w.feed.write_cfg(FeedCfg.random(w.rng))
-        for _ in range(w.rng.randint(2, 6)):
-            await w.feed.commit(resync=w.rng.random() < 0.33)
-            for _ in range(w.rng.randint(0, 3)):
-                await w.feed.write(w.rng.choice(regs), w.rng.getrandbits(32))
+        if w.rng.random() < 0.5:
+            # No two resyncs next to each other here: back to back they would be one held pulse, one request
+            # (Feed's request rule), while check_done counts resync writes.
+            pend, prev_resync = [], False
+            for _ in range(w.rng.randint(2, 6)):
+                resync = not prev_resync and w.rng.random() < 0.33
+                pend.append(w.feed.commit_nowait(resync=resync))
+                prev_resync = resync
+            for p in pend:
+                assert (await p.wait())[1] == OKAY
+        else:
+            for _ in range(w.rng.randint(2, 6)):
+                await w.feed.commit(resync=w.rng.random() < 0.33)
+                for _ in range(w.rng.randint(0, 3)):
+                    await w.feed.write(w.rng.choice(regs), w.rng.getrandbits(32))
         busy_seen += await w.feed.busy()
         for _ in range(w.rng.randint(1, 4)):
             await w.feed.write(w.rng.choice(regs), w.rng.getrandbits(32))

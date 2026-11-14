@@ -430,6 +430,13 @@ class Feed:
         self.resync_requests += int(resync)
         await self.write(FEED_COMMIT, 2 if resync else 1)
 
+    def commit_nowait(self, resync: bool = False):
+        """FEED_COMMIT queued without waiting for its response (the next one may follow at once); returns the
+        pending write. The expected configuration is the shadow at this moment."""
+        self.committed.append(FeedCfg.from_regs(self.regs))
+        self.resync_requests += int(resync)
+        return self.w.drv.write_nowait(FEED_COMMIT, 2 if resync else 1)
+
     async def busy(self) -> int:
         data, resp = await self.w.drv.read(FEED_STATUS)
         assert resp == OKAY
