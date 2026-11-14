@@ -129,6 +129,12 @@ if {$impl} {
   opt_design
   place_design
   route_design
+  # Post-route physical optimization when the routed design misses timing (A40, decision 44). After placement the
+  # estimate was +0.501 ns and phys_opt_design did nothing; the CSR read path on the A7 at 125 MHz missed by
+  # 0.100 ns only after routing (79 % routing delay). A design that meets timing is left as routed.
+  if {[get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]] < 0} {
+    phys_opt_design
+  }
   report_route_status -file [file join $out route_status.rpt]
   set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
 }
