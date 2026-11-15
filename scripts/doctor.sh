@@ -25,8 +25,25 @@ if command -v verilator >/dev/null; then
     "$PWD"/.tools/*) ok "verilator from pinned OSS CAD Suite ($(cat .tools/oss-cad-suite/.hft-version 2>/dev/null))" ;;
     *) info "verilator not from .tools/ ($(command -v verilator))" ;;
   esac
+  # C++ co-simulation: find_package(verilator) reads this file from VERILATOR_ROOT.
+  vroot=$(verilator --getenv VERILATOR_ROOT 2>/dev/null)
+  if [[ -f "$vroot/verilator-config.cmake" ]]; then ok "verilator CMake package ($vroot)"; else bad "verilator-config.cmake missing under '$vroot'"; fi
 else
   bad "verilator missing (run: just setup)"
+fi
+
+if command -v cmake >/dev/null; then
+  cmv=$(cmake --version | awk 'NR == 1 {print $3}')
+  if ver_ge "$cmv" "$CMAKE_MIN"; then ok "cmake $cmv (>= $CMAKE_MIN)"; else bad "cmake $cmv < $CMAKE_MIN"; fi
+else
+  bad "cmake missing (run: just setup)"
+fi
+if command -v g++ >/dev/null; then
+  if echo 'static_assert(__cplusplus >= 202002L); int main() {}' | g++ -std=c++20 -fsyntax-only -x c++ - 2>/dev/null; then
+    ok "g++ $(g++ -dumpfullversion) C++20"
+  else
+    bad "g++ $(g++ -dumpfullversion) cannot compile C++20"
+  fi
 fi
 
 if [[ -f pyproject.toml ]]; then

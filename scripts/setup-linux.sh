@@ -17,7 +17,8 @@ esac
 
 # 1) System packages (only if missing)
 # zlib1g-dev + liblz4-dev: Verilator FST tracing (--trace-fst) needs both headers
-PKGS=(build-essential git curl ca-certificates python3 perl zlib1g-dev liblz4-dev)
+# cmake: the C++ co-simulation build (verilate() from Verilator's CMake package)
+PKGS=(build-essential git curl ca-certificates python3 perl zlib1g-dev liblz4-dev cmake)
 MISSING=()
 for p in "${PKGS[@]}"; do dpkg -s "$p" &>/dev/null || MISSING+=("$p"); done
 if ((${#MISSING[@]})); then
