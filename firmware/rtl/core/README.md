@@ -608,16 +608,19 @@ low; reset the memory side with it). The entries of a packet cut by a reset are 
 ### Synthesis (OOC, `just synth-ooc-on <part> event_path_ooc <profile> core.f synth_ooc_core.f impl`, placed and routed)
 
 Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer with its F7 order queue, `COMMIT=1` FIFO of 256 entries,
-writer; inputs registered). F7 numbers (`bf5f1d4`):
+writer; inputs registered). F7 numbers (`fb5ef21`):
 
 | Part | net / host clock | `DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|----------|-----|--------|----|------|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 12998 | 3672 | 13891 | 0 | +0.668 (synthesis +1.841) | +0.036 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 12993 | 4740 | 13914 | 0 | +0.247 (synthesis +0.157) | +0.053 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 4104 | 4914 | 5721 | 0 | +0.876 (synthesis +2.058) | +0.013 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 4097 | 6270 | 5746 | 0 | +0.135 (synthesis +0.671) | +0.053 | PASS |
 
-F6 alone (no order queue) was 2211 / 4653 (Kintex) and 2206 / 4683 (Artix-7, +0.353 ns; `DATA_W` 128 +0.219 ns); the
-F7 growth is the order queue and its registered order inputs (two ~500-bit entry ports). The order queue's read
-address has its own register (`pick_q`, `packer_props` checks it): without it the Artix-7 gate failed by 0.052 ns.
+F6 alone (no order queue) was 2211 / 4653 (Kintex) and 2206 / 4683 (Artix-7, +0.353 ns; `DATA_W` 128 +0.219 ns). The
+F7 growth is the order queue, two LUTRAM banks of 8 slots (about 1530 LUTRAM on the Artix-7), and its registered
+order inputs (two ~500-bit entry ports). The banks are flat vectors on purpose: as an array of the slot struct,
+Vivado infers no RAM (Synth 8-7186) and the queue took about 8k FFs. The Artix-7's worst path is now the queue's
+write address (`wp_q` into the LUTRAM). The read address has its own register (`pick_q`, `packer_props` checks
+it): without it the Artix-7 gate failed by 0.052 ns.
 
 The FIFO is LUTRAM (`ram_style = "distributed"`, about a fifth of the Artix-7's memory LUTs), no BRAM. The host
 side's worst path is the LUTRAM read into the writer's input register, so the writer stamps the word only after
