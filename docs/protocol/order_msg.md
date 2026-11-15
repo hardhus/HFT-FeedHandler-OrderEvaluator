@@ -103,15 +103,26 @@ The MAC addresses, the DSCP/ECN byte, the TTL, the IP addresses and the UDP port
 `risk_check` rejects every order that the exchange would reject or read in a different way. Its reason is
 `INVALID`, a fixed check that cannot be configured:
 
-- the price is 0, or it is above `0x7735939C`, or a rule's threshold plus offset overflows or underflows;
+- the price is 0, or it is above `0x7735939C`;
 - the quantity is 0, or it is 1,000,000 or more;
 - the side is not `'B'` or `'S'`;
 - the time in force is not `'0'`, `'3'`, `'5'` or `'E'`;
 - a byte of a host ClOrdID is not a letter, a digit or a space;
 - the UserRefNum counter is exhausted.
 
-A rule whose static fields are invalid (time in force, action side code, a fixed quantity) is flagged when it is
-committed. It never fires, and `RULE_STATUS` shows an error bit.
+A rule whose static fields are invalid (locate 0, time in force, action side code, a fixed quantity, or a
+threshold plus offset outside 1 to `0x7735939C`) is flagged when it is committed. It never fires, and `RULE_STATUS`
+shows an error bit. The checks above still run on every order as a backstop.
+
+### TX configuration
+
+`TX_COMMIT` is refused (the previous configuration stays, `TX_STATUS.cfg_refused`) unless Display is `'Y'`, `'N'`
+or `'A'`, Capacity is `'A'`, `'P'`, `'R'` or `'O'`, InterMarket Sweep Eligibility is `'N'` (the core does not sweep
+other markets, so it cannot carry the Reg NMS ISO obligation) and CrossType is `'N'` (continuous market), and the
+template has EtherType `0x0800`, `0x45`, total length 78, flags and fragment `0x4000`, protocol 17, a correct IPv4
+header checksum, UDP length 58 and UDP checksum 0. Until a configuration has been accepted after reset, every order
+is rejected `TX_OFF`. `TX_COMMIT` is accepted only while the order path is closed (kill 1 or `tx_en` 0), so a
+template change never touches an accepted order.
 
 ## Worked example (bytes 42–91)
 

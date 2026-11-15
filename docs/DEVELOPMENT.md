@@ -117,6 +117,13 @@ the WSL disk is much faster than `/mnt/d`, see `.env.example`):
   profile), `tc_itch_random` with the ring (55 to 60 s per run), `tc_rx_csr_random` and the system directed group
   (about 55 s, with the 10⁴-message ring replay). Builds in the WSL home: a cold `rx_csr_top` build and a
   `tc_itch_random` run together took 150 s.
+  After F7 (904 tests and 2 `long` ones): on GitHub the x64 `ci` job takes about 37 minutes and the arm64 one about
+  25; the Raspberry Pi 5 ran `just ci` in about 13 minutes plus 12 for the long tests (at S8). The longest daily
+  entries are the `hft_csr_wrap` directed groups (about 4.5 minutes per profile on a 2 GB WSL), the system order
+  tests and the order blocks' `tc_random_golden` runs. `tc_real_order` (real Nasdaq windows through the order
+  path, both sources) takes about 27 minutes on WSL with one worker; it runs in the `itch-real-rtl` workflow. On a
+  WSL with 2 GB of RAM a single Verilator build of a core test takes 1 to 5 minutes, so mutation runs
+  (`audit/f7-mutasyon/s10_mut.py`, 53 mutants) take several hours.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a

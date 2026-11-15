@@ -29,7 +29,7 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), CSR block and counters; book and rules planned |
+| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), order path (strategy rules, pre-trade risk, OUCH 5.0 order TX), CSR block and counters |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
 | `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
@@ -124,6 +124,27 @@ for the RTL rules.
     order with no loss at the writer, 10⁵ random messages at the packer, and in the system test bring-up, replay,
     gap recovery, ring pressure and real Nasdaq windows. 25 mutants of the path, all caught.
   - Placed and routed out of context on Artix-7 and Kintex UltraScale+, the register block included.
+- **F7, order path:** `strategy_engine`, `risk_check` and `order_tx_builder` in
+  [`firmware/rtl/core/`](firmware/rtl/core/README.md#order-path-strategy_engine-risk_check-order_tx_builder).
+  - Eight host-programmed rules fire on ITCH Add Order and Trade messages (price, side, size, locate). An order
+    leaves only when its trigger packet is accepted by the feed, so a bad, duplicate or foreign packet never sends
+    one; the first TX beat follows the trigger frame's last beat by 12 to 13 cycles (77 to 83 ns at 156.25 MHz). The
+    order book stays in software.
+  - Every order, from a rule or from the host's mailbox, passes one pre-trade gate: kill switch, TX enable,
+    exchange validity, a locate allow bitmap, quantity and notional limits, an order budget, a token bucket, the TX
+    queue and a reserved ring slot. A kill or a TX disable cancels the queue; nothing is lost silently.
+  - Each order goes out as one 92-byte frame: the host's Ethernet/IPv4/UDP header and the exact OUCH 5.0 Enter
+    Order in a SoupBinTCP envelope ([`docs/protocol/order_msg.md`](docs/protocol/order_msg.md)), with a hardware
+    UserRefNum. Its `ORDER_SENT`, or its `RISK_REJECT` with the reason, is a ring entry, so the host learns the fate
+    of every order.
+  - New register blocks behind an AXI4-Lite router: commands take effect in bus order and answer once in effect,
+    fenced behind earlier mailbox orders; the driver's restore order after a reset (kill released last) is in the
+    core README.
+  - Cycle-exact golden models for each block, assertions bound in every test, and system tests for the audit/04
+    scenarios 5 to 7, a random hybrid run, real Nasdaq windows and the kill latency under load. 53 mutants of the
+    path: all caught or shown equivalent.
+  - Placed and routed out of context on Artix-7 and Kintex UltraScale+, the order path and the register blocks
+    included.
 
 ## Real-data check
 
@@ -150,7 +171,9 @@ never cached or uploaded.
   message of each range at line rate in its real packets, with the symbol filter on and the host subscribing to
   symbols as their Stock Directory messages pass; every result and event is checked against the model. The system
   test sends windows of each range through the receiver, `moldudp64_rx`, `itch_decoder` and the host ring, checks
-  every counter in the snapshot and reads every ring entry back from host memory: none lost.
+  every counter in the snapshot and reads every ring entry back from host memory: none lost. With the order path
+  (F7), 8 rules on the most active subscribed symbols must send exactly the strategy model's orders, each checked
+  as the exchange would read it, with its `ORDER_SENT`.
 - Not seen in these ranges: broken trade (B), LULD (J), retail interest (N), DLCR (O), MWCB decline (W) and
   operational halt (h). The synthetic tests cover them.
 

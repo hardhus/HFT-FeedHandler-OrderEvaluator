@@ -6,25 +6,30 @@ they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`
 [`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis harnesses in
 [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The CSR blocks are in
 [`filelists/csr.f`](../../filelists/csr.f) (assertions [`sva_csr.f`](../../filelists/sva_csr.f), harness
-[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3, F4 and
-F6 plans (audit 09, 10, 11, 12, 13); this file is the contract.
+[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3, F4, F6 and
+F7 plans (audit 09, 10, 11, 12, 13, 14); this file is the contract.
 
 ## Catalog
 
 | Block | What it does | Phase |
 |-------|--------------|-------|
-| `hft_pkg` | Protocol constants, big-endian lane helpers `be16`/`be32`, receive reason codes `rx_reason_e`, MoldUDP64 constants and packet status codes `mold_status_e`, ITCH 5.0 type codes, `itch_class_e`, `itch_outcome_e`, `msg_be` | F2, F3, F4 |
+| `hft_pkg` | Protocol constants, big-endian lane helpers `be16`/`be32`, receive reason codes `rx_reason_e`, MoldUDP64 constants and packet status codes `mold_status_e`, ITCH 5.0 type codes, `itch_class_e`, `itch_outcome_e`, `msg_be`; order path types and limits (`strat_rule_t`, `risk_reason_e`, `order_src_e`, OUCH limits) | F2, F3, F4, F7 |
 | `eth_ip_udp_rx` | Ethernet/IPv4/UDP receive filter: header checks, 8-entry (IP, port) filter table, UDP payload realigned to byte 0 | F2 |
 | `moldudp64_rx` | MoldUDP64 de-framer: one 64-B message vector per cycle, sequence tracking (gap, duplicate, A/B lines, heartbeat, end of session, resync), one event per packet | F3 |
 | `itch_decoder` | ITCH 5.0 classifier and field decoder, stock-locate filter (`symbol_filter`: 64 Kbit bitmap), packet events forwarded | F4 |
-| `event_packer` | Turns `itch_decoder`'s output messages and packet events into 128-byte ring entries and delivers them whole per packet through a `COMMIT=1` `cdc_async_fifo` | F6 |
+| `event_packer` | Turns `itch_decoder`'s output messages and packet events into 128-byte ring entries and delivers them whole per packet through a `COMMIT=1` `cdc_async_fifo`; `ORDER_SENT` and `RISK_REJECT` entries between packets | F6, F7 |
 | `event_ring_writer` | Writes the committed entries into the host RAM ring, one 128-byte AXI4 burst each, in order; lossless while enabled | F6 |
 | `gen/event_desc_pkg` | Ring entry layout and pack functions, generated from `firmware/formats/event_desc.toml` | F6 |
-| `gen/hft_csr` | AXI4-Lite register block, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL) | F5, F3, F4, F6 |
+| `gen/hft_csr`, `gen/hft_order_csr` | AXI4-Lite register blocks, generated from `firmware/rdl/hft_csr.rdl` (PeakRDL); `hft_order_csr` holds RISK, STRATEGY and TX | F5, F3, F4, F6, F7 |
 | `rx_stats` | Receive counters: packets, bytes, one drop counter per reason (64 bit) | F5 |
 | `mold_stats` | Feed counters: one per packet status, plus messages, duplicate, oversize and gap counts (64 bit) | F3 |
 | `itch_stats` | ITCH counters of committed messages: one per class and one per outcome (64 bit) | F4 |
-| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot, RING block and ring counters, `cfg_epoch` | F5, F3, F4, F6 |
+| `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot, RING block and ring counters, `cfg_epoch`; the order path's command channel, mailbox FIFO, kill and tx_en | F5, F3, F4, F6, F7 |
+| `hft_csr_regs` | Both register blocks behind one AXI4-Lite port: `axil_route2` sends the RISK, STRATEGY and TX windows to `hft_order_csr` | F7 |
+| `strategy_engine` | 8 host-programmed rules on ITCH A, F and P messages; an order fired by a message leaves only when its packet is accepted | F7 |
+| `risk_check` | The single pre-trade gate for hardware and host orders (kill, tx_en, exchange validity, locate allow bitmap, quantity, notional, budget, token bucket, TX queue, ring credit), the TX queue and the UserRefNum counter | F7 |
+| `order_tx_builder` | One order to one 92-byte frame: the host's Ethernet/IPv4/UDP template, SoupBinTCP `U`, OUCH 5.0 Enter Order; `ORDER_SENT` at the first beat | F7 |
+| `order_stats` | Order counters: per rule fired, sent per source, rejects per reason, lost rejects (64 bit) | F7 |
 
 ## `eth_ip_udp_rx`
 
@@ -502,6 +507,8 @@ inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Ever
 | `ITCH_RAW` (2) | An ADMIN, AUCTION, UNKNOWN or MALFORMED message, outcome OUT | The message bytes as received, 0 from `len` on |
 | `GAP` (3) | An accepted packet with `gap` > 0 | `seq` = first missing, `first_seq` = the packet's, `gap` |
 | `EOS` (4) | An accepted packet with status `EOS` | The packet's `seq` |
+| `ORDER_SENT` (5) | An order's first beat left on the TX port (F7) | UserRefNum, source (1 rule, 2 host), rule, side, tif, locate, qty, price, stock, `tx_ts`, ClOrdID. A hardware order carries its trigger message's `seq` and its packet's `sof_ts` and `cfg_epoch`; a host order 0, 0 and the `cfg_epoch` in force at its risk decision |
+| `RISK_REJECT` (6) | An order that did not leave: rejected by `risk_check`, or cancelled in its TX queue (F7) | `reason` (`risk_reason_e`), the requested fields, `reject_ts` (the decision's or the cancel's cycle), ClOrdID (spaces for hardware orders) |
 
 `flags.overflow_before` (bit 0): packets were lost between the previous committed entry and this one.
 
@@ -519,6 +526,15 @@ inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Ever
   least 2 + 6 bytes per message: 181, plus GAP and EOS). The FIFO (256) holds one, so a packet always fits an empty
   FIFO. With the writer stopped the path holds the ring plus 256 entries (one more while the FIFO is backlogged:
   the writer keeps one entry in its register); `tc_ring_pressure` checks the count.
+- **Order entries (F7):** `ORDER_SENT` (from `order_tx_builder`) and `RISK_REJECT` (from `risk_check`) go into a
+  16-slot order queue and are written between packets, never inside a packet's entries (P8): each is committed on
+  its own when no packet is open and the FIFO has room. Both in one cycle: `ORDER_SENT` first (decision 28). An
+  order entry **waits** for room, it is never dropped: `risk_check` holds one ring credit per queue slot (16) and an
+  accepted order reserves one for its later entry (its `ORDER_SENT`, or its cancel's `RISK_REJECT`); the packer gives
+  it back (`ring_credit_ret`) when the entry moves into the FIFO (decision 25). The only order entry that can be lost
+  is a decision's `RISK_REJECT` that finds no credit: it is not written, `RING_DROP_ORDERS` and its
+  `RISK_REJECT_<reason>` count it, and `overflow_before` goes on the first entry committed after everything that
+  came before it (decision 29). A packet loss's flag may go on an order entry too (decision 31).
 
 ### Ring protocol (`event_ring_writer`)
 
@@ -554,7 +570,12 @@ inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Ever
 
 ### Identities
 
-In every snapshot `RING_COMMIT_ENTRIES` + `RING_DROP_ENTRIES` = `ITCH_OUT` + `MOLD_GAP_EVENTS` + `MOLD_EOS`. When the
+In every snapshot (decision 30; F6 had the first line without the order terms):
+
+`RING_COMMIT_ENTRIES` + `RING_DROP_ENTRIES` + `RING_DROP_ORDERS` + `RING_ORDER_QUEUED` = `ITCH_OUT` + `MOLD_GAP_EVENTS` +
+`MOLD_EOS` + `ORDERS_SENT_HW` + `ORDERS_SENT_HOST` + Σ `RISK_REJECT_<reason>`
+
+(`RING_ORDER_QUEUED`: order entries counted but still in the packer's queue). When the
 FIFO and the bursts in flight are empty, `RING_COMMIT_ENTRIES` = `RING_WRITTEN` + `RING_BRESP_ERR` and `PROD_IDX` =
 the entries written since the enable. The system tests check both.
 
@@ -579,20 +600,24 @@ low; reset the memory side with it). The entries of a packet cut by a reset are 
 | `COMMIT=1` FIFO at every clock profile: random commit and rollback, the reader sees only committed words, rollback at the full boundary, reset in the middle | `tb/unit/test_cdc_async_fifo_commit.py` |
 | `event_packer`: every class × outcome, every status, GAP and EOS order, whole-packet drop, busy as full, `overflow_before`, largest packet into an empty FIFO, reset mid-packet; exact cycles of every write and end; 10⁵ random messages with a coverage gate | `tb/unit/test_event_packer.py` |
 | `event_ring_writer` (`DATA_W` 64, 128, 256, 512): hand stamp, wrap and phase, full ring, indexes past 2³², enable rules and refusals, BRESP error, rate contract, outstanding limit, reset mid-burst; 10⁶ entries (`DATA_W` 512) and 10⁵ (64) lossless in order (`long`, K9) | `tb/unit/test_event_ring_writer.py` |
-| Assertions (`packer_props` 8, `ring_props` 9, `axi_wr_props` 8: 4 KiB, beat count, channel stability, B after AW, VALID low after reset), each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
+| Assertions (`packer_props` 14, `ring_props` 9, `axi_wr_props` 8: 4 KiB, beat count, channel stability, B after AW, VALID low after reset), each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
 | System: every entry read back from host memory through the ring protocol against the chain model, byte by byte; the ring identity in every snapshot; bring-up, 10⁴-message replay, gap and recovery, ring pressure, refused enable and BRESP error; `tc_itch_random` with a 64-entry ring and a consumer that stops, runs, slows and pauses; real Nasdaq windows with no loss (M1) | `tb/system/test_rx_csr.py` |
-| 25 mutants of the ring path, all caught | `audit/f6-mutasyon/s9_mut.py` |
+| Order entries (F7): hand-written `ORDER_SENT` and `RISK_REJECT` entries, exact latency, waiting for the packet and on a full FIFO, the queue holding all 16 credits, a dropped packet's flag on an order entry, a lost reject's flag at its place, reset with orders queued; the random run fills every order bin | `tb/unit/test_event_packer.py` (`tc_order_*`, `tc_lost_reject_flag_place`) |
+| 25 mutants of the ring path, all caught; F7: 4 more on the order entries | `audit/f6-mutasyon/s9_mut.py`, `audit/f7-mutasyon/s10_mut.py` |
 
 ### Synthesis (OOC, `just synth-ooc-on <part> event_path_ooc <profile> core.f synth_ooc_core.f impl`, placed and routed)
 
-Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer, `COMMIT=1` FIFO of 256 entries, writer; inputs
-registered).
+Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer with its F7 order queue, `COMMIT=1` FIFO of 256 entries,
+writer; inputs registered). F7 numbers (`bf5f1d4`):
 
 | Part | net / host clock | `DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|----------|-----|--------|----|------|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 2211 | 3672 | 4653 | 0 | +0.855 (synthesis +2.058) | +0.011 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 2206 | 4740 | 4683 | 0 | +0.353 (synthesis +1.207) | +0.053 | PASS |
-| `xc7a100tcsg324-1` | 156.25 / 125 MHz | 128 | 2590 | 4740 | 4697 | 0 | +0.219 (synthesis +1.207) | +0.053 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 12998 | 3672 | 13891 | 0 | +0.668 (synthesis +1.841) | +0.036 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 12993 | 4740 | 13914 | 0 | +0.247 (synthesis +0.157) | +0.053 | PASS |
+
+F6 alone (no order queue) was 2211 / 4653 (Kintex) and 2206 / 4683 (Artix-7, +0.353 ns; `DATA_W` 128 +0.219 ns); the
+F7 growth is the order queue and its registered order inputs (two ~500-bit entry ports). The order queue's read
+address has its own register (`pick_q`, `packer_props` checks it): without it the Artix-7 gate failed by 0.052 ns.
 
 The FIFO is LUTRAM (`ram_style = "distributed"`, about a fifth of the Artix-7's memory LUTs), no BRAM. The host
 side's worst path is the LUTRAM read into the writer's input register, so the writer stamps the word only after
@@ -602,6 +627,171 @@ that register. `report_cdc`: CDC-6 and CDC-15 (the FIFO's data, constrained), no
 
 An interrupt (`irq`) is F8's. Line-rate stress with IPG 0 and the clock ratio matrix of audit/04 §3.4 (scenarios 8
 and 9) are left for the platform phases.
+
+## Order path: `strategy_engine`, `risk_check`, `order_tx_builder`
+
+```
+itch_decoder m_ev_*, m_pkt_* --> strategy_engine (8 rules) --hardware orders--> risk_check --> order_tx_builder --> m_axis_tx_*
+hft_csr_wrap mailbox FIFO (host -> net) ----------------host orders--------------^  |                |         (92-byte frames)
+                                                                       RISK_REJECT  v    ORDER_SENT  v
+                                                                          event_packer order queue --> host ring
+```
+
+Everything runs in `net_clk`. The order logic takes `itch_decoder`'s output messages directly, not the ring path. An
+order fired by a message leaves only when the message's packet is accepted (decision 1): a rejected packet (bad FCS,
+duplicate, another session, a gap's out-of-order copy) never sends an order, and the order is decided on data the feed
+has checked. This waits for the end of the trigger packet; speculative TX is out of scope. The order book stays in
+software: rules fire only on messages that carry price, side and size themselves (ITCH `A`, `F`, `P`; decision 2).
+The frame is the real OUCH 5.0 Enter Order in a SoupBinTCP `U` envelope over UDP:
+[`docs/protocol/order_msg.md`](../../../docs/protocol/order_msg.md). Each block's header comment is its full contract;
+the main rules are below.
+
+### Rules (`strategy_engine`)
+
+- **8 rules** (`strat_rule_t`), written through the STRATEGY block by indirect access: `RULE_SEL` picks a rule, the
+  `RULE_*` shadow holds its fields, `RULE_COMMIT` writes it whole. A commit disarms the rule (decision 8); `RULE_ARM`
+  and `RULE_DISARM` take 8-bit masks. `RULE_ARMED` and `RULE_STATUS` (static error per rule) read back.
+- **Match:** the rule is enabled, armed, has no static error and has not fired in this packet; the message is decoded
+  (ORDER or TRADE class, output by `itch_decoder`), its type is in `msg_mask` (`A`, `F`, `P`), the locate is equal,
+  the side is in `side_match`, price <= or >= `price_threshold`, shares >= `min_shares`. Per message the lowest
+  matching index fires (P4); a rule fires at most once per packet.
+- **Order:** side = `action_side` (BUY, SELL, or the message's opposite); qty = `qty`, or min(shares, `qty`); price =
+  the message's price, or threshold + offset (computed at the commit); locate, stock, `seq`, `sof_ts`, `cfg_epoch` from
+  the message; tif from the rule. It is built in the fire cycle, so a later commit does not change it.
+- **Packet event:** accepted (`OK`, `HEARTBEAT`, `EOS`): the packet's orders leave in fire order and each fired rule is
+  disarmed (one-shot), unless a host command reached that rule after its fire (decision 18). Any other status: its
+  orders are dropped and the rules stay armed. An order already fired leaves even if its rule is disarmed or
+  committed before the acceptance (decision 14); the kill switch is the way to stop it.
+- **Ties in one cycle:** the packet event, then the message, then the commands; when disarming and arming effects
+  meet, the rule ends disarmed (decision 19).
+- **Order path closed** (kill, or the effective tx_en 0): no rule fires, so none is used up, and the cycle kill rises
+  disarms every rule (decision 23).
+- **Static errors** at `RULE_COMMIT` (decisions 6, 11, 16): locate 0, a tif the core does not send, `action_side` 3,
+  qty 0, qty >= 1,000,000 with `qty_min` = 0, or threshold + offset outside 1..`0x7735939C` with
+  `price_threshold_mode` = 1. The rule never fires; `RULE_STATUS` shows it. The commit is not refused.
+- **Capacity:** 16 orders (8 waiting for their packet, 8 leaving). Reset disarms every rule and sets every error bit.
+
+### Pre-trade checks (`risk_check`)
+
+Every order, hardware or host, passes one gate. A hardware order goes first; a host order (from the mailbox) is taken
+in a cycle with no hardware order and no cancel to write out. The first check that holds is the reason
+(`risk_reason_e`, also the `RISK_REJECT` entry's `reason` and the `RISK_REJECT_<reason>` counter):
+
+| Code | Reason | Rejects when |
+|------|--------|--------------|
+| 1 | `KILL` | `RISK_CTRL.kill` = 1 |
+| 2 | `TX_OFF` | the effective tx_en is 0 (`TX_CTRL.tx_en` and a valid TX configuration) |
+| 3 | `INVALID` | the exchange would reject or misread it (fixed, decisions 9, 10, 12, 13): price 0 or above `0x7735939C`, qty 0 or >= 1,000,000, side not `B`/`S`, tif not `0`/`3`/`5`/`E`, a host ClOrdID byte outside `[0-9A-Za-z ]`, or no UserRefNum left |
+| 4 | `LOCATE` | its bit in the `LOCATE_ALLOW` bitmap is 0 |
+| 5 | `QTY` | qty > `MAX_QTY` |
+| 6 | `NOTIONAL` | qty × price > `MAX_NOTIONAL` (64 bit) |
+| 7 | `BUDGET` | `BUDGET` is 0 |
+| 8 | `RATE` | the token bucket is empty |
+| 9 | `TX_BUSY` | 8 accepted orders wait for the TX port (P7) |
+| 10 | `RING_FULL` | no ring credit for its later entry (decision 25) |
+
+- **Timing:** an order taken at edge k is decided in the cycle before edge k+3, with that cycle's kill, tx_en,
+  limits, budget and bucket; after edge k+3 its `RISK_REJECT` is out, or it is on `m_tx_*`. A limits commit applies
+  to whole orders.
+- **Spend:** an accepted order spends one budget unit and one token; a rejected or cancelled one does not get them
+  back (decision 21). `BUDGET_ADD` adds, saturating at 2³² − 1.
+- **Token bucket** (decision 15): `RISK_COMMIT` fills it to `RATE_BURST` and restarts the period; `RATE_REFILL` tokens
+  are added every `RATE_PERIOD` net cycles, up to `RATE_BURST`. `RATE_PERIOD` 0: no refill.
+- **Cancel** (decisions 7, 20): a kill rise or a tx_en fall cancels every queued order (a frame already started is
+  finished). Each cancelled order becomes a `RISK_REJECT` (`KILL`, or `TX_OFF` for a tx_en fall alone), written one per
+  cycle in queue order; its `reject_ts` is the cancel's cycle. `TX_BUSY` counts live orders only (decision 24).
+- **UserRefNum** (decisions 12, 22; P3): one counter per TX port, shared by hardware and host orders, +1 per order
+  sent, 1 after reset, stops at 2³² (then `INVALID`). `TX_USERREF_NEXT` takes effect only while kill is 1, the queue is
+  empty and the value is not 0; otherwise `TX_STATUS.userref_ignored`.
+- **Allow bitmap** (`LOCATE_ALLOW`, a `symbol_filter` instance): bit i of word w = locate 32w + i. 0 after reset (a
+  2048-cycle sweep, accesses wait for it).
+- **Reset:** like a kill (decision 5): queue emptied without rejects, budget 0, limits 0, bucket empty, counter 1.
+
+### Frame (`order_tx_builder`)
+
+One order to one 92-byte frame of 12 beats (64-bit `tdata`, the last with `tkeep` `0x0F`), back to back; the
+layout, field values and a worked example are in [`order_msg.md`](../../../docs/protocol/order_msg.md). The
+`ORDER_SENT` entry is made in the cycle the first beat is taken, with that cycle's time as `tx_ts`. `TX_COMMIT` is
+checked (decision 26): Display `Y`/`N`/`A`, Capacity `A`/`P`/`R`/`O`, ISE `N`, CrossType `N`, and the template's
+EtherType, IPv4 version/IHL, total length 78, flags 0x4000, protocol 17, header checksum, UDP length 58 and UDP
+checksum 0. A bad configuration is refused (`TX_STATUS.cfg_refused`, the previous one stays). Without a valid
+configuration since reset the effective tx_en is 0. The check takes 2 cycles (decision 27); the host does not see it.
+
+### Latency (P10)
+
+Net clock cycles, checked exactly by `test_rx_order.tc_order_rule` (each hop by its own block test too):
+
+| Hop | Cycles |
+|-----|--------|
+| trigger frame's last beat at `eth_ip_udp_rx` → payload `tlast` | 1 (2 when the last beat holds more than 2 payload bytes) |
+| payload `tlast` → packet event forwarded by `itch_decoder` | 4 (`moldudp64_rx` 3, `itch_decoder` 2, overlapping by 1) |
+| forwarded packet event → first released order (`strategy_engine`) | 2 |
+| released order → order on `m_tx_*` (`risk_check`) | 4 |
+| order on `m_tx_*` → first TX beat valid (`order_tx_builder`) | 1 |
+| **trigger frame's last beat → first TX beat** | **12–13 (76.8–83.2 ns at 156.25 MHz)** |
+
+From the start of the trigger frame add its length in beats: the order waits for the whole packet (decision 1); a
+13-beat trigger frame gives 26 cycles from its first beat to the first TX beat. A
+second order of the same packet follows one cycle after the first at `risk_check`, then one frame time (12 beats)
+apart on the port. The order of decision 1 is the safe side of the STAC-T0 tick-to-trade measurement, which starts
+when the trigger field enters the FPGA.
+
+### Host rules
+
+1. **After every reset** the order path is closed (decision 5): kill 1, tx_en 0, no TX configuration, budget 0,
+   limits 0, bitmap 0, rules disarmed with errors. The host restores it in the order of the Software contract after
+   reset (CSR section) and releases kill **last**.
+2. **Kill** (`RISK_CTRL.kill`) is direct, not a command: it stops new orders, cancels the queue and disarms every rule;
+   orders fired before it are rejected (`KILL`). Its latency is in the CSR section (Kill switch latency). After a
+   kill the state is as after a reset for the rules: the host arms them again and releases kill last.
+3. **tx_en** (`TX_CTRL.tx_en`) is direct too (decision 32): write it after a `TX_COMMIT` has been accepted. A fall
+   cancels the queue (`TX_OFF`).
+4. **TX configuration:** `TX_COMMIT` only with the path closed (kill 1 or tx_en 0), otherwise refused (decision 37);
+   change the template with tx_en 0.
+5. **UserRefNum:** write `TX_USERREF_NEXT` (larger than any number the exchange has seen today) while kill is 1 and
+   before releasing it; check `TX_STATUS.userref_ignored`. Each order's number is in its `ORDER_SENT` entry.
+6. **Budget:** `BUDGET_ADD` adds orders to the budget; it is not refunded for rejects or cancels. `BUDGET` reads it.
+7. **Rules:** write the shadow, `RULE_COMMIT`, check `RULE_STATUS`, then `RULE_ARM`. A rule's locate needs its class
+   (ORDER or TRADE) enabled in FEED and, if filtered, its SYMBOL bit set, or it never fires (decision 39).
+8. **Mailbox orders:** fill `MBOX_*`, write `MBOX_SEND` (posted). `MBOX_SPACE` sends always fit; a send to a full FIFO
+   is dropped (`MBOX_STATUS.dropped`, `MBOX_DROP`). The host keeps a mailbox order's locate and stock consistent
+   (decision 17). The outcome of each order is its `ORDER_SENT` or `RISK_REJECT` entry.
+9. **Order commands** (`RULE_*`, `RISK_COMMIT`, `BUDGET_ADD`, `TX_COMMIT`, `TX_USERREF*`, `LOCATE_ALLOW`) take effect
+   in bus order, behind every earlier `MBOX_SEND` and kill/tx_en write; the write's response comes when the command
+   is in effect. No busy bits to poll (decisions 33, 36).
+
+### Verification
+
+| What | Where |
+|------|-------|
+| Golden models written from the plan and the specifications (not from the RTL), with selftests | `tb/model/strategy.py`, `risk.py`, `order.py`; `tb/selftest/test_strategy_model.py`, `test_risk_model.py`, `test_order_model.py` |
+| `strategy_engine` cycle by cycle against the model: every field and edge, priority and one-shot, rejected packet, commands after the fire, same-cycle ties, path closed, static errors, a full queue, reset in a packet; 10⁵ random messages with a coverage gate | `tb/unit/test_strategy_engine.py` |
+| `risk_check` cycle by cycle: each reason and the order of several, token bucket timing, budget at 0 and saturation, cancel (also across the queue's wrap), UserRefNum rules, TX_BUSY, a release right after a kill, ring credits, the bitmap sweep; random with a coverage gate | `tb/unit/test_risk_check.py` |
+| `order_tx_builder`: a hand-written frame in hex, back to back, `tready` pressure, every config check and its 2-cycle latency, ClOrdID digits, reset mid-frame; random orders against the exchange model | `tb/unit/test_order_tx_builder.py`, `tb/common/exchange.py` |
+| Order counters: every index, wrap (8-bit build), carry past 2³² | `tb/unit/test_order_stats.py` |
+| Assertions: `strategy_props` (7: one-hot fire, no fire unarmed or with the path closed, one fire per rule per packet, no order out that no accepted packet committed, queue room), `risk_props` (11: no accept while killed, tx off, at budget 0 or without a token, one gate, held + live <= 8, no TX while cancels drain, a UserRefNum left, a credit per accept, the precomputed flags), `axis_props` on the TX port; each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
+| System (`rx_csr_top`): audit/04 §3.4 scenario 5 (rule → OUCH frame and `ORDER_SENT`, latency hop by hop, one-shot, re-arm, risk reject), 6 (mailbox, hardware and host at once), 7 (trigger in a bad packet: no order, no entry), kill cancelling the queue, decision 39 gating, ring pressure with order entries, kill latency under a hardware burst, a random hybrid run with rule and limit changes, and real Nasdaq windows with a rule on a real symbol; every frame checked by the exchange model, every order entry by the ring model | `tb/system/test_rx_order.py` |
+| 50 mutants of the order path (and 3 follow-ups): 49 caught, 4 equivalent with reasons | `audit/f7-mutasyon/s10_mut.py` |
+
+### Synthesis (OOC, `just synth-core`, placed and routed)
+
+Harness `rtl/platform/synth_ooc/order_path_ooc.sv`: `strategy_engine` + `risk_check` + `order_tx_builder`, inputs
+registered (`bf5f1d4`).
+
+| Part | Clock | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
+|------|-------|-----|--------|----|------|----------|----------|------|
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 4879 | 907 | 9188 | 2 | +2.640 (synthesis +4.170) | +0.026 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 4783 | 1163 | 8858 | 5 | +0.144 (synthesis +0.326) | +0.085 | PASS |
+
+The first Artix-7 run failed by 8.19 ns: `risk_check` decided in one cycle through a 31-level chain. The decision now
+reads flags registered one cycle ahead from next-state values (two candidates where an accept changes them; the
+`a_flags` assertion checks each against its definition), and the TX config check takes two cycles (decision 27);
+every fix kept the latencies above.
+
+### Out of scope
+
+The order book (C++), speculative TX before the packet is accepted, the SoupBinTCP session and exchange responses
+(login, heartbeats, accepts, fills), a price band and position limits (decision 4), sell short sides, and the TX MAC.
 
 ## CSR block: `hft_csr`, `hft_csr_wrap`, `rx_stats`, `mold_stats`, `itch_stats`
 
@@ -622,6 +812,11 @@ they differ from a fresh `just gen`. The blocks are listed in [`filelists/csr.f`
 - AW and W are accepted in any order and stored; every accepted request gets exactly one response, in order,
   also while `bready`/`rready` are held low (legacy K5–K8).
 - Read latency includes one register stage inside the read mux (`--rt-read-fanin`, for timing).
+- Two register blocks behind one port (F7, decision 41): `hft_csr_regs`' router `axil_route2` sends accesses to RISK
+  (`0x0A00`–`0x0BFF`), STRATEGY (`0x1000`–`0x1FFF`) and TX (`0x2000`–`0x2FFF`) to `hft_order_csr` and the rest to
+  `hft_csr`; each answers `SLVERR` for its own unmapped addresses. +1 `host_clk` cycle per access; accesses to one
+  block overlap, a switch to the other waits until every earlier access is answered (decision 43), so responses
+  stay in order.
 
 ### Map
 
@@ -630,15 +825,17 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 
 | Base | Block | Registers |
 |------|-------|-----------|
-| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0003`), `SCRATCH` (RW) |
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0004`), `SCRATCH` (RW) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
-| `0x0500` | RISK | reserved (F7) |
 | `0x0600` | ITCH | Shadow (carried by `FEED_COMMIT`): `ITCH_CTRL` (`class_en` bits 5:0, `class_filter` bits 13:8; bit = `itch_class_e` code). Snapshot: `ITCH_<class>` at `0x0640 + 8 × class`, then `ITCH_OUT`, `ITCH_FILTERED`, `ITCH_MASKED` at `0x0670`, `0x0678`, `0x0680` |
-| `0x0800` | RING | Host domain, no commit: `RING_CTRL` (`enable`), `RING_BASE_LO` (bits 31:12), `RING_BASE_HI`, `RING_SIZE_LOG2`, `CONS_IDX` (RW), `PROD_IDX` (RO, live), `RING_STATUS` (RO: `bresp_err` bit 0, `enable_err` bit 1), live counters `RING_WRITTEN` at `0x0820` and `RING_BRESP_ERR` at `0x0828`. Snapshot: `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS`, `RING_DROP_ENTRIES` from `0x0840`. Alone in its 512-byte read window (read path timing, audit/13 S8). See Host event ring |
-| `0x1000`+ | STRATEGY, TX | reserved (F7) |
+| `0x0800` | RING | Host domain, no commit: `RING_CTRL` (`enable`), `RING_BASE_LO` (bits 31:12), `RING_BASE_HI`, `RING_SIZE_LOG2`, `CONS_IDX` (RW), `PROD_IDX` (RO, live), `RING_STATUS` (RO: `bresp_err` bit 0, `enable_err` bit 1), live counters `RING_WRITTEN` at `0x0820` and `RING_BRESP_ERR` at `0x0828`. Snapshot: `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS`, `RING_DROP_ENTRIES`, `RING_DROP_ORDERS` from `0x0840`, `RING_ORDER_QUEUED` at `0x0860` (F7). Alone in its 512-byte read window (read path timing, audit/13 S8). See Host event ring |
+| `0x0A00` | RISK | `MAX_QTY`, `MAX_NOTIONAL_LO/HI`, `RATE_REFILL`, `RATE_PERIOD`, `RATE_BURST` (shadow), `RISK_COMMIT` (command), `RISK_CTRL` (`kill`, direct), `BUDGET_ADD` (command), `BUDGET` (RO, live); snapshot: `ORDERS_SENT_HW/HOST` at `0x0A40`, `RISK_REJECT_<reason>` at `0x0A60 + 8 × (reason − 1)` |
+| `0x1000` | STRATEGY | `RULE_SEL`, the selected rule's shadow `RULE_CTRL`, `RULE_LOCATE`, `RULE_THRESHOLD`, `RULE_MIN_SHARES`, `RULE_QTY`, `RULE_OFFSET`, then `RULE_COMMIT`, `RULE_ARM`, `RULE_DISARM` (commands), `RULE_STATUS`, `RULE_ARMED` (RO); snapshot: `RULE_FIRED_<n>` at `0x1040 + 8n` |
+| `0x2000` | TX | `TX_CTRL` (`tx_en`, direct), `TX_OUCH` (shadow), `TX_COMMIT`, `TX_USERREF_NEXT` (commands), `TX_STATUS` (RO), `TX_USERREF` (RO, the counter), `TX_TEMPLATE[10]` at `0x2020` and `TX_TEMPLATE_TAIL` (42 header bytes), the mailbox `MBOX_*` fields, `MBOX_SEND`, `MBOX_SPACE`, `MBOX_STATUS`, live `MBOX_DROP` at `0x2090` |
 | `0x8000` | SYMBOL | Memory, 2048 × 32 bit, RW: bit i of word w = stock locate 32w + i (1 = subscribed) |
+| `0xA000` | LOCATE_ALLOW | Memory, 2048 × 32 bit, RW: `risk_check`'s allow bitmap, bit i of word w = locate 32w + i (1 = orders allowed). An order command (bus order, response once in effect) |
 
 Software never writes a field that hardware also writes: shadow, command and status fields are in separate
 registers, so a hardware update cannot overwrite a host write (legacy K5). A selftest checks this rule on the RDL.
@@ -647,11 +844,14 @@ For the same reason the resync value (`RESYNC_SEQ`, written by software) and the
 
 `VERSION` is major.minor: a minor step only adds registers (software written for an older minor still works), a
 major step changes existing ones. The F3 FEED block made it `0x0005_0001`, the F4 ITCH block and SYMBOL
-`0x0005_0002`, the F6 RING block `0x0005_0003`.
+`0x0005_0002`, the F6 RING block `0x0005_0003`, the F7 RISK, STRATEGY, TX blocks and LOCATE_ALLOW `0x0005_0004`.
 
 The generated read mux has one register stage per 512-byte window (`--rt-read-fanin`), and the logic in front of it
 grows with the registers in that window: RING at `0x0300`, in FEED's window, failed the Artix-7 125 MHz gate. A new
-block goes in a window with room; `test_read_windows_stay_small` allows at most 43 registers in one.
+block goes in a window with room; `test_read_windows_stay_small` allows at most 43 registers in one. In F7 the
+whole map's address decoder failed the same gate (−0.384 ns), so the order blocks got their own register block behind
+the router (decisions 40, 41); `test_router_windows_hold_exactly_the_order_blocks` checks that the router's windows
+hold exactly RISK, STRATEGY and TX.
 
 ### Config commit (NET)
 
@@ -750,7 +950,9 @@ audit/13 S6). Only the counter inputs are delayed, not the data path. In every s
 `RING_COMMIT_ENTRIES` + `RING_DROP_ENTRIES` = `ITCH_OUT` + `MOLD_GAP_EVENTS` + `MOLD_EOS`
 
 (every OUT message, GAP and EOS of an accepted packet is committed or dropped; the system tests check it in every
-snapshot).
+snapshot). F7 adds the order entries to both sides (Host event ring, Identities; decision 30): `order_stats`
+(`RULE_FIRED_<n>`, `ORDERS_SENT_*`, `RISK_REJECT_<reason>`, `RING_DROP_ORDERS`) takes the very signals the packer
+takes, so it needs no delay, and `RING_ORDER_QUEUED` counts the entries still in the packer's queue.
 
 ### Symbol bitmap (SYMBOL)
 
@@ -771,6 +973,32 @@ The FEED class settings and this bitmap also decide what the strategy rules see 
 takes `itch_decoder`'s output messages only, so a MASKED or FILTERED message fires no rule. Host rule: a rule's
 locate needs the ORDER (A, F) or TRADE (P) class enabled and, if that class is filtered, its SYMBOL bit set;
 otherwise the rule never fires. In return every ORDER_SENT's trigger message is in the ring too.
+
+### Order path registers (RISK, STRATEGY, TX, LOCATE_ALLOW)
+
+Four kinds of access (F7, decisions 32–37):
+- **Shadow** (the rule fields under `RULE_SEL`, the RISK limits, `TX_OUCH`, `TX_TEMPLATE*`, the `MBOX_*` fields):
+  writing changes nothing at net.
+- **Commands** (`RULE_COMMIT`, `RULE_ARM`, `RULE_DISARM`, `RISK_COMMIT`, `BUDGET_ADD`, `TX_COMMIT`,
+  `TX_USERREF_NEXT`, a `TX_USERREF` read, `LOCATE_ALLOW` accesses): external registers that go through **one ordered
+  channel** (a `cdc_handshake` each way). The write's response comes when the command is in effect at net (for
+  `TX_COMMIT` after its 2-cycle check), so bus order is effect order and there is no busy bit (decision 33). Writing 0
+  to a commit bit answers at once and does nothing.
+- **Fence** (decision 36): a command enters the channel only when the mailbox FIFO is empty (every earlier
+  `MBOX_SEND` has been taken by `risk_check`), and at net it applies only after the last host order's decision and
+  once kill and tx_en at net equal the values the host had written when it sent the command. The fence does not wait
+  for the TX queue. (S10 showed both net-side conditions never bind given the host fence and the CDC delay; they stay
+  as defense in depth.)
+- **Direct levels** (decision 32): `RISK_CTRL.kill` and `TX_CTRL.tx_en` reach net through one `sync_bit`. From
+  `net_rst` until `STAGES` + 1 net cycles after it the outputs are held at kill 1 and tx_en 0 (`ctl_hold`), because
+  the synchronizer has no reset (`tc_ctl_hold_garbage` injects every synchronizer content at the release). The
+  effective tx_en also needs an accepted TX configuration (`st_cfg_valid`).
+
+Status bits are the result of the last operation of their kind, set and cleared by hardware (`sw = r`, legacy K5;
+decision 34): `TX_STATUS.cfg_refused` and `userref_ignored`, `MBOX_STATUS.dropped`. `RULE_STATUS` and
+`TX_STATUS.cfg_valid` show the state after the last command. `MBOX_DROP` is a live host-domain counter (HI, LO, HI;
+decision 35). `MBOX_SPACE` is the mailbox FIFO's write-side count (`cdc_async_fifo` `WR_COUNT=1`): that many sends from
+now on all fit.
 
 ### Kill switch latency (`RISK_CTRL.kill`)
 
@@ -832,7 +1060,12 @@ after every reset, in this order:
 4. sets up the ring by the host rules of the Host event ring (zeroed region, base, size, `CONS_IDX` = 0, enable)
    and resets its own consumer index and epoch count;
 5. writes the FEED shadow with `ITCH_CTRL` and `FEED_COMMIT`, with a resync if needed;
-6. waits for `commit_busy` = 0 after each commit.
+6. waits for `commit_busy` = 0 after each commit;
+7. restores the order path (F7, decision 5), kill still 1: RISK limits and `RISK_COMMIT`, all 2048 `LOCATE_ALLOW`
+   words, `BUDGET_ADD`, each rule (`RULE_SEL`, shadow, `RULE_COMMIT`, check `RULE_STATUS`) and `RULE_ARM`, the TX
+   template and `TX_OUCH` with `TX_COMMIT` (check `TX_STATUS.cfg_valid`), `TX_USERREF_NEXT`, then `TX_CTRL.tx_en` = 1;
+8. releases the kill switch last (`RISK_CTRL.kill` = 0).
+The order commands answer once in effect, so no polling is needed between them.
 
 How the host learns about a reset (a platform reset notification, or a reset counter register) is F8's.
 
@@ -840,10 +1073,12 @@ How the host learns about a reset (a platform reset notification, or a reset cou
 
 Two domains: `host_clk`/`host_rst` (bus, register block, commit buffers) and `net_clk`/`net_rst` (`cfg_*`,
 `rx_stats`, `mold_stats`, `itch_stats`, the symbol command port). Both resets come from one source through one
-`reset_sync` per domain and are asserted together (`cdc_handshake` contract). The only crossings are six
+`reset_sync` per domain and are asserted together (`cdc_handshake` contract). The crossings: eight
 `cdc_handshake` instances: NET config (442 bits, host → net), FEED config with `ITCH_CTRL` and `cfg_epoch` (176 bits, host → net),
-snapshot request (1 bit, host → net), snapshot (2562 bits, net → host: 11 + 16 + 9 + 3 counters, expected `seq`,
-`synced`, `eos`), symbol request (48 bits, host → net) and symbol response (32 bits, net → host).
+snapshot request (1 bit, host → net), snapshot (net → host: every snapshot counter, the RING ones and F7's
+`order_stats` bank included, expected `seq`, `synced`, `eos`), symbol request (48 bits, host → net), symbol response
+(32 bits, net → host), and F7's order command (host → net) and its response (net → host); one `sync_bit` (kill and
+tx_en) and the mailbox `cdc_async_fifo` (host → net, 16 entries, `WR_COUNT=1`).
 
 In simulation, `assert_arm` (bound to `hft_csr`) keeps every assertion off until the first reset has been seen
 and released: Verilator keeps each instance's clock input as its own variable, and random power-up values can
@@ -865,6 +1100,8 @@ their own first reset; regblock's generated assertions are not.
 | FEED at the same five profiles: commit latency and atomicity (also a shadow written while a commit waits, `ITCH_CTRL` included), resync requests merged and never lost (also one made while a commit waits), a held singlepulse gives one resync, reset during a commit, feed state aligned with the counters in every snapshot phase | `tb/unit/test_hft_csr_wrap.py` (`tc_feed_*`, `tc_itch_ctrl_feed_commit`, `tc_snapshot_feed_aligned`) |
 | SYMBOL at the same five profiles, against a model of the decoder's command port with backpressure: every access reaches the port once, in order, unchanged; exact latencies; BRESP after the write is in effect; waiting during the sweep; resets while a command waits and in flight (10 each) | `tb/unit/test_hft_csr_wrap.py` (`tc_sym_*`) |
 | RING (F6): every register through the bus, `PROD_IDX`, status and live counters following their inputs; the ring counters aligned with the ITCH and MOLD counters at every cycle around a packet event; `cfg_epoch` against hand-written counts (consecutive writes, coalesced commits, a held pulse, a write of 0, reset) | `tb/unit/test_hft_csr_wrap.py` |
+| Order path (F7) at the same five profiles, against a model of `strategy_engine`, `risk_check` and `order_tx_builder` at their command ports: rule shadow and indirect commit, every command once, in bus order, whole, response after its effect, the fence behind `MBOX_SEND`s and behind kill/tx_en writes, `TX_COMMIT` only with the path closed, status bits, mailbox FIFO and `MBOX_SPACE`, kill latency, the kill hold after reset, resets during a command, order counters in the snapshot | `tb/unit/test_hft_csr_wrap.py` (`tc_rule_commit` … `tc_snapshot_order_counters`) |
+| Router (F7): the whole map through `hft_csr_regs` (window edges and gaps answer `SLVERR`), `axil_props` on the port and both blocks, `route_props` (6, each violation firing only its own), the window selftest | `tb/unit/test_hft_csr.py`, `tb/sva/route_props.sv`, `tb/selftest/test_csr_map.py` |
 | System: `eth_ip_udp_rx` + `moldudp64_rx` + `itch_decoder` + `hft_csr_wrap`, each frame against the F2 model, each payload against the MoldUDP64 model and each message against the ITCH model under the configuration it used; 2000 random frames with random commits and snapshots, 2000 feed frames with resyncs and the accounting identity, 2000 ITCH frames with bitmap and `ITCH_CTRL` changes and the ITCH identities | `tb/system/test_rx_csr.py` |
 
 ### Synthesis (`just synth-csr`, OOC place & route)
@@ -874,17 +1111,25 @@ gates are placed and routed out of context (no board or pins); the table also gi
 
 | Part | net / host clock | Flow | LUT | FF | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|------|-----|----|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 3641 | 11838 | +0.767 (synthesis +1.607) | +0.042 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 3639 | 11836 | +0.129 (synthesis +0.422) | +0.090 | PASS |
-| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 3644 | 11836 | −3.532 | +0.164 | information only |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 7381 | 19265 | +0.406 (synthesis +1.291) | +0.022 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 7380 | 19277 | +0.018 (synthesis −0.059) | +0.052 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 7381 | 19264 | −4.059 | +0.164 | information only |
 
 F5 alone was 1329 LUT, 4349 FF (Artix-7 margin +0.324 ns); the F3 FEED block made it 2460 / 8405, the F4 ITCH block,
 SYMBOL path and 2370-bit snapshot 3426 / 10697, the F6 RING block, ring counters and the counter alignment 3639 /
-11836. The Artix-7 host read path is the limit: RING in FEED's read window failed it by 0.234 ns, alone in its own
+11836, the F7 order blocks, router, command channel and mailbox 7381 / 19265 (F7 numbers at `bf5f1d4`). The Artix-7 host read path is the limit: RING in FEED's read window failed it by 0.234 ns, alone in its own
 window it passes (above, Map). regblock `--rt-read-response` does not help this path (it ends before the read mux's
 register).
 
-`report_cdc`: CDC-3 (synchronizers, 12) and CDC-15 (handshake data captured with an enable, constrained by
-`cdc.tcl`, 3260 bits), no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
+F7 on the Artix-7 at 125 MHz: the router took the address decoder off the path (−0.384 → −0.100 ns), and the rest
+is closed by `phys_opt_design` after routing, which `synth_ooc.tcl` runs only when the routed design misses timing
+(decision 44; gates that pass keep the old flow). The margin is thin; the worst path is now `hft_order_csr`'s
+AXI-Lite arbitration into its read mux. If the map grows, the next steps are regblock `--cpuif passthrough` behind
+the router or a third register block for the snapshot counters.
+
+`report_cdc` (F7): CDC-3 (synchronizers, 22), CDC-15 (handshake data captured with an enable, constrained by
+`cdc.tcl`, 5066 bits), CDC-6 (2, allowed), and CDC-26 on the 272 mailbox FIFO read endpoints, waived by name
+(decision 42: the FIFO never reads the address being written while its output is valid; the gate accepts CDC-26
+only on those waived endpoints); no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
 user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
 read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.
