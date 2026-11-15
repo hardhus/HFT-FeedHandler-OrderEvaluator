@@ -1693,6 +1693,42 @@ async def tc_ctl_tx_en_needs_cfg(dut):
     assert dut.ctl_tx_en.value == 1 and dut.ctl_kill.value == 1
 
 
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ctl_hold_garbage(dut):
+    """Decision 5 (S10 kill_not_held): the kill/tx_en synchronizer has no reset, so when net_rst releases it may hold
+    anything (power-up, or a reset too short to flush it). Every content of its STAGES flops is put in at the release
+    edge (fault injection, both resets, registers at their reset values kill 1 / tx_en 0); ctl_kill stays 1 and
+    ctl_tx_en 0 on every net edge until the chain has been refilled from the registers and after it."""
+    w = await start(dut)
+    sync = w.root.u_ctl_sync
+    seen_open = 0  # releases where the synchronizer itself said kill 0, so only the hold kept ctl_kill at 1
+    for pattern in range(4**STAGES):  # 2 bits per stage: {kill, tx_en}
+        w.drv.reset(dut.host_rst)
+        dut.host_rst.value = 1
+        dut.net_rst.value = 1
+        for _ in range(STAGES + 4):
+            await RisingEdge(dut.host_clk)
+            await RisingEdge(dut.net_clk)
+        await FallingEdge(dut.host_clk)
+        dut.host_rst.value = 0
+        await FallingEdge(dut.net_clk)  # no net edge between the injection and the first check
+        dut.net_rst.value = 0
+        for s in range(STAGES):
+            sync.sync_q[s].value = (pattern >> (2 * s)) & 3
+        opened = False
+        for edge in range(STAGES + 6):
+            await ReadOnly()
+            opened |= int(w.root.kill_s.value) == 0
+            assert dut.ctl_kill.value == 1 and dut.ctl_tx_en.value == 0, (
+                f"synchronizer {pattern:0{2 * STAGES}b}: ctl_kill {dut.ctl_kill.value} ctl_tx_en "
+                f"{dut.ctl_tx_en.value} at net edge {edge} after the release"
+            )
+            await RisingEdge(dut.net_clk)
+        seen_open += opened
+    # Every pattern with kill 0 in any stage shifts it out through q: all but the 2**STAGES with kill 1 everywhere.
+    assert seen_open == 4**STAGES - 2**STAGES, f"kill 0 out of the synchronizer after {seen_open} releases"
+
+
 @cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_locate_allow(dut):
     """LOCATE_ALLOW through the channel: every WSTRB on the first, the last and random words, read back, with random
