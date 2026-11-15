@@ -211,18 +211,24 @@ module event_packer
       };
   assign wp_rej = wp_q + OQ_W'(s_sent_valid);
 
+  // One write statement per bank (Vivado infers distributed RAM only with one write port; two statements per bank,
+  // even if never both in one cycle, made it registers, S11). The two entries of a cycle go to consecutive slots, so
+  // at most one of them is for each bank: the ORDER_SENT if it is, else the RISK_REJECT.
+  logic b0_we, b1_we, b0_sent, b1_sent;
+  logic [OQ_W-2:0] b0_addr, b1_addr;
+  assign b0_sent = s_sent_valid && !wp_q[0];
+  assign b1_sent = s_sent_valid && wp_q[0];
+  assign b0_we   = b0_sent || (s_rej_valid && !wp_rej[0]);
+  assign b1_we   = b1_sent || (s_rej_valid && wp_rej[0]);
+  assign b0_addr = b0_sent ? wp_q[OQ_W-1:1] : wp_rej[OQ_W-1:1];
+  assign b1_addr = b1_sent ? wp_q[OQ_W-1:1] : wp_rej[OQ_W-1:1];
+
   always_ff @(posedge clk) begin
-    if (s_sent_valid && !wp_q[0]) begin
-      bank0[wp_q[OQ_W-1:1]] <= sent_in;
+    if (b0_we) begin
+      bank0[b0_addr] <= b0_sent ? sent_in : rej_in;
     end
-    if (s_sent_valid && wp_q[0]) begin
-      bank1[wp_q[OQ_W-1:1]] <= sent_in;
-    end
-    if (s_rej_valid && !wp_rej[0]) begin
-      bank0[wp_rej[OQ_W-1:1]] <= rej_in;
-    end
-    if (s_rej_valid && wp_rej[0]) begin
-      bank1[wp_rej[OQ_W-1:1]] <= rej_in;
+    if (b1_we) begin
+      bank1[b1_addr] <= b1_sent ? sent_in : rej_in;
     end
   end
 
