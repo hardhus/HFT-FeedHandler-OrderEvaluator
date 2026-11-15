@@ -217,6 +217,13 @@ async def tc_reset_mid_transfer(dut):
         await cocotb.start_soon(sender(dut, clean, sb))
         for _ in range(4 * STAGES + 10):
             await RisingEdge(dut.dst_clk)
+        # The last word's 4-phase round trip (two crossings each way, each one edge longer with jitter) can outlast
+        # the wait above when src is the slow, drifting clock (seed 1733167237, jitter profile): wait for it, bounded.
+        for _ in range(64):
+            if dut.src_ready.value:
+                break
+            await FallingEdge(dut.src_clk)
+        assert dut.src_ready.value, "the handshake did not return to ready within 64 src edges after the last word"
         rounds.append((word, clean))
     rx.cancel()
     pos = 0
