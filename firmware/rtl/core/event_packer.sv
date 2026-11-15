@@ -165,9 +165,11 @@ module event_packer
     logic [CFG_EPOCH_W-1:0]  epoch;
   } ord_slot_t;
 
-  (* ram_style = "distributed" *)ord_slot_t          bank0                                                         [OQ/2];
-  (* ram_style = "distributed" *)ord_slot_t          bank1                                                         [OQ/2];
-  logic      [OQ-1:0] lost_q;  // a lost reject stands right after this slot's entry
+  // Flat vectors, not an array of the struct: Vivado splits an array of a packed struct into one object per
+  // element and field and then infers no RAM ("incorrect usage", Synth 8-7186, S11: about 8k FFs instead).
+  (* ram_style = "distributed" *) logic [$bits(ord_slot_t)-1:0] bank0[OQ/2];
+  (* ram_style = "distributed" *) logic [$bits(ord_slot_t)-1:0] bank1[OQ/2];
+  logic [OQ-1:0] lost_q;  // a lost reject stands right after this slot's entry
   logic [OQ_W-1:0] wp_q, rp_q, wp_rej, pick_slot;
   logic [RING_ORD_QUEUED_W-1:0] oq_n_q;
   logic lost_pend_q;  // a lost reject at the head of the queue (no entry ahead of it)
@@ -211,9 +213,8 @@ module event_packer
       };
   assign wp_rej = wp_q + OQ_W'(s_sent_valid);
 
-  // One write statement per bank (Vivado infers distributed RAM only with one write port; two statements per bank,
-  // even if never both in one cycle, made it registers, S11). The two entries of a cycle go to consecutive slots, so
-  // at most one of them is for each bank: the ORDER_SENT if it is, else the RISK_REJECT.
+  // One write statement per bank (distributed RAM has one write port). The two entries of a cycle go to consecutive
+  // slots, so at most one of them is for each bank: the ORDER_SENT if it is, else the RISK_REJECT.
   logic b0_we, b1_we, b0_sent, b1_sent;
   logic [OQ_W-2:0] b0_addr, b1_addr;
   assign b0_sent = s_sent_valid && !wp_q[0];
@@ -237,7 +238,7 @@ module event_packer
   // adder after s1_ord_q (fanout 130 into the LUTRAM address) failed the A7 at 156.25 MHz (-0.052 ns, S9).
   logic [OQ_W-1:0] pick_q;
   assign pick_slot = pick_q;
-  assign ord_rd = pick_slot[0] ? bank1[pick_slot[OQ_W-1:1]] : bank0[pick_slot[OQ_W-1:1]];
+  assign ord_rd = ord_slot_t'(pick_slot[0] ? bank1[pick_slot[OQ_W-1:1]] : bank0[pick_slot[OQ_W-1:1]]);
   assign ord_desc = ord_rd.rej ? desc_pack_risk_reject(
       ord_rd.seq,
       ord_rd.sof_ts,
