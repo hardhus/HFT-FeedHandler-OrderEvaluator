@@ -608,7 +608,7 @@ low; reset the memory side with it). The entries of a packet cut by a reset are 
 ### Synthesis (OOC, `just synth-ooc-on <part> event_path_ooc <profile> core.f synth_ooc_core.f impl`, placed and routed)
 
 Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer with its F7 order queue, `COMMIT=1` FIFO of 256 entries,
-writer; inputs registered). F7 numbers (`fb5ef21`):
+writer; inputs registered). F7 numbers (`6c05d52`):
 
 | Part | net / host clock | `DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|----------|-----|--------|----|------|----------|----------|------|
