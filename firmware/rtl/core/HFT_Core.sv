@@ -1,15 +1,19 @@
-// rx_csr_top: simulation-only system top: eth_ip_udp_rx, moldudp64_rx, itch_decoder, event_packer, the commit FIFO
-// and event_ring_writer, configured and counted through the host CSR block (hft_csr_wrap), with one asynchronous
-// reset source and one reset_sync per clock domain.
-// Clock domain : host_clk (s_axil_*, m_axi_hmw_*, ring_fifo_underflow), net_clk (s_axis_rx_*, ts_now, m_axis_udp_*,
-//                m_udp_*, m_msg_*, m_pkt_*, m_ev_*, m_res_*, ring_fifo_overflow)
-// Latency      : those of its blocks
+// HFT_Core: the board-independent core top that a platform shell (PCIe bridge, 10G MAC, clocking) instantiates:
+// eth_ip_udp_rx, moldudp64_rx, itch_decoder, the order path (strategy_engine, risk_check with the host mailbox,
+// order_tx_builder), event_packer, the commit FIFO and event_ring_writer, configured and counted through the host
+// CSR block (hft_csr_wrap).
+// Clock domain : host_clk (s_axil_*, m_axi_hmw_*, irq), net_clk (s_axis_rx_*, m_axis_tx_*)
+// Reset        : rst_in is the one asynchronous, active-high reset source of both domains (the platform ORs its
+//                PCIe, MAC and user resets into it). Each domain has its own reset_sync here, so cdc_handshake's
+//                one-source contract holds inside the core.
+// Timestamps   : ts_q is a free-running 64-bit counter of net_clk cycles, 0 after reset; every timestamp in the
+//                core (SOF, TX, reject) is a value of it.
 // ITCH         : moldudp64_rx carries the ITCH config per packet: cfg_msg_ctx = {cfg_epoch, cfg_class_filter,
-//                cfg_class_en}. The counter banks in hft_csr_wrap count itch_decoder's forwarded
-//                packet events and results; m_pkt_* are moldudp64_rx's own,
-//                m_fwd_pkt_* the forwarded ones.
+//                cfg_class_en}. The counter banks in hft_csr_wrap count itch_decoder's forwarded packet events and
+//                results.
 // Ring         : itch_decoder's events and forwarded packet events go through event_packer and the COMMIT=1 FIFO
-//                to event_ring_writer, which writes host memory through m_axi_hmw_* (audit/13 §2.2).
+//                to event_ring_writer, which writes host memory through m_axi_hmw_* (audit/13 §2.2). RING_DATA_W is
+//                the host memory bus width (64, 128, 256 or 512): the platform sets it to its PCIe bridge's width.
 // Order path   : itch_decoder m_ev_* and m_fwd_pkt_* -> strategy_engine -> risk_check (with the host mailbox)
 //                -> order_tx_builder -> m_axis_tx_* (audit/14 §2.2). strategy_engine sees only the messages that
 //                itch_decoder outputs (m_ev_valid: not MASKED or FILTERED), so a rule's locate must pass the FEED
@@ -17,18 +21,19 @@
 //                ctl_tx_en && st_cfg_valid (decision 26). LOCATE_ALLOW is risk_check's bitmap. ORDER_SENT,
 //                RISK_REJECT and lost rejects go to event_packer's order inputs, and order_stats counts the same
 //                signals (hft_csr_wrap header, audit/14 S7 A5); event_packer returns ring credits to risk_check.
-// Note         : stands for the platform shell of F8 (MAC, PCIe bridge and clocking there).
-module rx_csr_top
+// irq          : host_clk, level. Tied to 0 for now (the ring interrupt comes in F8 S5).
+// Latency      : those of its blocks
+module HFT_Core
   import hft_pkg::*;
 #(
-    localparam int unsigned CTX_W           = CFG_EPOCH_W + 2 * ITCH_N_CLASS,  // {epoch, class_filter, class_en}
-    localparam int unsigned RING_DATA_W = 512,
-    localparam int unsigned RING_DEPTH_LOG2 = 8
+    parameter int unsigned RING_DATA_W     = 512,
+    parameter int unsigned RING_DEPTH_LOG2 = 8
 ) (
-    input logic host_clk,
     input logic net_clk,
+    input logic host_clk,
     input logic rst_in,    // async, active-high, one source for both domains
 
+    // Host CSR bus (host_clk)
     input  logic        s_axil_awvalid,
     output logic        s_axil_awready,
     input  logic [15:0] s_axil_awaddr,
@@ -49,103 +54,22 @@ module rx_csr_top
     output logic [31:0] s_axil_rdata,
     output logic [ 1:0] s_axil_rresp,
 
+    // Market data frames from the MAC (net_clk): byte 0 = tdata[7:0], tuser on the last beat = bad FCS
     input  logic [63:0] s_axis_rx_tdata,
     input  logic [ 7:0] s_axis_rx_tkeep,
     input  logic        s_axis_rx_tvalid,
     output logic        s_axis_rx_tready,
     input  logic        s_axis_rx_tlast,
     input  logic        s_axis_rx_tuser,
-    input  logic [63:0] ts_now,
 
-    output logic [63:0] m_axis_udp_tdata,
-    output logic [ 7:0] m_axis_udp_tkeep,
-    output logic        m_axis_udp_tvalid,
-    output logic        m_axis_udp_tlast,
-    output logic        m_axis_udp_tuser,
-    output logic [63:0] m_udp_sof_ts,
-    output logic [31:0] m_udp_src_ip,
-    output logic [31:0] m_udp_dst_ip,
-    output logic [15:0] m_udp_dst_port,
-    output logic [15:0] m_udp_len,
-    output logic [ 2:0] m_udp_filter_idx,
-
-    output logic                      m_msg_valid,
-    output logic [8*MOLD_MAX_MSG-1:0] m_msg_data,
-    output logic [MOLD_MSG_LEN_W-1:0] m_msg_len,
-    output logic [              63:0] m_msg_seq,
-    output logic [              63:0] m_msg_sof_ts,
-    output logic [         CTX_W-1:0] m_msg_ctx,
-
-    output logic                     m_pkt_valid,
-    output mold_status_e             m_pkt_status,
-    output logic         [     63:0] m_pkt_seq,
-    output logic         [     15:0] m_pkt_count,
-    output logic         [     63:0] m_pkt_gap,
-    output logic         [     15:0] m_pkt_msgs,
-    output logic         [     15:0] m_pkt_dup_msgs,
-    output logic         [     15:0] m_pkt_oversize,
-    output logic                     m_pkt_synced_now,
-    output logic         [     63:0] m_pkt_sof_ts,
-    output logic         [CTX_W-1:0] m_pkt_ctx,
-
-    // itch_decoder events and results
-    output logic          [   CFG_EPOCH_W-1:0] m_ev_epoch,
-    output logic                               m_ev_valid,
-    output itch_class_e                        m_ev_class,
-    output logic          [               7:0] m_ev_type,
-    output logic          [MOLD_MSG_LEN_W-1:0] m_ev_len,
-    output logic          [              63:0] m_ev_seq,
-    output logic          [              63:0] m_ev_sof_ts,
-    output logic          [              15:0] m_ev_locate,
-    output logic          [              15:0] m_ev_tracking,
-    output logic          [              47:0] m_ev_ts,
-    output logic          [              63:0] m_ev_order_ref,
-    output logic          [              63:0] m_ev_new_ref,
-    output logic          [              63:0] m_ev_shares,
-    output logic          [              31:0] m_ev_price,
-    output logic          [              63:0] m_ev_match,
-    output logic          [               7:0] m_ev_side,
-    output logic          [              63:0] m_ev_stock,
-    output logic          [              31:0] m_ev_attribution,
-    output logic          [               7:0] m_ev_printable,
-    output logic          [               7:0] m_ev_cross_type,
-    output logic          [8*MOLD_MAX_MSG-1:0] m_ev_raw,
-    output logic                               m_res_valid,
-    output itch_class_e                        m_res_class,
-    output itch_outcome_e                      m_res_outcome,
-
-    // itch_decoder's forwarded packet events (what the counter banks count)
-    output logic                           m_fwd_pkt_valid,
-    output mold_status_e                   m_fwd_pkt_status,
-    output logic         [           63:0] m_fwd_pkt_seq,
-    output logic         [           15:0] m_fwd_pkt_count,
-    output logic         [           63:0] m_fwd_pkt_gap,
-    output logic         [           15:0] m_fwd_pkt_msgs,
-    output logic         [           15:0] m_fwd_pkt_dup_msgs,
-    output logic         [           15:0] m_fwd_pkt_oversize,
-    output logic                           m_fwd_pkt_synced_now,
-    output logic         [           63:0] m_fwd_pkt_sof_ts,
-    output logic         [CFG_EPOCH_W-1:0] m_fwd_pkt_epoch,
-
-    // Commit FIFO: a write that found it full (event_packer drops the packet), a read of it empty (never)
-    output logic                         ring_fifo_overflow,
-    output logic                         ring_fifo_underflow,
-    // event_packer's order queue
-    output logic                         ring_credit_ret,
-    output logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued,
-    // Order path controls (hft_csr_wrap) and the effective tx_en (ctl_tx_en && st_cfg_valid, decision 26)
-    output logic                         ctl_kill,
-    output logic                         ctl_tx_en,
-    output logic                         tx_en_eff,
-
-    // Order frames (order_tx_builder): Eth/IPv4/UDP + SoupBin 'U' + OUCH 5.0 'O', byte 0 = tdata[7:0]
+    // Order frames to the MAC (net_clk): Eth/IPv4/UDP + SoupBin 'U' + OUCH 5.0 'O', byte 0 = tdata[7:0]
     output logic [63:0] m_axis_tx_tdata,
     output logic [ 7:0] m_axis_tx_tkeep,
-    output logic        m_axis_tx_tlast,
     output logic        m_axis_tx_tvalid,
     input  logic        m_axis_tx_tready,
+    output logic        m_axis_tx_tlast,
 
-    // Host memory
+    // Host memory writes (host_clk): AXI4 write channels only, no ID
     output logic [             63:0] m_axi_hmw_awaddr,
     output logic [              7:0] m_axi_hmw_awlen,
     output logic [              2:0] m_axi_hmw_awsize,
@@ -159,9 +83,71 @@ module rx_csr_top
     input  logic                     m_axi_hmw_wready,
     input  logic [              1:0] m_axi_hmw_bresp,
     input  logic                     m_axi_hmw_bvalid,
-    output logic                     m_axi_hmw_bready
+    output logic                     m_axi_hmw_bready,
+
+    // Interrupt to the host (host_clk, level)
+    output logic irq
 );
+  localparam int unsigned CTX_W = CFG_EPOCH_W + 2 * ITCH_N_CLASS;  // {epoch, class_filter, class_en}
   localparam int unsigned N_FILTERS = 8;
+
+  // Block outputs that nothing in the core takes: the UDP metadata moldudp64_rx does not need, the forwarded packet
+  // event's count and synced_now (the counter banks and event_packer do not use them), and the commit FIFO's error
+  // flags (event_packer never writes it full, event_ring_writer reads it only when not empty). Of a packet event's
+  // context itch_decoder takes only the epoch.
+  logic [31:0] udp_src_ip_unused, udp_dst_ip_unused;
+  logic [              15:0] udp_dst_port_unused;
+  logic [              15:0] fwd_pkt_count_unused;
+  logic [2*ITCH_N_CLASS-1:0] pkt_class_ctx_unused;
+  logic fwd_pkt_synced_now_unused, fifo_overflow_unused, fifo_underflow_unused;
+
+  // eth_ip_udp_rx -> moldudp64_rx
+  logic [63:0] m_axis_udp_tdata;
+  logic [ 7:0] m_axis_udp_tkeep;
+  logic m_axis_udp_tvalid, m_axis_udp_tlast, m_axis_udp_tuser;
+  logic [              63:0] m_udp_sof_ts;
+  logic [              15:0] m_udp_len;
+  logic [               2:0] m_udp_filter_idx;
+  // moldudp64_rx -> itch_decoder
+  logic                      m_msg_valid;
+  logic [8*MOLD_MAX_MSG-1:0] m_msg_data;
+  logic [MOLD_MSG_LEN_W-1:0] m_msg_len;
+  logic [63:0] m_msg_seq, m_msg_sof_ts;
+  logic         [CTX_W-1:0] m_msg_ctx;
+  logic                     m_pkt_valid;
+  mold_status_e             m_pkt_status;
+  logic [63:0] m_pkt_seq, m_pkt_gap, m_pkt_sof_ts;
+  logic [15:0] m_pkt_count, m_pkt_msgs, m_pkt_dup_msgs, m_pkt_oversize;
+  logic m_pkt_synced_now;
+  logic [CFG_EPOCH_W-1:0] m_pkt_epoch;  // the epoch of m_pkt_ctx (itch_decoder takes the class config per message)
+  // itch_decoder events and results
+  logic [CFG_EPOCH_W-1:0] m_ev_epoch;
+  logic m_ev_valid;
+  itch_class_e m_ev_class;
+  logic [7:0] m_ev_type, m_ev_side, m_ev_printable, m_ev_cross_type;
+  logic [MOLD_MSG_LEN_W-1:0] m_ev_len;
+  logic [63:0]
+      m_ev_seq, m_ev_sof_ts, m_ev_order_ref, m_ev_new_ref, m_ev_shares, m_ev_match, m_ev_stock;
+  logic [15:0] m_ev_locate, m_ev_tracking;
+  logic [47:0] m_ev_ts;
+  logic [31:0] m_ev_price, m_ev_attribution;
+  logic          [8*MOLD_MAX_MSG-1:0] m_ev_raw;
+  logic                               m_res_valid;
+  itch_class_e                        m_res_class;
+  itch_outcome_e                      m_res_outcome;
+  // itch_decoder's forwarded packet events (what the counter banks count)
+  logic                               m_fwd_pkt_valid;
+  mold_status_e                       m_fwd_pkt_status;
+  logic [63:0] m_fwd_pkt_seq, m_fwd_pkt_gap, m_fwd_pkt_sof_ts;
+  logic [15:0] m_fwd_pkt_msgs, m_fwd_pkt_dup_msgs, m_fwd_pkt_oversize;
+  logic [      CFG_EPOCH_W-1:0] m_fwd_pkt_epoch;
+  // event_packer's order queue
+  logic                         ring_credit_ret;
+  logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued;
+  // Order path controls (hft_csr_wrap) and the effective tx_en (ctl_tx_en && st_cfg_valid, decision 26)
+  logic ctl_kill, ctl_tx_en, tx_en_eff;
+  // The net_clk timestamp counter
+  logic [63:0] ts_q;
 
   logic host_rst, net_rst;
   logic cfg_rx_en, cfg_accept_bcast;
@@ -429,16 +415,16 @@ module rx_csr_top
       .cfg_filter_ip    (cfg_filter_ip),
       .cfg_filter_port  (cfg_filter_port),
       .cfg_filter_en    (cfg_filter_en),
-      .ts_now           (ts_now),
+      .ts_now           (ts_q),
       .m_axis_udp_tdata (m_axis_udp_tdata),
       .m_axis_udp_tkeep (m_axis_udp_tkeep),
       .m_axis_udp_tvalid(m_axis_udp_tvalid),
       .m_axis_udp_tlast (m_axis_udp_tlast),
       .m_axis_udp_tuser (m_axis_udp_tuser),
       .m_udp_sof_ts     (m_udp_sof_ts),
-      .m_udp_src_ip     (m_udp_src_ip),
-      .m_udp_dst_ip     (m_udp_dst_ip),
-      .m_udp_dst_port   (m_udp_dst_port),
+      .m_udp_src_ip     (udp_src_ip_unused),
+      .m_udp_dst_ip     (udp_dst_ip_unused),
+      .m_udp_dst_port   (udp_dst_port_unused),
       .m_udp_len        (m_udp_len),
       .m_udp_filter_idx (m_udp_filter_idx),
       .stat_valid       (stat_valid),
@@ -484,7 +470,7 @@ module rx_csr_top
       .m_pkt_oversize   (m_pkt_oversize),
       .m_pkt_synced_now (m_pkt_synced_now),
       .m_pkt_sof_ts     (m_pkt_sof_ts),
-      .m_pkt_ctx        (m_pkt_ctx),
+      .m_pkt_ctx        ({m_pkt_epoch, pkt_class_ctx_unused}),
       .feed_expected_seq(feed_expected_seq),
       .feed_synced      (feed_synced),
       .feed_eos         (feed_eos)
@@ -511,7 +497,7 @@ module rx_csr_top
       .s_pkt_oversize    (m_pkt_oversize),
       .s_pkt_synced_now  (m_pkt_synced_now),
       .s_pkt_sof_ts      (m_pkt_sof_ts),
-      .s_pkt_epoch       (m_pkt_ctx[CTX_W-1:2*ITCH_N_CLASS]),
+      .s_pkt_epoch       (m_pkt_epoch),
       .sym_req_valid     (sym_req_valid),
       .sym_req_ready     (sym_req_ready),
       .sym_req_wr        (sym_req_wr),
@@ -547,12 +533,12 @@ module rx_csr_top
       .m_pkt_valid       (m_fwd_pkt_valid),
       .m_pkt_status      (m_fwd_pkt_status),
       .m_pkt_seq         (m_fwd_pkt_seq),
-      .m_pkt_count       (m_fwd_pkt_count),
+      .m_pkt_count       (fwd_pkt_count_unused),
       .m_pkt_gap         (m_fwd_pkt_gap),
       .m_pkt_msgs        (m_fwd_pkt_msgs),
       .m_pkt_dup_msgs    (m_fwd_pkt_dup_msgs),
       .m_pkt_oversize    (m_fwd_pkt_oversize),
-      .m_pkt_synced_now  (m_fwd_pkt_synced_now),
+      .m_pkt_synced_now  (fwd_pkt_synced_now_unused),
       .m_pkt_sof_ts      (m_fwd_pkt_sof_ts),
       .m_pkt_epoch       (m_fwd_pkt_epoch)
   );
@@ -603,7 +589,7 @@ module rx_csr_top
   risk_check u_risk (
       .clk                  (net_clk),
       .rst                  (net_rst),
-      .ts_now               (ts_now),
+      .ts_now               (ts_q),
       .epoch_now            (cfg_epoch),
       .s_hw_valid           (o_valid),
       .s_hw_rule            (o_rule),
@@ -685,7 +671,7 @@ module rx_csr_top
   order_tx_builder u_tx (
       .clk             (net_clk),
       .rst             (net_rst),
-      .ts_now          (ts_now),
+      .ts_now          (ts_q),
       .cfg_wr          (cfg_tx_wr),
       .cfg_template    (cfg_template),
       .cfg_display     (cfg_display),
@@ -817,14 +803,14 @@ module rx_csr_top
       .wr_commit  (fifo_commit),
       .wr_rollback(fifo_rollback),
       .full       (fifo_full),
-      .overflow   (ring_fifo_overflow),
+      .overflow   (fifo_overflow_unused),
       .wr_rst_busy(fifo_wr_busy),
       .wr_count   (fifo_wr_count_unused),
       .rd_clk     (host_clk),
       .rd_en      (fifo_rd_en),
       .dout       (fifo_dout),
       .empty      (fifo_empty),
-      .underflow  (ring_fifo_underflow),
+      .underflow  (fifo_underflow_unused),
       .rd_rst_busy(fifo_rd_busy)
   );
 
@@ -861,4 +847,14 @@ module rx_csr_top
       .cnt_written      (ring_cnt_written),
       .cnt_bresp_err    (ring_cnt_bresp_err)
   );
+
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      ts_q <= '0;
+    end else begin
+      ts_q <= ts_q + 64'd1;
+    end
+  end
+
+  assign irq = 1'b0;
 endmodule

@@ -205,8 +205,8 @@ def test_every_rtl_and_sva_file_is_listed_once():
     """An RTL or SVA file outside every filelist is neither linted nor simulated."""
     fw = REPO / "firmware"
     listed: dict[Path, list[str]] = {}
-    lists = ("common.f", "core.f", "csr.f", "system.f", "xilinx.f", "synth_ooc.f", "synth_ooc_core.f",
-             "synth_ooc_csr.f", "sva.f", "sva_core.f", "sva_csr.f")  # fmt: skip
+    lists = ("common.f", "core.f", "csr.f", "top.f", "xilinx.f", "synth_ooc.f", "synth_ooc_core.f",
+             "synth_ooc_csr.f", "synth_ooc_top.f", "sva.f", "sva_core.f", "sva_csr.f")  # fmt: skip
     for name in lists:
         for path in read_filelist(FILELISTS / name):
             listed.setdefault(path, []).append(name)

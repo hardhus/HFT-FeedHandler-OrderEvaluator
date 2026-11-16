@@ -1,4 +1,4 @@
-"""rx_csr_top: the order path in the system (audit/14 S8): itch_decoder -> strategy_engine -> risk_check (with the
+"""HFT_Core: the order path in the system (audit/14 S8): itch_decoder -> strategy_engine -> risk_check (with the
 host mailbox) -> order_tx_builder -> the TX port, with ORDER_SENT and RISK_REJECT in the host ring.
 
 Every block was checked cycle by cycle against its model in its unit test. Here the chain is checked end to end,
@@ -35,6 +35,7 @@ from test_rx_csr import (
     NET_FEED,
     PKT_LATENCY,
     SESSION,
+    CoreTaps,
     RingHost,
     System,
     bit,
@@ -285,7 +286,7 @@ class OrderWatch:
 async def order_system(dut, rules: dict[int, RuleCfg], size_log2: int = 6, **kw):
     """A ring system (every class out, nothing filtered), the order path brought up, the watch and the exchange."""
     w, sysm, host = await ring_system(dut, size_log2)
-    watch = OrderWatch(dut)
+    watch = OrderWatch(CoreTaps(dut))
     oh = OrderHost(w)
     await oh.bring_up(rules, **kw)
     return w, sysm, host, oh, watch
@@ -885,7 +886,7 @@ async def tc_real_order(dut):
     await host.enable()
     for word in range(N_WORDS):
         assert await w.drv.write(SYMBOL.addr + 4 * word, 0x11111111) == OKAY  # locates 0 mod 4
-    watch, oh = OrderWatch(dut), OrderHost(w)
+    watch, oh = OrderWatch(CoreTaps(dut)), OrderHost(w)
     await oh.bring_up(rules, budget=1_000_000, allow=tuple(locs))
     strat = Strategy()
     for i, r in rules.items():
@@ -951,8 +952,8 @@ def directed_tests() -> list[str]:
 def test_rx_order(group, jit, ratio):
     assert ratio in PROFILES
     run_cocotb(
-        toplevel="rx_csr_top",
-        filelists=["common.f", "core.f", "csr.f", "system.f"],
+        toplevel="HFT_Core",
+        filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_order",
         defines={"HFT_SIM_CDC_JITTER": 1} if jit else {},
         testcase=directed_tests() if group == "directed" else group,
@@ -969,8 +970,8 @@ def test_rx_order_real(name):
     except Retired as e:
         pytest.skip(str(e))
     run_cocotb(
-        toplevel="rx_csr_top",
-        filelists=["common.f", "core.f", "csr.f", "system.f"],
+        toplevel="HFT_Core",
+        filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_order",
         testcase="tc_real_order",
         extra_env={"GROUP": "tc_real_order", "JITTER": 0, "RATIO": "net2host", "ITCH_REAL": path,

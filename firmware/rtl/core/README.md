@@ -42,7 +42,7 @@ F7 plans (audit 09, 10, 11, 12, 13, 14); this file is the contract.
 | `cfg_local_mac` | 48 | Own unicast MAC |
 | `cfg_accept_bcast` | 1 | Accept `ff:ff:ff:ff:ff:ff` |
 | `cfg_filter_{ip,port,en}` | `N_FILTERS` × 32 / 16 / 1 | (dst IP, dst port) filter table, `N_FILTERS = 8` |
-| `ts_now` | 64 | Free-running timestamp (from `timestamp_counter`, F8) |
+| `ts_now` | 64 | Free-running timestamp (`HFT_Core`'s net_clk counter `ts_q`) |
 | `m_axis_udp_*` | 64-bit AXIS | UDP payload, byte 0 = `tdata[7:0]`; no `tready` (line rate). `tuser` on the last beat = abort |
 | `m_udp_sof_ts`, `m_udp_src_ip`, `m_udp_dst_ip`, `m_udp_dst_port`, `m_udp_len`, `m_udp_filter_idx` | 64, 32, 32, 16, 16, `FIDX_W` | Per-packet metadata. `m_udp_len` = payload bytes (UDP length − 8) |
 | `stat_valid`, `stat_reason`, `stat_bytes` | 1, `rx_reason_e`, 16 | One event per frame; `stat_bytes` = frame length, saturating |
@@ -488,8 +488,8 @@ itch_decoder (net_clk) --m_ev_*, m_pkt_*--> event_packer (net_clk) --1024-bit en
 
 The host gets every output event in host memory, in order, whole per packet, without reading a register per event
 (legacy K9, M1). Entries of a packet become visible only when the packet is accepted (store and forward: at most one
-packet time, about 1.2 µs for 1472 B, on the host path; the order logic of F7 does not take this path). The system
-top `tb/system/rx_csr_top.sv` joins the whole chain.
+packet time, about 1.2 µs for 1472 B, on the host path; the order logic of F7 does not take this path). The core
+top `HFT_Core.sv` joins the whole chain.
 
 ### Entry format
 
@@ -773,7 +773,7 @@ when the trigger field enters the FPGA.
 | `order_tx_builder`: a hand-written frame in hex, back to back, `tready` pressure, every config check and its 2-cycle latency, ClOrdID digits, reset mid-frame; random orders against the exchange model | `tb/unit/test_order_tx_builder.py`, `tb/common/exchange.py` |
 | Order counters: every index, wrap (8-bit build), carry past 2³² | `tb/unit/test_order_stats.py` |
 | Assertions: `strategy_props` (7: one-hot fire, no fire unarmed or with the path closed, one fire per rule per packet, no order out that no accepted packet committed, queue room), `risk_props` (11: no accept while killed, tx off, at budget 0 or without a token, one gate, held + live <= 8, no TX while cancels drain, a UserRefNum left, a credit per accept, the precomputed flags), `axis_props` on the TX port; each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
-| System (`rx_csr_top`): audit/04 §3.4 scenario 5 (rule → OUCH frame and `ORDER_SENT`, latency hop by hop, one-shot, re-arm, risk reject), 6 (mailbox, hardware and host at once), 7 (trigger in a bad packet: no order, no entry), kill cancelling the queue, decision 39 gating, ring pressure with order entries, kill latency under a hardware burst, a random hybrid run with rule and limit changes, and real Nasdaq windows with a rule on a real symbol; every frame checked by the exchange model, every order entry by the ring model | `tb/system/test_rx_order.py` |
+| System (`HFT_Core`): audit/04 §3.4 scenario 5 (rule → OUCH frame and `ORDER_SENT`, latency hop by hop, one-shot, re-arm, risk reject), 6 (mailbox, hardware and host at once), 7 (trigger in a bad packet: no order, no entry), kill cancelling the queue, decision 39 gating, ring pressure with order entries, kill latency under a hardware burst, a random hybrid run with rule and limit changes, and real Nasdaq windows with a rule on a real symbol; every frame checked by the exchange model, every order entry by the ring model | `tb/system/test_rx_order.py` |
 | 50 mutants of the order path (and 3 follow-ups): 49 caught, 4 equivalent with reasons | `audit/f7-mutasyon/s10_mut.py` |
 
 ### Synthesis (OOC, `just synth-core`, placed and routed)

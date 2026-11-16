@@ -68,7 +68,7 @@ just itch-real-rtl        # real Nasdaq data through itch_decoder and the system
 ```
 
 `just lint` covers:
-- **Verilator `-Wall` + Verible:** every module in `common.f`, `core.f`, `csr.f` and `system.f` (each as its own
+- **Verilator `-Wall` + Verible:** every module in `common.f`, `core.f`, `csr.f` and `top.f` (each as its own
   top, with the lists it needs) and the OOC synthesis harnesses in `synth_ooc*.f`. Packages (`*_pkg.sv`) are not a
   top of their own: Verilator checks them through their users. One top need not use every `hft_pkg` constant, so
   that warning is waived for `hft_pkg`; the selftest `test_every_package_constant_has_a_user` checks that every

@@ -1,5 +1,5 @@
-"""rx_csr_top: eth_ip_udp_rx and moldudp64_rx configured and counted through the host CSR block
-(audit/10 S6, audit/11 S8).
+"""HFT_Core (audit/15 S1; before F8 the sim-only rx_csr_top): eth_ip_udp_rx and moldudp64_rx configured and
+counted through the host CSR block (audit/10 S6, audit/11 S8).
 
 Software's view: write the NET and FEED registers, commit, wait for commit_busy = 0, send frames,
 take a snapshot and read the counters. The reference for every frame is the F2 golden model
@@ -39,6 +39,12 @@ EXPECTED_SEQ moves by MOLD_MSGS + MOLD_OVERSIZE_MSGS + MOLD_GAP_MSGS (11 S1 note
 
 Clocks: the RATIO profile is (net period, host period), as in test_hft_csr_wrap.py. One async reset
 source (rst_in) goes through one reset_sync per domain.
+
+HFT_Core has only its platform ports. The checkers read the blocks' ports between them by hierarchy, under
+the names they had as rx_csr_top debug ports: TAPS maps each name to its path, and CoreTaps is the dut as
+the checkers see it. Timestamps come from HFT_Core's own counter ts_q; start() sets it to a random value
+once the resets are released (the old ts_now started at a random value too), so the 64-bit wrap is reached
+at random.
 """
 
 import json
@@ -118,7 +124,7 @@ RING_CTRL, RING_BASE_LO, RING_BASE_HI, RING_SIZE_LOG2, CONS_IDX, PROD_IDX, RING_
 RING_WRITTEN_LO, RING_BRESP_ERR_LO = 0x0820, 0x0828
 RING_BASE = 0x1234_5678_9ABC_D000  # 4 KiB aligned, high bits set
 RING_MEM = 1 << 24  # bytes of host memory (addresses wrap at this size in the memory model)
-FIFO_ENTRIES = 256  # the commit FIFO of rx_csr_top
+FIFO_ENTRIES = 256  # the commit FIFO of HFT_Core (RING_DEPTH_LOG2 = 8)
 # event_packer's write attempts, from moldudp64_rx's outputs (audit/13 S3): a message + WRITE_MSG, a packet's GAP
 # or EOS entry + WRITE_MSG after its event, an EOS behind a GAP one cycle later.
 WRITE_MSG = ITCH_LATENCY + 1
@@ -133,6 +139,56 @@ NET_FEED = RxConfig(True, LOCAL_MAC, False, tuple((ip, port, True) for ip, port 
 SESSION = b"SESSION001"
 FEED_ON = FeedCfg(enable=1, session_check=1, filter_mask=0x03, session=int.from_bytes(SESSION, "big"))
 S = MoldStatus
+
+# The rx_csr_top debug port names the checkers use -> the block ports in HFT_Core they were wired to. An entry
+# ending in "_" maps every name with that prefix. A path that is not in the model fails the test by name.
+TAPS = {
+    "m_axis_udp_": "u_rx.m_axis_udp_",  # eth_ip_udp_rx -> moldudp64_rx
+    "m_udp_": "u_rx.m_udp_",
+    "m_msg_": "u_mold.m_msg_",  # moldudp64_rx -> itch_decoder
+    "m_pkt_": "u_mold.m_pkt_",
+    "m_ev_": "u_itch.m_ev_",  # itch_decoder's events, results and forwarded packet events
+    "m_res_": "u_itch.m_res_",
+    "m_fwd_pkt_": "u_itch.m_pkt_",
+    "ring_fifo_underflow": "u_ring_fifo.underflow",  # the commit FIFO read empty
+}
+
+
+def tap_path(name: str) -> str | None:
+    """The HFT_Core path of a TAPS name, None if the name is not in TAPS."""
+    for key, path in TAPS.items():
+        if name == key or (key.endswith("_") and name.startswith(key)):
+            return path + name[len(key):]
+    return None
+
+
+def tap(dut, name: str):
+    """The HFT_Core signal behind a TAPS name."""
+    full = tap_path(name)
+    if full is None:
+        raise AttributeError(f"{name}: not in TAPS")
+    h = dut
+    for part in full.split("."):
+        try:
+            h = getattr(h, part)
+        except AttributeError:
+            raise AttributeError(f"tap {name}: HFT_Core has no {full}") from None
+    return h
+
+
+class CoreTaps:
+    """The dut as the checkers see it: a TAPS name reads its block port (never an HFT_Core net of the same name),
+    every other name is HFT_Core's own (ports, instances)."""
+
+    def __init__(self, dut) -> None:
+        self._dut, self._taps = dut, {}
+
+    def __getattr__(self, name: str):
+        if tap_path(name) is None:
+            return getattr(self._dut, name)
+        if name not in self._taps:
+            self._taps[name] = tap(self._dut, name)
+        return self._taps[name]
 
 
 def to_net(cfg: RxConfig) -> NetCfg:
@@ -204,7 +260,7 @@ class System:
     """Frame driver and the frame-by-frame checker on net_clk (F2, then moldudp64_rx)."""
 
     def __init__(self, dut, w: Wrap):
-        self.dut, self.w, self.root, self.mold = dut, w, dut.u_wrap, dut.u_mold
+        self.dut, self.w, self.root, self.mold = CoreTaps(dut), w, dut.u_wrap, dut.u_mold
         self.keep = True  # keep every outcome in the lists below (off: only the tally, for long runs)
         self.itch_tally: Counter[Result] = Counter()  # ITCH results checked
         self.queue: deque[Sent] = deque()  # sent, outcome not seen yet
@@ -597,7 +653,7 @@ class RingHost:
         self.post = idx
 
     async def _no_underflow(self) -> None:
-        await RisingEdge(self.dut.ring_fifo_underflow)
+        await RisingEdge(tap(self.dut, "ring_fifo_underflow"))
         raise AssertionError("event_ring_writer read the commit FIFO while it was empty")
 
     async def configure(self) -> None:
@@ -692,28 +748,18 @@ class RingHost:
 
 async def start(dut) -> tuple[Wrap, System]:
     """Idle inputs, the reset source asserted, both clocks; release the reset and wait until both
-    synchronized resets are low. ts_now counts net_clk cycles."""
+    synchronized resets are low, then start the timestamp counter at a random value."""
     net_ps, host_ps, jit = profile()
     for name in ("awvalid", "wvalid", "bready", "arvalid", "rready"):
         getattr(dut, f"s_axil_{name}").value = 0
     for name, v in (("tvalid", 0), ("tdata", 0), ("tkeep", 0), ("tlast", 0), ("tuser", 0)):
         getattr(dut, f"s_axis_rx_{name}").value = v
-    dut.ts_now.value = 0
     for name in ("awready", "wready", "bvalid", "bresp"):  # no host memory until a test attaches a RingHost
         getattr(dut, f"m_axi_hmw_{name}").value = 0
     dut.m_axis_tx_tready.value = 1  # the order MAC takes every beat unless a test holds it
     dut.rst_in.value = 1
     start_clock(dut.net_clk, net_ps, jit)
     start_clock(dut.host_clk, host_ps, jit)
-
-    async def timestamp():
-        t = random.getrandbits(64)
-        while True:
-            await RisingEdge(dut.net_clk)
-            t = (t + 1) & MASK64
-            dut.ts_now.value = t
-
-    cocotb.start_soon(timestamp())
     for _ in range(6):
         await RisingEdge(dut.host_clk)
         await RisingEdge(dut.net_clk)
@@ -724,6 +770,11 @@ async def start(dut) -> tuple[Wrap, System]:
             break
     else:
         raise AssertionError("the synchronized resets never fell")
+    t0 = random.getrandbits(64)
+    dut.ts_q.value = t0  # counts on from here, one per net_clk edge
+    await RisingEdge(dut.net_clk)
+    await ReadOnly()
+    assert int(dut.ts_q.value) == (t0 + 1) & MASK64, "ts_q did not take the random start value"
     await RisingEdge(dut.host_clk)
     w = Wrap(dut, dut.u_wrap)
     w.snap = Snap(w, drive=False)
@@ -1735,8 +1786,8 @@ def directed_tests() -> list[str]:
 def test_rx_csr(group, jit, ratio):
     assert ratio in PROFILES
     run_cocotb(
-        toplevel="rx_csr_top",
-        filelists=["common.f", "core.f", "csr.f", "system.f"],
+        toplevel="HFT_Core",
+        filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_csr",
         defines={"HFT_SIM_CDC_JITTER": 1} if jit else {},
         testcase=directed_tests() if group == "directed" else group,
@@ -1753,8 +1804,8 @@ def test_rx_csr_real(name):
     except Retired as e:
         pytest.skip(str(e))
     run_cocotb(
-        toplevel="rx_csr_top",
-        filelists=["common.f", "core.f", "csr.f", "system.f"],
+        toplevel="HFT_Core",
+        filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_csr",
         testcase="tc_real_itch",
         extra_env={"GROUP": "tc_real_itch", "JITTER": 0, "RATIO": "net2host", "ITCH_REAL": path,
