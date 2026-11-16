@@ -9,7 +9,10 @@
 #             arguments at '='), or the flag "impl": also place and route the block out of context
 #             (no board or pins needed) and gate on the routed timing instead of the synthesis
 #             estimate (unplaced wires), which is then printed as SYNTH_WNS
-# Reports: build/vivado/ooc/<top>_<profile>_<part>[_<generics>][_impl]/{utilization,timing_summary,cdc}.rpt
+# Reports: build/vivado/ooc/<top>_<profile>_<part>[_<generics>][_impl]/{utilization,timing_summary,cdc}.rpt (final),
+#   with impl also {timing_summary,utilization,cdc}_<stage>.rpt as each stage (synth, place, route) ends and
+#   synth.dcp, route.dcp
+#   Log (justfile): build/vivado/synth_<top>_<profile>_<part>[_<generics>][_impl].log
 # Exits 1 if setup/hold slack is negative or report_cdc has Critical/Unsafe findings.
 if {[llength $argv] < 4} {
   error "usage: -tclargs <top> <part> <net2host|host2net|net2host125> <filelist|NAME:VALUE...>"
@@ -124,18 +127,42 @@ source [file join $fw constraints cdc.tcl]
 
 set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
 set synth_wns [get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]]
+# Stage reports: the full timing summary, utilization and CDC reports (and a checkpoint after synthesis and
+# routing) are written as each stage ends, so a run that stops later (a tool crash in a long implementation) still
+# leaves everything it had reached; an HFT_STAGE line in the log marks each stage.
+proc hft_stage {name {dcp 0}} {
+  global out tag
+  set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
+  set w [get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]]
+  set h [get_property SLACK [get_timing_paths -quiet -max_paths 1 -hold {*}$r2r]]
+  report_timing_summary -file [file join $out timing_summary_$name.rpt] -max_paths 20
+  report_utilization    -file [file join $out utilization_$name.rpt]
+  report_cdc -details   -file [file join $out cdc_$name.rpt]
+  if {$dcp} {
+    write_checkpoint -force [file join $out $name.dcp]
+  }
+  puts "HFT_STAGE: $tag $name WNS=$w WHS=$h reports=$out/*_$name.rpt"
+  return $w
+}
 if {$impl} {
+  hft_stage synth 1
   # Out-of-context implementation: the constraints above (clocks, I/O delays, CDC) carry over.
   opt_design
   place_design
+  hft_stage place
   route_design
+  report_route_status -file [file join $out route_status.rpt]
+  set route_wns [hft_stage route 1]
   # Post-route physical optimization when the routed design misses timing (A40, decision 44). After placement the
   # estimate was +0.501 ns and phys_opt_design did nothing; the CSR read path on the A7 at 125 MHz missed by
-  # 0.100 ns only after routing (79 % routing delay). A design that meets timing is left as routed.
-  if {[get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]] < 0} {
+  # 0.100 ns only after routing (79 % routing delay). A design that meets timing is left as routed. Below
+  # -0.5 ns it is skipped: Vivado reports it as unlikely to help there (Physopt 32-745), and the run fails anyway.
+  if {$route_wns ne "" && $route_wns < 0 && $route_wns >= -0.5} {
     phys_opt_design
+    report_route_status -file [file join $out route_status.rpt]
+  } elseif {$route_wns ne "" && $route_wns < -0.5} {
+    puts "HFT_STAGE: $tag phys_opt_design skipped (routed WNS $route_wns < -0.5)"
   }
-  report_route_status -file [file join $out route_status.rpt]
   set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
 }
 

@@ -276,7 +276,7 @@ synth-ooc TOP PROFILE="net2host" *ARGS:
 # synth-ooc on a given part (e.g. the reference part: just synth-ooc-on xcku5p-ffvb676-2-e ...)
 [windows]
 synth-ooc-on PART TOP PROFILE="net2host" *ARGS:
-    New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+    $t = -join (@('{{ ARGS }}'.Split(' ')) | Where-Object { $_ -match ':' -or $_ -eq 'impl' } | ForEach-Object { '_' + ($_ -replace ':', '') }); New-Item -ItemType Directory -Force build/vivado | Out-Null; Set-Location build/vivado; & "{{ vivado }}" -mode batch -nojournal -log "synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}$t.log" -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
 
 # F5 gate: hft_csr_wrap placed and routed on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz)
 [windows]
@@ -345,7 +345,7 @@ synth-ooc TOP PROFILE="net2host" *ARGS:
 # synth-ooc on a given part (e.g. the reference part: just synth-ooc-on xcku5p-ffvb676-2-e ...)
 [unix]
 synth-ooc-on PART TOP PROFILE="net2host" *ARGS:
-    mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}.log -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
+    t=$(for a in {{ ARGS }}; do case "$a" in *:*|impl) printf '_%s' "$(printf %s "$a" | tr -d :)";; esac; done); mkdir -p build/vivado && cd build/vivado && {{ vivado }} -mode batch -nojournal -log "synth_{{ TOP }}_{{ PROFILE }}_{{ PART }}$t.log" -source ../../firmware/scripts/vivado/synth_ooc.tcl -tclargs {{ TOP }} {{ PART }} {{ PROFILE }} common.f xilinx.f synth_ooc.f {{ ARGS }}
 
 # F5 gate: hft_csr_wrap placed and routed on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz)
 [script("bash")]
