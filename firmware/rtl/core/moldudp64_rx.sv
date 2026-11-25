@@ -547,6 +547,18 @@ module moldudp64_rx
   logic [              63:0] cur_seq_q;
   logic [               3:0] cur_w_q;  // word of this beat's bytes r < 8 - s, saturating
   logic [N_WORDS-1:0][7:0][7:0] acc_q, merged, fresh;
+  // s1_start once per accumulator word (decision 13, audit/15): the clear of every acc_q bit hung on one flop (a
+  // 0-logic-level path of ~9 ns routing on the A7). Each copy takes start at the same edge as s1_start; KEEP stops
+  // synthesis from merging them back.
+  (* keep = "true" *) logic [N_WORDS-1:0] s1_start_w;
+
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      s1_start_w <= '0;
+    end else begin
+      s1_start_w <= {N_WORDS{start}};
+    end
+  end
 
   always_comb begin
     for (int w = 0; w < N_WORDS; w++) begin
@@ -575,7 +587,9 @@ module moldudp64_rx
   end
 
   always_ff @(posedge clk) begin
-    acc_q <= s1_start ? fresh : merged;
+    for (int w = 0; w < N_WORDS; w++) begin
+      acc_q[w] <= s1_start_w[w] ? fresh[w] : merged[w];
+    end
     if (s1_start) begin
       cur_s_q   <= s1_s;
       cur_len_q <= s1_len;
