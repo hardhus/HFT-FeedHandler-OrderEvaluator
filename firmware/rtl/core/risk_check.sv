@@ -429,7 +429,6 @@ module risk_check
   logic           q_kill[QM];  // the cancel's reason: KILL, else TX_OFF
   logic    [63:0] q_ts  [QM];  // the cancel's cycle
   logic handover, drain_out, rej_dec;
-  logic [QP-2:0] cstart;  // the first live slot after this cycle's handover
   logic [QP-1:0] cancelled;  // live orders this cycle's cancel takes
 
   assign drain      = held_q != '0;
@@ -437,18 +436,20 @@ module risk_check
   assign handover   = m_tx_valid && m_tx_ready;
   assign rej_dec    = v3_q && reason != RISK_NONE && credits_q != '0;  // written: it has a credit
   assign drain_out  = drain && !rej_dec;
-  // live orders follow the held ones; a handover only happens with none held
-  assign cstart     = rd_q[QP-2:0] + held_q[QP-2:0] + (QP - 1)'(handover);
   assign cancelled  = cancel ? live_q - QP'(handover) : '0;
 
-  // The slots of the live orders that this cycle's cancel takes: offsets [0, cancelled) from cstart, modulo QM.
+  // A cancel writes its reason and cycle to every slot that is not held: offsets [held, QM) from rd, modulo QM
+  // (timing, F8 S2: marking only the slots it takes needed live_q and handover, and was on the A7 net_clk worst
+  // paths). The slots it takes (the live ones after this cycle's handover) get the same values as before; the held
+  // slots keep theirs. q_kill and q_ts are read only for held slots, and a slot becomes held only through a
+  // cancel that takes it, which writes it, so the extra writes (empty slots, the slot handed over) are never read.
   // The offset is kept in QP-1 bits so that it wraps (a wider expression would not).
   logic [QM-1:0] cmark;
   always_comb begin
     logic [QP-2:0] off;
     for (int unsigned i = 0; i < QM; i++) begin
-      off      = (QP - 1)'(i) - cstart;
-      cmark[i] = QP'(off) < cancelled;
+      off      = (QP - 1)'(i) - rd_q[QP-2:0];
+      cmark[i] = cancel && QP'(off) >= held_q;
     end
   end
 
