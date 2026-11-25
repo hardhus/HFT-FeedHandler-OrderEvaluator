@@ -382,13 +382,25 @@ module risk_check
   // refs_zero_q next (rst aside): with x = the next ref_next_q (handover: +1, else a TX_USERREF_NEXT write that
   // takes effect: the value, else the same) and l = the next live_q without this cycle's accept (cancel: 0, else
   // live_q - handover), no UserRefNum is left iff x + l == 2^32, or 2^32 - 1 with an accept (it takes one more).
-  // The sum is formed per case, so no select sits in front of an adder: a handover alone keeps ref_next + live.
+  // A handover alone keeps ref_next + live. The sums are compared without an adder (timing, F8 S2: a 33-bit carry
+  // chain from live_q was on the A7 net_clk worst paths), exactly for every QP-bit l: with hi = r[32:QP] equal to
+  // 2^(32-QP) - 1 (bit 32 clear, the rest set), r + l == 2^32 - 1 iff hi and r[QP-1:0] == ~l (the low halves sum
+  // to at most 2^(QP+1) - 2, so they never carry), and r + l == 2^32 iff r == 2^32 (l == 0) or hi and
+  // r[QP-1:0] == -l mod 2^QP (l != 0: the low halves sum to exactly 2^QP).
+  function automatic logic sum_hi(input logic [32:QP] h);  // r[32:QP]
+    return h == {1'b0, {(32 - QP) {1'b1}}};
+  endfunction
+  function automatic logic sum_is_max(input logic [32:0] r,
+                                      input logic [QP-1:0] l);  // r + l == 2^32 - 1
+    return sum_hi(r[32:QP]) && r[QP-1:0] == ~l;
+  endfunction
+  function automatic logic sum_is_top(input logic [32:0] r,
+                                      input logic [QP-1:0] l);  // r + l == 2^32
+    return l == '0 ? r == 33'h1_0000_0000 : sum_hi(r[32:QP]) && r[QP-1:0] == QP'(-l);
+  endfunction
   logic uwr;  // a TX_USERREF_NEXT write takes effect
-  logic [32:0] sum_rl, sum_vl;
   logic refs_z, refs_o;  // x + l == 2^32, == 2^32 - 1
-  assign uwr    = cmd_userref_wr && userref_ok;
-  assign sum_rl = ref_next_q + 33'(live_q);
-  assign sum_vl = 33'(cmd_userref_value) + 33'(live_q);
+  assign uwr = cmd_userref_wr && userref_ok;
   always_comb begin
     if (cancel) begin
       if (handover) begin  // x = ref_next_q + 1, l = 0
@@ -402,11 +414,11 @@ module risk_check
         refs_o = ref_next_q == 33'hFFFF_FFFF;
       end
     end else if (handover || !uwr) begin  // x + l = ref_next_q + live_q
-      refs_z = sum_rl == 33'h1_0000_0000;
-      refs_o = sum_rl == 33'hFFFF_FFFF;
+      refs_z = sum_is_top(ref_next_q, live_q);
+      refs_o = sum_is_max(ref_next_q, live_q);
     end else begin  // x = the value, l = live_q
-      refs_z = sum_vl == 33'h1_0000_0000;
-      refs_o = sum_vl == 33'hFFFF_FFFF;
+      refs_z = sum_is_top(33'(cmd_userref_value), live_q);
+      refs_o = sum_is_max(33'(cmd_userref_value), live_q);
     end
   end
 
