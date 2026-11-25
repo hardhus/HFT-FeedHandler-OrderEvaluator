@@ -40,7 +40,7 @@ doctor:
 # gen (as csr, but generated, in core.f or csr.f: Verilator only, no Verible style/format), top (+ core.f, csr.f
 # and top.f),
 # ooc (+ synth_ooc.f), ooc_core (+ core.f and synth_ooc_core.f), ooc_csr (+ core.f, csr.f and
-# synth_ooc_csr.f) or style (Verible only: XPM wrappers that Verilator cannot compile, SVA
+# synth_ooc_csr.f), ooc_top (+ core.f, csr.f, top.f and synth_ooc_top.f) or style (Verible only: XPM wrappers that Verilator cannot compile, SVA
 # checkers and self-checking SV testbenches).
 [private]
 [script("bash")]
@@ -60,6 +60,7 @@ sv-files:
     files_of synth_ooc.f | sed 's/^/ooc /'
     files_of synth_ooc_core.f | sed 's/^/ooc_core /'
     files_of synth_ooc_csr.f | sed 's/^/ooc_csr /'
+    files_of synth_ooc_top.f | sed 's/^/ooc_top /'
     { files_of xilinx.f; files_of sva.f; files_of sva_core.f; files_of sva_csr.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
 
 # Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check
@@ -83,6 +84,8 @@ lint:
         ooc)      lists+=(-F firmware/filelists/synth_ooc.f) ;;
         ooc_core) lists+=(-F firmware/filelists/core.f -F firmware/filelists/synth_ooc_core.f) ;;
         ooc_csr)  lists+=(-F firmware/filelists/core.f -F firmware/filelists/csr.f -F firmware/filelists/synth_ooc_csr.f) ;;
+        ooc_top)  lists+=(-F firmware/filelists/core.f -F firmware/filelists/csr.f -F firmware/filelists/top.f
+                    -F firmware/filelists/synth_ooc_top.f) ;;
       esac
       echo "== verilator $top"
       verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
@@ -301,21 +304,55 @@ synth-csr:
     Write-Host "synth-csr: gates PASS"
 
 # 250 MHz, information only: just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
-# Core blocks at net_clk (156.25 MHz), placed and routed on the A7 and ref_part, gated
+# The event path (packer, FIFO, ring writer) runs with its host clock: ref_part 250 MHz, the A7 125 MHz.
+# Core blocks at net_clk (156.25 MHz) and the event path, placed and routed on the A7 and ref_part, gated
 [windows]
 [script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [extension(".ps1")]
 synth-core:
-    $bad = 0
+    $runs = @()
     foreach ($top in "eth_ip_udp_rx_ooc", "moldudp64_rx_ooc", "itch_decoder_ooc", "order_path_ooc") {
-      foreach ($part in "{{ fpga_part }}", "{{ ref_part }}") {
-        $out = just synth-ooc-on $part $top net2host core.f synth_ooc_core.f impl 2>&1
-        if ($LASTEXITCODE) { $bad++ }
-        ($out | Select-String "^HFT_SYNTH").Line
-      }
+      foreach ($part in "{{ fpga_part }}", "{{ ref_part }}") { $runs += ,@($part, $top, "net2host") }
+    }
+    $runs += ,@("{{ ref_part }}", "event_path_ooc", "net2host")
+    $runs += ,@("{{ fpga_part }}", "event_path_ooc", "net2host125")
+    $bad = 0
+    foreach ($r in $runs) {
+      $out = just synth-ooc-on $r[0] $r[1] $r[2] core.f synth_ooc_core.f impl 2>&1
+      if ($LASTEXITCODE) { $bad++ }
+      ($out | Select-String "^HFT_SYNTH").Line
     }
     if ($bad) { Write-Host "synth-core: $bad gate run(s) FAILED"; exit 1 }
     Write-Host "synth-core: gates PASS"
+
+# RING_DATA_W = 512 is gated on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz); RING_DATA_W = 128 on the A7
+# (the PCIe Gen2 x4 bridge width) is information only.
+# F8 gate: the whole core (HFT_Core) placed and routed
+[windows]
+[script("powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[extension(".ps1")]
+synth-top:
+    $top = @("core.f", "csr.f", "top.f", "synth_ooc_top.f")
+    $runs = @(
+      @("gate", "{{ ref_part }}", "net2host", ($top + "impl")),
+      @("gate", "{{ fpga_part }}", "net2host125", ($top + "impl")),
+      @("info", "{{ fpga_part }}", "net2host125", ($top + "RING_DATA_W:128" + "impl"))
+    )
+    $bad = 0
+    $sum = @()
+    foreach ($r in $runs) {
+      # Vivado's output streams live (a run takes up to an hour); the summary lines are repeated at the end.
+      $out = [System.Collections.Generic.List[string]]::new()
+      just synth-ooc-on $r[1] hft_core_ooc $r[2] @($r[3]) 2>&1 | ForEach-Object { $out.Add("$_"); "$_" }
+      $rc = $LASTEXITCODE
+      $sum += ($out | Select-String "^HFT_(SYNTH|SLACK|STAGE)").Line | ForEach-Object { "$($r[0]): $_" }
+      if ($rc -ne 0) { $sum += "$($r[0]): exit code $rc ($($r[1]) $($r[2]) $($r[3] -join ' '))" }
+      if ($rc -ne 0 -and $r[0] -eq "gate") { $bad++ }
+    }
+    "==== synth-top summary ===="
+    $sum
+    if ($bad) { Write-Host "synth-top: $bad gate run(s) FAILED"; exit 1 }
+    Write-Host "synth-top: gates PASS"
 
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [windows]
@@ -365,20 +402,51 @@ synth-csr:
     [ $bad = 0 ] && echo "synth-csr: gates PASS" || { echo "synth-csr: $bad gate run(s) FAILED"; exit 1; }
 
 # 250 MHz, information only: just synth-ooc eth_ip_udp_rx_ooc host2net core.f synth_ooc_core.f
-# Core blocks at net_clk (156.25 MHz), placed and routed on the A7 and ref_part, gated
+# The event path (packer, FIFO, ring writer) runs with its host clock: ref_part 250 MHz, the A7 125 MHz.
+# Core blocks at net_clk (156.25 MHz) and the event path, placed and routed on the A7 and ref_part, gated
 [script("bash")]
 [unix]
 synth-core:
     bad=0
-    for top in eth_ip_udp_rx_ooc moldudp64_rx_ooc itch_decoder_ooc; do
+    run() {  # PART TOP PROFILE
+      out=$(just synth-ooc-on "$1" "$2" "$3" core.f synth_ooc_core.f impl 2>&1); rc=$?
+      grep '^HFT_SYNTH' <<<"$out"
+      [ $rc = 0 ] || bad=$((bad + 1))
+    }
+    for top in eth_ip_udp_rx_ooc moldudp64_rx_ooc itch_decoder_ooc order_path_ooc; do
       for part in {{ fpga_part }} {{ ref_part }}; do
-        out=$(just synth-ooc-on "$part" "$top" net2host core.f synth_ooc_core.f impl 2>&1)
-        rc=$?
-        grep '^HFT_SYNTH' <<<"$out"
-        [ $rc = 0 ] || bad=$((bad + 1))
+        run "$part" "$top" net2host
       done
     done
+    run {{ ref_part }} event_path_ooc net2host
+    run {{ fpga_part }} event_path_ooc net2host125
     [ $bad = 0 ] && echo "synth-core: gates PASS" || { echo "synth-core: $bad gate run(s) FAILED"; exit 1; }
+
+# RING_DATA_W = 512 is gated on ref_part (156.25/250 MHz) and the A7 (156.25/125 MHz); RING_DATA_W = 128 on the A7
+# (the PCIe Gen2 x4 bridge width) is information only.
+# F8 gate: the whole core (HFT_Core) placed and routed
+[script("bash")]
+[unix]
+synth-top:
+    bad=0
+    sum=""
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
+    run() {  # gate|info PART PROFILE ARGS...
+      local kind=$1; shift
+      # Vivado's output streams live (a run takes up to an hour); the summary lines are repeated at the end.
+      just synth-ooc-on "$1" hft_core_ooc "${@:2}" core.f csr.f top.f synth_ooc_top.f impl 2>&1 | tee "$tmp"
+      rc=${PIPESTATUS[0]}
+      sum+="$(grep -E '^HFT_(SYNTH|SLACK|STAGE)' "$tmp" | sed "s/^/$kind: /")"$'\n'
+      [ $rc = 0 ] || sum+="$kind: exit code $rc ($*)"$'\n'
+      [ $rc = 0 ] || [ "$kind" = info ] || bad=$((bad + 1))
+    }
+    run gate {{ ref_part }} net2host
+    run gate {{ fpga_part }} net2host125
+    run info {{ fpga_part }} net2host125 RING_DATA_W:128
+    echo "==== synth-top summary ===="
+    printf '%s' "$sum"
+    [ $bad = 0 ] && echo "synth-top: gates PASS" || { echo "synth-top: $bad gate run(s) FAILED"; exit 1; }
 
 # Gate every common block in both clock directions; prints one HFT_SYNTH line per run
 [script("bash")]

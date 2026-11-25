@@ -13,7 +13,8 @@
 #   with impl also {timing_summary,utilization,cdc}_<stage>.rpt as each stage (synth, place, route) ends and
 #   synth.dcp, route.dcp
 #   Log (justfile): build/vivado/synth_<top>_<profile>_<part>[_<generics>][_impl].log
-# Exits 1 if setup/hold slack is negative or report_cdc has Critical/Unsafe findings.
+# Exits 1 if setup/hold slack is negative, report_cdc has Critical/Unsafe findings or a ram_style memory was not
+# inferred as RAM (Synth 8-7186).
 if {[llength $argv] < 4} {
   error "usage: -tclargs <top> <part> <net2host|host2net|net2host125> <filelist|NAME:VALUE...>"
 }
@@ -60,10 +61,10 @@ set port_clock {
   {^(rd_|dout|empty$|underflow$)}      rd_clk
   {^src_}                              src_clk
   {^dst_}                              dst_clk
-  {^(s_axis_|m_axis_|q$|rst_out$)}     clk
+  {^(s_axis_|m_axis_|q$|rst_out$)}     {clk net_clk}
   {^(cfg_|ts_|stat_|cnt_|[sm]_udp_|[sm]_msg_|[sm]_pkt_|[sm]_ev_|m_res_|sym_|mpkt_|mres_|feed_)} {clk net_clk}
   {^(ctl_|cmd_|st_|ev_|ring_|loc_|ord_|[sm]_host_|[sm]_rej_|[sm]_sent_)} {clk net_clk}
-  {^(s_axil_|host_|m_axi_)}           host_clk
+  {^(s_axil_|host_|m_axi_|irq$)}      host_clk
   {^net_}                             net_clk
   {^rst$}                              {wr_clk clk}
 }
@@ -87,6 +88,9 @@ foreach g $generics {
   lappend gen_args -generic "$gname=$gval"
 }
 synth_design -top $top -part $part -mode out_of_context -verilog_define HFT_HAVE_XPM {*}$gen_args
+# Synth 8-7186: a memory with a ram_style that synthesis did not infer as RAM (F7: the order queue, an array of a
+# packed struct, became about 8k flops). Gated: every memory with a ram_style must be inferred as asked.
+set n_8_7186 [get_msg_config -id {Synth 8-7186} -count]
 
 dict for {p period} $clock_periods {
   if {[llength [get_ports -quiet $p]]} {
@@ -186,6 +190,7 @@ if {$impl} {
 }
 set wns [get_property SLACK [get_timing_paths -quiet -max_paths 1 -setup {*}$r2r]]
 set whs [get_property SLACK [get_timing_paths -quiet -max_paths 1 -hold {*}$r2r]]
+if {$n_8_7186 > 0} { lappend fail "Synth 8-7186 x$n_8_7186 (a ram_style memory not inferred as RAM)" }
 if {$wns ne "" && $wns < 0} { lappend fail "setup WNS $wns" }
 if {$whs ne "" && $whs < 0} { lappend fail "hold WHS $whs" }
 
@@ -237,7 +242,7 @@ set ffs  [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == FLOP_LATCH
 set rams [llength [get_cells -quiet -hier -filter {PRIMITIVE_GROUP == DMEM || PRIMITIVE_SUBGROUP == LUTRAM}]]
 set brams [llength [get_cells -quiet -hier -filter {IS_PRIMITIVE && REF_NAME =~ RAMB*}]]
 set timing [expr {$impl ? "WNS=$wns WHS=$whs (routed) SYNTH_WNS=$synth_wns" : "WNS=$wns WHS=$whs"}]
-puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams $timing CDC=[join $cdc_summary ,]"
+puts "HFT_SYNTH: $tag LUT=$luts FF=$ffs LUTRAM=$rams BRAM=$brams $timing SYNTH_8_7186=$n_8_7186 CDC=[join $cdc_summary ,]"
 # Worst register-to-register setup slack ending in each top-level block (report only: one run shows every block
 # that misses, not just the worst path).
 foreach blk [lsort [get_cells -quiet -filter {!IS_PRIMITIVE}]] {

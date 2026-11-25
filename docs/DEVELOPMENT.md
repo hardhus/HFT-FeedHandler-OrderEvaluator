@@ -285,7 +285,8 @@ just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>_<pa
 just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
 just synth-ooc-on xcku5p-ffvb676-2-e eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f   # another part
 just synth-common                         # every common block, both clock directions, gated
-just synth-core                           # eth_ip_udp_rx and moldudp64_rx placed and routed at 156.25 MHz: A7 and xcku5p
+just synth-core                           # eth_ip_udp_rx, moldudp64_rx, itch_decoder, order path at 156.25 MHz, event path: A7 and xcku5p
+just synth-top                            # HFT_Core placed and routed: xcku5p 156.25/250 MHz, A7 156.25/125 MHz (RING_DATA_W 512; 128 info)
 just synth-csr                            # hft_csr_wrap placed and routed: xcku5p 156.25/250 MHz, A7 156.25/125 MHz (about 15 min)
 just xsim-test xpm 1                     # cdc_async_fifo equivalence TB in XSIM (portable | xpm, seed)
 ```
@@ -302,17 +303,28 @@ against the same contract and stimulus; its FWFT capacity is one word larger.
 - with `impl`, a net that `route_design` left unrouted;
 - a Critical `report_cdc` finding, or any warning ID other than CDC-6 (gray-coded multi-bit synchronizer) and CDC-15
   (enable-captured stable data);
-- a crossing that `firmware/constraints/cdc.tcl` could not constrain.
+- a crossing that `firmware/constraints/cdc.tcl` could not constrain;
+- a `Synth 8-7186` message: a memory with a `ram_style` that synthesis did not infer as RAM (it becomes flops; F7's
+  order queue did). The `HFT_SYNTH` line prints the count as `SYNTH_8_7186`.
 
 `cdc.tcl` derives the CDC constraints from the netlist rather than from instance names:
 - the first flop of each `ASYNC_REG` chain, plus bus skew per synchronizer;
 - cells marked `(* hft_cdc_data = "TRUE" *)`;
 - LUTRAM read across clocks (FIFO storage).
 
+The clocks are not declared asynchronous (no `set_clock_groups -asynchronous`, no blanket false path): a crossing that
+`cdc.tcl` does not constrain is timed as a normal path and fails the gate (F8 S2: the mailbox head read in
+`risk_check`'s logic showed up this way). Keep it so; a clock group would hide such a crossing.
+
 Clock profiles: `net2host` is 156.25 MHz → 250 MHz (`wr`/`src`/`clk` at 156.25), `host2net` is the reverse, and
 `net2host125` has a 125 MHz host. The flag `impl` (as an extra argument) also runs `opt_design`, `place_design` and
 `route_design` out of context: the gate then uses the routed timing, and the synthesis estimate is printed as
 `SYNTH_WNS`. The estimate can be about 1 ns too optimistic (it missed a failing read path on the A7 in F5).
+Each run keeps its own Vivado log, `build/vivado/synth_<top>_<profile>_<part>[_<generics>][_impl].log`. With `impl`,
+the full timing, utilization and CDC reports of each stage (`*_synth.rpt`, `*_place.rpt`, `*_route.rpt`) and the
+`synth.dcp` / `route.dcp` checkpoints are written as the stage ends, so a run that stops later (a tool crash in a long
+implementation) still leaves everything it reached; `HFT_STAGE` lines in the log mark the stages. `phys_opt_design`
+runs only when the routed WNS is between -0.5 ns and 0 (Vivado: it rarely helps below -0.5 ns, Physopt 32-745).
 Cell counts and the LUTRAM rule of `cdc.tcl` cover both 7-series and UltraScale+ primitive names.
 The legacy top also synthesizes, but its port names are not in the port-to-clock map, so its CDC check is only partial:
 `just synth-ooc HFT_Top_Core net2host legacy.f`.
