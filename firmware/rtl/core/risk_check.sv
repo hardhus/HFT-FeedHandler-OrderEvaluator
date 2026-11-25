@@ -345,10 +345,15 @@ module risk_check
   assign accept = v3_q && reason == RISK_NONE;
 
   // Budget: spend, then add, saturating at 2^32 - 1. Both candidates (no accept, accept), then accept selects.
-  logic [32:0] bsum0, bsum1;
+  // bsum1 = budget_q - 1 + add, the same value mod 2^33 as bsum0 - 1, but the decrement comes off the flop, so the
+  // two sums are side by side instead of one carry chain feeding the next (timing, F8 S2: A7 net_clk worst path).
+  // An accept needs budget_q > 0, so bdec does not underflow when bsum1 is used.
+  logic [32:0] badd, bdec, bsum0, bsum1;
   logic [31:0] budget0, budget1, budget_n;
-  assign bsum0    = 33'(budget_q) + (cmd_budget_add ? 33'(cmd_budget_amount) : 33'd0);
-  assign bsum1    = bsum0 - 33'd1;  // accept: budget_q > 0, so no underflow
+  assign badd     = cmd_budget_add ? 33'(cmd_budget_amount) : 33'd0;
+  assign bdec     = 33'(budget_q) - 33'd1;
+  assign bsum0    = 33'(budget_q) + badd;
+  assign bsum1    = bdec + badd;
   assign budget0  = bsum0[32] ? 32'hFFFF_FFFF : bsum0[31:0];
   assign budget1  = bsum1[32] ? 32'hFFFF_FFFF : bsum1[31:0];
   assign budget_n = accept ? budget1 : budget0;
