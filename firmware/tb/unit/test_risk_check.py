@@ -72,6 +72,7 @@ BINS = [
     "userref_ignored_live", "userref_ignored_queue", "userref_ignored_zero", "refs_exhausted",
     "lookup_same_cycle_write", "invalid_host_clordid", "kill_masks_invalid", "second_cancel_while_draining",
     "accept_while_draining", "rej_dropped", "accept_last_credit", "last_budget_add_zero", "last_budget_add",
+    "token_tick_one_plus_one", "token_tick_refill_only",
 ]  # fmt: skip
 
 
@@ -306,6 +307,13 @@ class Env:
         if reason in (Reason.NONE, Reason.RATE) and lim.rate_period and s > r.start \
                 and (s - r.start) % lim.rate_period == 0:  # fmt: skip
             self.hit("token_tick_exact")
+        # an accept at a tick whose count after the refill is above 1 only through the refill: risk_check forms
+        # that from flags (F8 S2), 1 token + refill 1, and no token + refill >= 2 (both below burst: not saturated)
+        if reason == Reason.NONE and lim.rate_period and s > r.start and (s - r.start) % lim.rate_period == 0:
+            if lim.rate_refill == 1 and r.tokens == 2 < lim.rate_burst:
+                self.hit("token_tick_one_plus_one")
+            if lim.rate_refill >= 2 and r.tokens == lim.rate_refill < lim.rate_burst:
+                self.hit("token_tick_refill_only")
 
     async def idle(self, n: int = 1, **kw) -> None:
         for _ in range(n):
@@ -789,6 +797,21 @@ async def every_bin(e: Env) -> None:
     await e.drain()
     e.ret_p = 0.0
     for _ in range(18):  # accept_last_credit, reason_RING_FULL, rej_dropped
+        await e.step(hw_order=hw())
+    await e.drain()
+    # Accepts at a refill tick (token_tick_one_plus_one, token_tick_refill_only): the bucket drained to 1 with
+    # refill 1, at every phase of the period; then orders every cycle with refill 3, so each tick finds no token.
+    one = Limits(max_qty=1000, max_notional=1 << 63, rate_refill=1, rate_period=4, rate_burst=5)
+    for ph in range(4):
+        await e.step(limits=one)
+        for _ in range(4):
+            await e.step(hw_order=hw())
+        await e.idle(ph)
+        for _ in range(2):
+            await e.step(hw_order=hw())
+        await e.drain()
+    await e.step(limits=Limits(max_qty=1000, max_notional=1 << 63, rate_refill=3, rate_period=4, rate_burst=10))
+    for _ in range(64):
         await e.step(hw_order=hw())
     await e.drain()
 

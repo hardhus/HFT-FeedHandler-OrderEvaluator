@@ -199,7 +199,8 @@ bind risk_check risk_props #(
     .ctl_kill(ctl_kill),
     .ctl_tx_en(ctl_tx_en),
     .budget(budget_q),
-    .tokens(tokens_eff),
+    // the effective token count from the sum itself, not from the flags risk_check derives it with
+    .tokens((tick_q ? sat1 : sat0) ? rate_burst_q : tick_q ? tok_sum : tokens_q),
     .handover(handover),
     .cancelled(cancelled),
     .held(held_q),
@@ -208,6 +209,8 @@ bind risk_check risk_props #(
     .ref_next(ref_next_q),
     .credits(credits_q),
     .flags({
+      burst_gt1_q,
+      refill_gt1_q,
       full_q,
       burst_nz_q,
       refill_nz_q,
@@ -219,6 +222,8 @@ bind risk_check risk_props #(
       notional_gt_q
     }),
     .defs({
+      rate_burst_q > 32'd1,
+      rate_refill_q > 32'd1,
       live_q == QP'(QD),
       rate_burst_q != '0,
       rate_refill_q != '0,
