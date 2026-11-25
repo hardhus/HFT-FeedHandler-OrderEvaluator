@@ -450,8 +450,11 @@ module risk_check
     end
   end
 
+  // Every decided order is written to slot wr, accepted or not (timing, F8 S2: the write enable is then a flop, not
+  // accept, whose fanout was ~500 on the A7 net_clk worst paths). Slot wr is never in use: held + live <= QD < QM
+  // (risk_props a_held_live). Only an accept moves wr on, so a rejected order is overwritten and never read.
   always_ff @(posedge clk) begin
-    if (accept) begin
+    if (v3_q) begin
       q_mem[wr_q[QP-2:0]] <= o3_q;
     end
     for (int unsigned i = 0; i < QM; i++) begin
