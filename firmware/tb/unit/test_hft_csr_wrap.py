@@ -1544,6 +1544,38 @@ async def tc_mailbox(dut):
     assert await rd(w, addr("TX.MBOX_DROP.LO")) == 1
 
 
+@cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_mailbox_rate(dut):
+    """Decision 12 (audit/15): m_host_* is a net_clk register holding a copy of the FIFO's head; the entry leaves the
+    FIFO only when it is taken. With the reader stalled, four sends: the first is offered and the FIFO still counts
+    all four (MBOX_SPACE 12). Released (ready every cycle), the four are taken in order exactly 2 net edges apart:
+    the register is empty for one cycle after each take. Then MBOX_SPACE is 16 again."""
+    w = await start(dut)
+    o = w.ord
+    for _ in range(20):
+        await RisingEdge(dut.host_clk)
+    sent = [MboxOrder.random(w.rng) for _ in range(4)]
+    for order in sent:
+        await send(w, order)
+    for _ in range(20):
+        await RisingEdge(dut.net_clk)
+    await ReadOnly()
+    assert dut.m_host_valid.value == 1, "the first order is not offered while the reader stalls"
+    assert not o.taken
+    await RisingEdge(dut.net_clk)
+    assert await rd(w, MBOX_SPACE) == 12, "the FIFO does not count the offered order"
+    o.host_p_ready = 1.0
+    while len(o.taken) < 4:
+        await RisingEdge(dut.net_clk)
+    assert [f for _, f in o.taken] == [s.at_port() for s in sent], "mailbox orders differ or were reordered"
+    edges = [e for e, _ in o.taken]
+    gaps = [sum(a < e <= b for e in w.net_edges) for a, b in zip(edges, edges[1:])]
+    assert gaps == [2, 2, 2], f"net edges between takes: {gaps}"
+    for _ in range(20):
+        await RisingEdge(dut.net_clk)
+    assert await rd(w, MBOX_SPACE) == 16
+
+
 @cocotb.test(timeout_time=30, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_fence_mailbox(dut):
     """Decision 36: a command written after MBOX_SENDs reaches net only after the last of those orders was taken

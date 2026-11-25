@@ -256,6 +256,11 @@ AXIL_VIOLATIONS = {
     "a_b_count": (6, "BVALID without an accepted write that has no response yet"),
     "a_r_count": (7, "RVALID without an accepted read that has no response yet"),
 }
+MBOX_TB = ["firmware/tb/sva/mbox_props.sv", "firmware/tb/sv/tb_mbox_props.sv"]
+MBOX_VIOLATIONS = {
+    "a_stall_stable": (1, "order changed or valid dropped before it was taken"),
+    "a_gap_after_take": (2, "an order offered in the cycle after a take"),
+}
 ARM_TB = ["firmware/tb/sva/assert_arm.sv", "firmware/tb/sv/tb_assert_arm.sv"]
 ARM_VIOLATIONS = {"a_after_arm": (1, "assertion fired while bad is high")}
 CHECKERS = {
@@ -270,6 +275,7 @@ CHECKERS = {
     "axis": ("tb_axis_props", AXIS_TB, AXIS_VIOLATIONS),
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
     "route": ("tb_route_props", ROUTE_TB, ROUTE_VIOLATIONS),
+    "mbox": ("tb_mbox_props", MBOX_TB, MBOX_VIOLATIONS),
 }
 
 

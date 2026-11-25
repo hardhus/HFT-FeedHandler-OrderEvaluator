@@ -119,3 +119,17 @@ bind hft_csr_regs route_props #(
     .m_rvalid  (rvalid),
     .m0_win_req(hwif_out.RISK.req || hwif_out.STRATEGY.req || hwif_out.TX.req)
 );
+
+// Mailbox output (decision 12, audit/15): an order stays unchanged until risk_check takes it, and the register is
+// empty for one cycle after each take. W = side 8 + qty 32 + price 32 + locate 16 + stock 64 + tif 8 + ClOrdID 112.
+bind hft_csr_wrap mbox_props #(
+    .W(272)
+) u_mbox_props (
+    .clk(net_clk),
+    .rst(net_rst),
+    .valid(m_host_valid),
+    .ready(m_host_ready),
+    .data({
+      m_host_side, m_host_qty, m_host_price, m_host_locate, m_host_stock, m_host_tif, m_host_clordid
+    })
+);

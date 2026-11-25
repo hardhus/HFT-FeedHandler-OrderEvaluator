@@ -83,10 +83,10 @@ set hft_cdc_n_ram 0
 set hft_cdc_n_unconstrained 0
 # CDC-26 (LUTRAM read/write potential collision) is waived only for the memories listed here, by
 # instance name: no attribute survives on LUTRAM primitives. UG906 allows the waiver when the logic
-# never reads and writes one address at once while the read is in use. The mailbox FIFO's head is read
-# every cycle by flops without an enable (risk_check's input stage); its read address equals the write
-# address only while the FIFO is empty, when m_host_valid = 0 and the captured value is never used
-# (decision 42, audit 14 S9). Every other LUTRAM crossing still fails the gate on CDC-26.
+# never reads and writes one address at once while the read is in use. The mailbox FIFO's head is taken
+# by hft_csr_wrap's net_clk register only while the FIFO is not empty (its enable; decision 12, audit/15);
+# its read address equals the write address only while the FIFO is empty, when the register does not
+# load (decision 42, audit 14 S9). Every other LUTRAM crossing still fails the gate on CDC-26.
 set hft_cdc26_waive {*/u_mbox_fifo/*}
 set hft_cdc26_ends [dict create]
 # Primitive groups differ per family: DMEM on 7-series, CLB with subgroup LUTRAM on UltraScale(+).

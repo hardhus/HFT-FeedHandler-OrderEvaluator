@@ -80,7 +80,8 @@
 // Mailbox      : MBOX_SEND (swmod: each write once) copies the MBOX_* shadow into a cdc_async_fifo (16, COMMIT
 //                = 0) to net_clk, or drops it when the FIFO is full or busy: MBOX_STATUS.dropped (the last
 //                send's result, decision 34) and MBOX_DROP (live, host_clk, decision 35). MBOX_SPACE = 16 -
-//                wr_count. At net the FIFO's head is m_host_* (valid = not empty; ready pops it).
+//                wr_count. At net a register holds a copy of the FIFO's head, which is m_host_* (one cycle
+//                after the head; the entry leaves the FIFO when it is taken; decision 12, audit/15).
 // Order stats  : order_stats counts ord_fire_* (RULE_FIRED_<n>), ord_sent_* (ORDERS_SENT_*), ord_rej_* and
 //                ord_lost_* (RISK_REJECT_<reason>, RING_DROP_ORDERS). The snapshot takes them, ord_queued
 //                (RING_ORDER_QUEUED), st_armed (RULE_ARMED) and st_budget (BUDGET) in the same net_clk cycle as
@@ -975,7 +976,8 @@ module hft_csr_wrap
     logic [111:0] clordid;
   } mbox_t;
 
-  mbox_t mbox_shadow, mbox_dout;
+  mbox_t mbox_shadow, mbox_dout, mbox_out_q;
+  logic mbox_head_valid, mbox_pop, mbox_out_valid_q;
   logic mbox_send_write_q, mbox_send, mbox_fits, mbox_wr_q;
   logic mbox_full, mbox_wr_busy, mbox_empty, mbox_rd_busy;
   logic
@@ -1040,21 +1042,46 @@ module hft_csr_wrap
       .wr_rst_busy(mbox_wr_busy),
       .wr_count   (mbox_count),
       .rd_clk     (net_clk),
-      .rd_en      (m_host_ready && m_host_valid),
+      .rd_en      (mbox_pop),
       .dout       (mbox_dout),
       .empty      (mbox_empty),
       .underflow  (mbox_underflow_unused),
       .rd_rst_busy(mbox_rd_busy)
   );
 
-  assign m_host_valid                         = !mbox_empty && !mbox_rd_busy;
-  assign m_host_side                          = mbox_dout.side;
-  assign m_host_qty                           = mbox_dout.qty;
-  assign m_host_price                         = mbox_dout.price;
-  assign m_host_locate                        = mbox_dout.locate;
-  assign m_host_stock                         = mbox_dout.stock;
-  assign m_host_tif                           = mbox_dout.tif;
-  assign m_host_clordid                       = mbox_dout.clordid;
+  // The FIFO's head (an asynchronous LUTRAM read, written on host_clk) is copied into a net_clk register, which is
+  // m_host_* (decision 12, audit/15): risk_check uses m_host_* in logic, a DSP and shift registers, and a crossing
+  // must end on a plain flop. The register loads a valid head with its enable (CDC-15) while it is empty; the head
+  // leaves the FIFO only when risk_check takes the copy, so the FIFO still counts it (16 orders, MBOX_SPACE and the
+  // fence as before). After a take the register is empty for one cycle (the next head is read after the pop): one
+  // order per 2 net_clk cycles at most, far above a host send (13 bus writes); one cycle later than the head.
+  assign mbox_head_valid = !mbox_empty && !mbox_rd_busy;
+  assign mbox_pop = mbox_out_valid_q && m_host_ready;  // the copy taken: its entry leaves the FIFO
+
+  always_ff @(posedge net_clk) begin
+    if (net_rst) begin
+      mbox_out_valid_q <= 1'b0;
+    end else if (mbox_out_valid_q) begin
+      mbox_out_valid_q <= !m_host_ready;
+    end else begin
+      mbox_out_valid_q <= mbox_head_valid;
+    end
+  end
+
+  always_ff @(posedge net_clk) begin
+    if (!mbox_out_valid_q && mbox_head_valid) begin
+      mbox_out_q <= mbox_dout;
+    end
+  end
+
+  assign m_host_valid                         = mbox_out_valid_q;
+  assign m_host_side                          = mbox_out_q.side;
+  assign m_host_qty                           = mbox_out_q.qty;
+  assign m_host_price                         = mbox_out_q.price;
+  assign m_host_locate                        = mbox_out_q.locate;
+  assign m_host_stock                         = mbox_out_q.stock;
+  assign m_host_tif                           = mbox_out_q.tif;
+  assign m_host_clordid                       = mbox_out_q.clordid;
 
   // The send's result in its own cycle already: a read right after the write sees it.
   assign ohwif_in.TX.MBOX_STATUS.dropped.next = mbox_send ? !mbox_fits : mbox_dropped_q;

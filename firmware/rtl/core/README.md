@@ -677,7 +677,9 @@ the main rules are below.
 ### Pre-trade checks (`risk_check`)
 
 Every order, hardware or host, passes one gate. A hardware order goes first; a host order (from the mailbox) is taken
-in a cycle with no hardware order and no cancel to write out. The first check that holds is the reason
+in a cycle with no hardware order and no cancel to write out. Host orders arrive from `hft_csr_wrap`'s mailbox
+register (a net_clk copy of the FIFO's head, one cycle after the head; decision 12, audit/15) at most one every 2
+cycles: after a take the register is empty for one cycle. The first check that holds is the reason
 (`risk_reason_e`, also the `RISK_REJECT` entry's `reason` and the `RISK_REJECT_<reason>` counter):
 
 | Code | Reason | Rejects when |
@@ -1001,7 +1003,10 @@ Status bits are the result of the last operation of their kind, set and cleared 
 decision 34): `TX_STATUS.cfg_refused` and `userref_ignored`, `MBOX_STATUS.dropped`. `RULE_STATUS` and
 `TX_STATUS.cfg_valid` show the state after the last command. `MBOX_DROP` is a live host-domain counter (HI, LO, HI;
 decision 35). `MBOX_SPACE` is the mailbox FIFO's write-side count (`cdc_async_fifo` `WR_COUNT=1`): that many sends from
-now on all fit.
+now on all fit. At net a register holds a copy of the FIFO's head (`m_host_*`, decision 12, audit/15): the crossing
+ends on that flop, not in `risk_check`'s logic. The entry leaves the FIFO only when `risk_check` takes the copy, so
+the FIFO still counts it (16 orders, `MBOX_SPACE` and the fence unchanged); after a take the register is empty for
+one cycle, so host orders reach `risk_check` at most one every 2 net cycles (a send is 13 bus writes).
 
 ### Kill switch latency (`RISK_CTRL.kill`)
 
@@ -1021,7 +1026,7 @@ Measured in `test_hft_csr_wrap.tc_kill_latency` (all five clock profiles), from 
 |---|---|---|
 | on an idle bus | 13.4–27.4 ns | |
 | behind a command in flight | 68–108 ns | mailbox empty, so the command is not fenced |
-| behind a command fenced by a full mailbox | 164–228 ns | 16 orders, `risk_check` taking one every cycle, no hardware order in between |
+| behind a command fenced by a full mailbox | 217–325 ns | 16 orders, `risk_check` taking one every 2 cycles (decision 12), no hardware order in between |
 
 The last row is the best case of that situation, not its worst. A fenced command waits until every earlier
 `MBOX_SEND` has been taken by `risk_check` and decided, and `risk_check` takes a host order only in a cycle with
@@ -1037,10 +1042,11 @@ kill is 1 then anyway).
 
 With the real blocks (`test_rx_order.tc_order_kill_latency_under_burst`, net2host and host2net): 16 `MBOX_SEND`s,
 a command fenced behind them and the kill write behind it, measured from the kill write's W handshake to
-`ctl_kill` at `risk_check`. Without hardware orders: 164–169 ns (net2host), 115–120 ns (host2net). With all 8
+`ctl_kill` at `risk_check`. Without hardware orders: 264–276 ns (net2host), 147–152 ns (host2net). With all 8
 rules armed and a packet of 8 triggers whose orders reach `risk_check` while the fence waits (the packet's start
-swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 221 ns and 153 ns, about 8 net cycles
-over the slowest case without them (one run each), inside the bound above. The test checks the bound in every run.
+swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 324 ns and 184 ns, about 8 net cycles
+over the slowest case without them (one run each), inside the bound above. (Before decision 12, audit/15, with host
+orders taken every cycle: 164–169 / 115–120 ns and up to 221 / 153 ns.) The test checks the bound in every run.
 
 ### Software contract after reset
 
@@ -1081,7 +1087,8 @@ Two domains: `host_clk`/`host_rst` (bus, register block, commit buffers) and `ne
 snapshot request (1 bit, host → net), snapshot (net → host: every snapshot counter, the RING ones and F7's
 `order_stats` bank included, expected `seq`, `synced`, `eos`), symbol request (48 bits, host → net), symbol response
 (32 bits, net → host), and F7's order command (host → net) and its response (net → host); one `sync_bit` (kill and
-tx_en) and the mailbox `cdc_async_fifo` (host → net, 16 entries, `WR_COUNT=1`).
+tx_en) and the mailbox `cdc_async_fifo` (host → net, 16 entries, `WR_COUNT=1`; its head copied into a net_clk
+register, decision 12, audit/15).
 
 In simulation, `assert_arm` (bound to `hft_csr`) keeps every assertion off until the first reset has been seen
 and released: Verilator keeps each instance's clock input as its own variable, and random power-up values can
