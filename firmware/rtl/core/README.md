@@ -1026,7 +1026,7 @@ Measured in `test_hft_csr_wrap.tc_kill_latency` (all five clock profiles), from 
 |---|---|---|
 | on an idle bus | 13.4–27.4 ns | |
 | behind a command in flight | 68–108 ns | mailbox empty, so the command is not fenced |
-| behind a command fenced by a full mailbox | 217–325 ns | 16 orders, `risk_check` taking one every 2 cycles (decision 12), no hardware order in between |
+| behind a command fenced by a full mailbox | 217–328 ns | 16 orders, `risk_check` taking one every 2 cycles (decision 12), no hardware order in between |
 
 The last row is the best case of that situation, not its worst. A fenced command waits until every earlier
 `MBOX_SEND` has been taken by `risk_check` and decided, and `risk_check` takes a host order only in a cycle with
@@ -1042,7 +1042,7 @@ kill is 1 then anyway).
 
 With the real blocks (`test_rx_order.tc_order_kill_latency_under_burst`, net2host and host2net): 16 `MBOX_SEND`s,
 a command fenced behind them and the kill write behind it, measured from the kill write's W handshake to
-`ctl_kill` at `risk_check`. Without hardware orders: 264–276 ns (net2host), 147–152 ns (host2net). With all 8
+`ctl_kill` at `risk_check`. Without hardware orders: 264–276 ns (net2host), 146–152 ns (host2net). With all 8
 rules armed and a packet of 8 triggers whose orders reach `risk_check` while the fence waits (the packet's start
 swept over 48 net cycles; up to 8 hardware orders taken in that time): up to 324 ns and 184 ns, about 8 net cycles
 over the slowest case without them (one run each), inside the bound above. (Before decision 12, audit/15, with host
