@@ -11,7 +11,7 @@ The CDC rules that go with these blocks are in [`CODING_STYLE.md`](../../CODING_
 
 | Block | What it does | Use it for |
 |-------|--------------|------------|
-| `reset_sync` | Async assert, sync deassert (`STAGES` flops) | One per clock domain in the platform shell |
+| `reset_sync` | Async assert, sync deassert (`STAGES` `ASYNC_REG` flops, then `COPIES` output flops) | One per clock domain, one copy per consumer block |
 | `sync_bit` | `STAGES`-flop synchronizer, bits synchronized independently | Single-bit levels (enables, kill switch, status bits) and gray-coded buses; never binary multi-bit values |
 | `cdc_handshake` | 4-phase req/ack transfer of one `WIDTH`-bit word | Rare multi-bit values: config shadow commit, counter snapshots, rule commit |
 | `cdc_async_fifo` | Gray-pointer async FIFO, FWFT, XPM_FIFO_ASYNC port names | Streams between domains: descriptor FIFO (net → host), order mailbox (host → net) |
@@ -27,7 +27,7 @@ tick-to-trade path; these blocks only affect the host, config and counter paths.
 
 | Block | Parameters | Clock domains | Latency | Throughput | Reset |
 |-------|------------|---------------|---------|------------|-------|
-| `reset_sync` | `STAGES=3` | `clk` | assert immediate, deassert `STAGES` edges | – | `rst_in` async, active-high; any pulse width gives a full reset |
+| `reset_sync` | `STAGES=3`, `COPIES=1` | `clk` | assert immediate, deassert `STAGES` + 1 edges | – | `rst_in` async, active-high; any pulse width gives a full reset. `rst_out[COPIES-1:0]`: each bit from its own output flop (async preset, no `ASYNC_REG`, KEEP), all equal at every edge, so a domain's reset pins are not driven by one flop (UG949: replicate after the synchronizer, never the synchronizer; decision 14, audit/15) |
 | `sync_bit` | `WIDTH=1`, `STAGES=2` (≥ 2) | `clk` (destination); `d` asynchronous | `STAGES` edges (+1 in jitter mode) | hold each level > 2 `clk` periods (longest, jitter included) | none (settles to `d`) |
 | `cdc_handshake` | `WIDTH=32`, `STAGES=2` | `src_clk` (`src_*`), `dst_clk` (`dst_*`) | `STAGES+1` dst cycles to `dst_valid` (+1 jitter) | one word per req/ack round trip | `src_rst`, `dst_rst` asserted together |
 | `cdc_async_fifo` | `WIDTH=64`, `DEPTH_LOG2=4` (≥ 4, both implementations), `SYNC_STAGES=2`, `IMPL="portable"`, `COMMIT=0`, `WR_COUNT=0` | `wr_clk` (`rst`, `wr_*`, `full`, `overflow`, `wr_rst_busy`, `wr_count`), `rd_clk` (`rd_*`, `dout`, `empty`, `underflow`, `rd_rst_busy`) | write → `!empty` ≤ `SYNC_STAGES+3` rd cycles | 1 word/cycle per side (≥ 95 % of the slower clock) for `SYNC_STAGES` ≤ 3; this is why `DEPTH_LOG2` ≥ 4: a shallower FIFO is shorter than the pointer round trip | `rst` synchronous to `wr_clk`, busy handshake (below) |
@@ -103,7 +103,7 @@ sync_bit #(.STAGES(2)) u_kill_sync (.clk(net_clk), .d(host_kill), .q(net_kill));
 
 | Block | Tests (`firmware/tb/unit/`) | Matrix |
 |-------|-----------------------------|--------|
-| `reset_sync` | `test_reset_sync.py`, `tb/sv/tb_reset_sync_smoke.sv` | STAGES |
+| `reset_sync` | `test_reset_sync.py`, `tb/sv/tb_reset_sync_smoke.sv` | (STAGES, COPIES) {(2,1), (3,1), (4,1), (3,4)}; copies always equal |
 | `sync_bit` | `test_sync_bit.py` | (W1,S2), (W8,S3) × jitter × 4 clock profiles |
 | `axis_register`, `axis_skid_buffer` | `test_axis_pipeline.py` (+ `axis_props` SVA) | 2 modules × DATA_W {8, 64} |
 | `cdc_handshake` | `test_cdc_handshake.py` | jitter × 4 clock profiles |
@@ -122,7 +122,7 @@ a Critical `report_cdc` finding, an unexpected CDC warning or an unconstrained c
 
 | Block | LUT | FF | LUTRAM | WNS net2host / host2net (ns) | report_cdc |
 |-------|-----|----|--------|------------------------------|------------|
-| `reset_sync` (STAGES=3) | 0 | 3 | 0 | 5.575 / 3.175 | no crossing |
+| `reset_sync` (STAGES=3) | 0 | 3 | 0 | 5.575 / 3.175 | no crossing (before decision 14's output flop; F8 S2 re-runs it) |
 | `sync_bit` (1×2) | 0 | 2 | 0 | 5.575 / 3.175 | no crossing (`d` is an async port) |
 | `axis_register` (64 b) | 3 | 75 | 0 | 3.995 / 1.595 | no crossing |
 | `axis_skid_buffer` (64 b) | 79 | 150 | 0 | 4.016 / 1.616 | no crossing |

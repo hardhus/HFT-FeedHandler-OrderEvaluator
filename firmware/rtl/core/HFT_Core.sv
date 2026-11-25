@@ -5,7 +5,9 @@
 // Clock domain : host_clk (s_axil_*, m_axi_hmw_*, irq), net_clk (s_axis_rx_*, m_axis_tx_*)
 // Reset        : rst_in is the one asynchronous, active-high reset source of both domains (the platform ORs its
 //                PCIe, MAC and user resets into it). Each domain has its own reset_sync here, so cdc_handshake's
-//                one-source contract holds inside the core.
+//                one-source contract holds inside the core. Each consumer block gets its own copy of its domain's
+//                reset (reset_sync COPIES, decision 14, audit/15); the copies deassert together, 4 edges after
+//                rst_in falls (STAGES 3 + the output copy).
 // Timestamps   : ts_q is a free-running 64-bit counter of net_clk cycles, 0 after reset; every timestamp in the
 //                core (SOF, TX, reject) is a value of it.
 // ITCH         : moldudp64_rx carries the ITCH config per packet: cfg_msg_ctx = {cfg_epoch, cfg_class_filter,
@@ -149,7 +151,13 @@ module HFT_Core
   // The net_clk timestamp counter
   logic [63:0] ts_q;
 
-  logic host_rst, net_rst;
+  // One reset copy per consumer block (reset_sync COPIES, decision 14, audit/15): no single flop drives every reset pin
+  // of a domain. Every copy deasserts at the same edge.
+  localparam int unsigned HR_WRAP = 0, HR_RING_WRITER = 1, HOST_RST_N = 2;
+  localparam int unsigned NR_WRAP = 0, NR_RX = 1, NR_MOLD = 2, NR_ITCH = 3, NR_STRATEGY = 4, NR_RISK = 5, NR_TX = 6;
+  localparam int unsigned NR_PACKER = 7, NR_RING_FIFO = 8, NR_TS = 9, NET_RST_N = 10;
+  logic [HOST_RST_N-1:0] host_rst;
+  logic [ NET_RST_N-1:0] net_rst;
   logic cfg_rx_en, cfg_accept_bcast;
   logic       [         47:0]       cfg_local_mac;
   logic       [N_FILTERS-1:0][31:0] cfg_filter_ip;
@@ -251,13 +259,17 @@ module HFT_Core
   logic                           rej_lost;
   risk_reason_e                   rej_lost_reason;
 
-  reset_sync u_host_rst (
+  reset_sync #(
+      .COPIES(HOST_RST_N)
+  ) u_host_rst (
       .clk    (host_clk),
       .rst_in (rst_in),
       .rst_out(host_rst)
   );
 
-  reset_sync u_net_rst (
+  reset_sync #(
+      .COPIES(NET_RST_N)
+  ) u_net_rst (
       .clk    (net_clk),
       .rst_in (rst_in),
       .rst_out(net_rst)
@@ -265,7 +277,7 @@ module HFT_Core
 
   hft_csr_wrap u_wrap (
       .host_clk               (host_clk),
-      .host_rst               (host_rst),
+      .host_rst               (host_rst[HR_WRAP]),
       .s_axil_awvalid         (s_axil_awvalid),
       .s_axil_awready         (s_axil_awready),
       .s_axil_awaddr          (s_axil_awaddr),
@@ -286,7 +298,7 @@ module HFT_Core
       .s_axil_rdata           (s_axil_rdata),
       .s_axil_rresp           (s_axil_rresp),
       .net_clk                (net_clk),
-      .net_rst                (net_rst),
+      .net_rst                (net_rst[NR_WRAP]),
       .cfg_rx_en              (cfg_rx_en),
       .cfg_local_mac          (cfg_local_mac),
       .cfg_accept_bcast       (cfg_accept_bcast),
@@ -402,7 +414,7 @@ module HFT_Core
       .N_FILTERS(N_FILTERS)
   ) u_rx (
       .clk              (net_clk),
-      .rst              (net_rst),
+      .rst              (net_rst[NR_RX]),
       .s_axis_rx_tdata  (s_axis_rx_tdata),
       .s_axis_rx_tkeep  (s_axis_rx_tkeep),
       .s_axis_rx_tvalid (s_axis_rx_tvalid),
@@ -437,7 +449,7 @@ module HFT_Core
       .CTX_W    (CTX_W)
   ) u_mold (
       .clk              (net_clk),
-      .rst              (net_rst),
+      .rst              (net_rst[NR_MOLD]),
       .s_axis_udp_tdata (m_axis_udp_tdata),
       .s_axis_udp_tkeep (m_axis_udp_tkeep),
       .s_axis_udp_tvalid(m_axis_udp_tvalid),
@@ -478,7 +490,7 @@ module HFT_Core
 
   itch_decoder u_itch (
       .clk               (net_clk),
-      .rst               (net_rst),
+      .rst               (net_rst[NR_ITCH]),
       .s_msg_valid       (m_msg_valid),
       .s_msg_data        (m_msg_data),
       .s_msg_len         (m_msg_len),
@@ -548,7 +560,7 @@ module HFT_Core
 
   strategy_engine u_strategy (
       .clk            (net_clk),
-      .rst            (net_rst),
+      .rst            (net_rst[NR_STRATEGY]),
       .s_ev_valid     (m_ev_valid),
       .s_ev_class     (m_ev_class),
       .s_ev_type      (m_ev_type),
@@ -588,7 +600,7 @@ module HFT_Core
 
   risk_check u_risk (
       .clk                  (net_clk),
-      .rst                  (net_rst),
+      .rst                  (net_rst[NR_RISK]),
       .ts_now               (ts_q),
       .epoch_now            (cfg_epoch),
       .s_hw_valid           (o_valid),
@@ -670,7 +682,7 @@ module HFT_Core
 
   order_tx_builder u_tx (
       .clk             (net_clk),
-      .rst             (net_rst),
+      .rst             (net_rst[NR_TX]),
       .ts_now          (ts_q),
       .cfg_wr          (cfg_tx_wr),
       .cfg_template    (cfg_template),
@@ -719,7 +731,7 @@ module HFT_Core
 
   event_packer u_packer (
       .clk               (net_clk),
-      .rst               (net_rst),
+      .rst               (net_rst[NR_PACKER]),
       .s_ev_valid        (m_ev_valid),
       .s_ev_class        (m_ev_class),
       .s_ev_type         (m_ev_type),
@@ -796,7 +808,7 @@ module HFT_Core
       .DEPTH_LOG2(RING_DEPTH_LOG2),
       .COMMIT    (1'b1)
   ) u_ring_fifo (
-      .rst        (net_rst),
+      .rst        (net_rst[NR_RING_FIFO]),
       .wr_clk     (net_clk),
       .wr_en      (fifo_wr_en),
       .din        (fifo_din),
@@ -818,7 +830,7 @@ module HFT_Core
       .DATA_W(RING_DATA_W)
   ) u_ring_writer (
       .clk              (host_clk),
-      .rst              (host_rst),
+      .rst              (host_rst[HR_RING_WRITER]),
       .fifo_rd_en       (fifo_rd_en),
       .fifo_dout        (fifo_dout),
       .fifo_empty       (fifo_empty),
@@ -849,7 +861,7 @@ module HFT_Core
   );
 
   always_ff @(posedge net_clk) begin
-    if (net_rst) begin
+    if (net_rst[NR_TS]) begin
       ts_q <= '0;
     end else begin
       ts_q <= ts_q + 64'd1;
