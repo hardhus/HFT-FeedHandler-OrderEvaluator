@@ -208,9 +208,18 @@ bind risk_check risk_props #(
     .ref_next(ref_next_q),
     .credits(credits_q),
     .flags({
-      burst_nz_q, refill_nz_q, tick_q, tok_nz_q, budget_zero_q, refs_zero_q, qty_gt_q, notional_gt_q
+      full_q,
+      burst_nz_q,
+      refill_nz_q,
+      tick_q,
+      tok_nz_q,
+      budget_zero_q,
+      refs_zero_q,
+      qty_gt_q,
+      notional_gt_q
     }),
     .defs({
+      live_q == QP'(QD),
       rate_burst_q != '0,
       rate_refill_q != '0,
       rate_period_q != '0 && pc_q == '0,

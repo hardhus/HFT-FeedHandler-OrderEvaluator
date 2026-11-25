@@ -272,6 +272,7 @@ module risk_check
   logic tok_nz_q;  // = tokens_q != 0
   logic budget_zero_q;  // = budget_q == 0
   logic refs_zero_q;  // = no UserRefNum left: 2^32 - ref_next_q - live_q == 0
+  logic full_q;  // = live_q == QD (TX_BUSY; F8 S2: the compare was at the head of the A7 accept / rej_dec paths)
   logic qty_gt_q;  // = o3_q.qty > max_qty_q
   logic notional_gt_q;  // = qty * price of the order in stage 3 > max_notional_q
   logic burst_nz_q, refill_nz_q;  // = rate_burst_q != 0, rate_refill_q != 0 (set with the limits)
@@ -312,10 +313,11 @@ module risk_check
     eff_gt1 = |tokens_eff[31:1];
   end
   // tokens_eff != 0, from flags: the bucket can hold a token and has one, or gets one now
-  assign rate_ok = burst_nz_q && (tok_nz_q || (tick_q && refill_nz_q));
-  assign full        = live_q == QP'(QD);  // held + live <= QD always (risk_props), so QM slots never run out
+  assign rate_ok     = burst_nz_q && (tok_nz_q || (tick_q && refill_nz_q));
+  // held + live <= QD always (risk_props), so QM slots never run out
+  assign full        = full_q;
   assign cancel_kill = ctl_kill && !kill_d_q;
-  assign cancel = cancel_kill || (!ctl_tx_en && tx_en_d_q);
+  assign cancel      = cancel_kill || (!ctl_tx_en && tx_en_d_q);
 
   always_comb begin
     if (ctl_kill) begin
@@ -576,11 +578,15 @@ module risk_check
       tok_nz_q      <= 1'b0;
       budget_zero_q <= 1'b1;
       refs_zero_q   <= 1'b0;
+      full_q        <= 1'b0;
     end else begin
       // an accept leaves tokens_eff - 1; it needs tokens_eff != 0
       tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? eff_gt1 : eff_nz;
       budget_zero_q <= accept ? bz1 : bz0;
       refs_zero_q   <= accept ? refs_o : refs_z;  // an accept is never in a cancel's cycle
+      // live 8 stays 8 without a handover (full refuses the accept); live 7 becomes 8 with an accept and no
+      // handover; a cancel empties it
+      full_q        <= !cancel && !handover && (full_q || (live_q == QP'(QD - 1) && accept));
     end
   end
 
