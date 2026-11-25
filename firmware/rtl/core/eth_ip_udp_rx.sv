@@ -363,7 +363,6 @@ module eth_ip_udp_rx
   logic [47:0] prev_q;  // lanes 2..7 of the previous input beat
   logic [15:0] remain_q;  // payload bytes still to emit (loaded in stage B)
   logic [ 3:0] avail;  // payload bytes the current beat completes: 6 of prev + up to 2 of cur
-  logic [ 3:0] emit_n;  // bytes in the formed output beat
   logic        form;  // an output beat is formed this cycle
   logic        done;  // ... and it holds the last payload byte
   logic        tail_set;  // input tlast leaves payload bytes beyond lane 1: tail beat next cycle
@@ -389,7 +388,6 @@ module eth_ip_udp_rx
   // Beat 6 comes at least one cycle after stage B, so the registered pay_q is enough here.
   assign form = s_axis_rx_tvalid && pay_q && beat_cnt_q >= BEAT_W'(6) && remain_q != '0;
   assign done = remain_q[15:4] == '0 && remain_q[3:0] <= avail;  // remain_q <= avail
-  assign emit_n = done ? remain_q[3:0] : avail;
   assign tail_set  = eof && pay && s_axis_rx_tkeep[2] && (beat_cnt_q == BEAT_W'(5) || (form && !done));
   assign last_now = eof && !tail_set;
   assign tail_emit = (16'(tail_n_q) > remain_q) ? remain_q[3:0] : tail_n_q;
@@ -425,7 +423,9 @@ module eth_ip_udp_rx
     if (stage_b_q) begin
       remain_q <= udp_len_q - 16'd8;
     end else if (form) begin
-      remain_q <= remain_q - 16'(emit_n);
+      // The beat that holds the last byte takes all of remain_q (done: remain_q <= avail), so the count ends at 0;
+      // any other takes avail. The subtraction starts at the flop, beside done (timing, F8 S2: A7 net_clk).
+      remain_q <= done ? 16'd0 : remain_q - 16'(avail);
     end
     if (tail_set) begin
       tail_n_q <= n_cur - 4'd2;
@@ -437,7 +437,7 @@ module eth_ip_udp_rx
       out_user_q <= stat_reason != RX_OK;  // registered at the tlast beat
     end else if (form) begin
       out_data_q <= {s_axis_rx_tdata[15:0], prev_q};
-      out_keep_q <= keep_of(emit_n);
+      out_keep_q <= done ? keep_of(remain_q[3:0]) : keep_of(avail);  // keep_of beside done (timing)
       out_last_q <= done || last_now;
       out_user_q <= last_now && reason != RX_OK;
     end else if (pend_q && eof) begin
