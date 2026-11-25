@@ -5,25 +5,18 @@ module hft_csr (
         input wire clk,
         input wire rst,
 
-        output logic s_axil_awready,
-        input wire s_axil_awvalid,
-        input wire [15:0] s_axil_awaddr,
-        input wire [2:0] s_axil_awprot,
-        output logic s_axil_wready,
-        input wire s_axil_wvalid,
-        input wire [31:0] s_axil_wdata,
-        input wire [3:0]s_axil_wstrb,
-        input wire s_axil_bready,
-        output logic s_axil_bvalid,
-        output logic [1:0] s_axil_bresp,
-        output logic s_axil_arready,
-        input wire s_axil_arvalid,
-        input wire [15:0] s_axil_araddr,
-        input wire [2:0] s_axil_arprot,
-        input wire s_axil_rready,
-        output logic s_axil_rvalid,
-        output logic [31:0] s_axil_rdata,
-        output logic [1:0] s_axil_rresp,
+        input wire s_cpuif_req,
+        input wire s_cpuif_req_is_wr,
+        input wire [15:0] s_cpuif_addr,
+        input wire [31:0] s_cpuif_wr_data,
+        input wire [31:0] s_cpuif_wr_biten,
+        output wire s_cpuif_req_stall_wr,
+        output wire s_cpuif_req_stall_rd,
+        output wire s_cpuif_rd_ack,
+        output wire s_cpuif_rd_err,
+        output wire [31:0] s_cpuif_rd_data,
+        output wire s_cpuif_wr_ack,
+        output wire s_cpuif_wr_err,
 
         input hft_csr_pkg::hft_csr__in_t hwif_in,
         output hft_csr_pkg::hft_csr__out_t hwif_out
@@ -47,185 +40,18 @@ module hft_csr (
     logic cpuif_wr_ack;
     logic cpuif_wr_err;
 
-    // Max Outstanding Transactions: 3
-    logic [1:0] axil_n_in_flight;
-    logic axil_prev_was_rd;
-    logic axil_arvalid;
-    logic [15:0] axil_araddr;
-    logic axil_ar_accept;
-    logic axil_awvalid;
-    logic [15:0] axil_awaddr;
-    logic axil_wvalid;
-    logic [31:0] axil_wdata;
-    logic [3:0] axil_wstrb;
-    logic axil_aw_accept;
-    logic axil_resp_acked;
-
-    // Transaction request acceptance
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            axil_prev_was_rd <= '0;
-            axil_arvalid <= '0;
-            axil_araddr <= '0;
-            axil_awvalid <= '0;
-            axil_awaddr <= '0;
-            axil_wvalid <= '0;
-            axil_wdata <= '0;
-            axil_wstrb <= '0;
-            axil_n_in_flight <= '0;
-        end else begin
-            // AR* acceptance register
-            if(axil_ar_accept) begin
-                axil_prev_was_rd <= '1;
-                axil_arvalid <= '0;
-            end
-            if(s_axil_arvalid && s_axil_arready) begin
-                axil_arvalid <= '1;
-                axil_araddr <= s_axil_araddr;
-            end
-
-            // AW* & W* acceptance registers
-            if(axil_aw_accept) begin
-                axil_prev_was_rd <= '0;
-                axil_awvalid <= '0;
-                axil_wvalid <= '0;
-            end
-            if(s_axil_awvalid && s_axil_awready) begin
-                axil_awvalid <= '1;
-                axil_awaddr <= s_axil_awaddr;
-            end
-            if(s_axil_wvalid && s_axil_wready) begin
-                axil_wvalid <= '1;
-                axil_wdata <= s_axil_wdata;
-                axil_wstrb <= s_axil_wstrb;
-            end
-
-            // Keep track of in-flight transactions
-            if((axil_ar_accept || axil_aw_accept) && !axil_resp_acked) begin
-                axil_n_in_flight <= axil_n_in_flight + 1'b1;
-            end else if(!(axil_ar_accept || axil_aw_accept) && axil_resp_acked) begin
-                axil_n_in_flight <= axil_n_in_flight - 1'b1;
-            end
-        end
-    end
-
-    always_comb begin
-        s_axil_arready = (!axil_arvalid || axil_ar_accept);
-        s_axil_awready = (!axil_awvalid || axil_aw_accept);
-        s_axil_wready = (!axil_wvalid || axil_aw_accept);
-    end
-
-    // Request dispatch
-    always_comb begin
-        cpuif_wr_data = axil_wdata;
-        for(int i=0; i<4; i++) begin
-            cpuif_wr_biten[i*8 +: 8] = {8{axil_wstrb[i]}};
-        end
-        cpuif_req = '0;
-        cpuif_req_is_wr = '0;
-        cpuif_addr = '0;
-        axil_ar_accept = '0;
-        axil_aw_accept = '0;
-
-        if(axil_n_in_flight < 2'd3) begin
-            // Can safely issue more transactions without overwhelming response buffer
-            if(axil_arvalid && !axil_prev_was_rd) begin
-                cpuif_req = '1;
-                cpuif_req_is_wr = '0;
-                cpuif_addr = {axil_araddr[15:2], 2'b0};
-                if(!cpuif_req_stall_rd) axil_ar_accept = '1;
-            end else if(axil_awvalid && axil_wvalid) begin
-                cpuif_req = '1;
-                cpuif_req_is_wr = '1;
-                cpuif_addr = {axil_awaddr[15:2], 2'b0};
-                if(!cpuif_req_stall_wr) axil_aw_accept = '1;
-            end else if(axil_arvalid) begin
-                cpuif_req = '1;
-                cpuif_req_is_wr = '0;
-                cpuif_addr = {axil_araddr[15:2], 2'b0};
-                if(!cpuif_req_stall_rd) axil_ar_accept = '1;
-            end
-        end
-    end
-
-
-    // AXI4-Lite Response Logic
-    logic axil_resp_buffer_is_wr[4];
-    logic axil_resp_buffer_err[4];
-    logic [31:0] axil_resp_buffer_rdata[4];
-    // axil_resp_buffer is intentionally padded to the next power of two despite
-    // only requiring 3 entries.
-    // This is to avoid quirks in some tools that cannot handle indexing into a non-power-of-2 array.
-    // Unused entries are expected to be optimized away
-
-
-    logic [2:0] axil_resp_wptr;
-    logic [2:0] axil_resp_rptr;
-
-    always_ff @(posedge clk) begin
-        if(rst) begin
-            for(int i=0; i<3; i++) begin
-                axil_resp_buffer_is_wr[i] <= '0;
-                axil_resp_buffer_err[i] <= '0;
-                axil_resp_buffer_rdata[i] <= '0;
-            end
-            axil_resp_wptr <= '0;
-            axil_resp_rptr <= '0;
-        end else begin
-            // Store responses in buffer until AXI response channel accepts them
-            if(cpuif_rd_ack || cpuif_wr_ack) begin
-                if(cpuif_rd_ack) begin
-                    axil_resp_buffer_is_wr[axil_resp_wptr[1:0]] <= '0;
-                    axil_resp_buffer_err[axil_resp_wptr[1:0]] <= cpuif_rd_err;
-                    axil_resp_buffer_rdata[axil_resp_wptr[1:0]] <= cpuif_rd_data;
-
-                end else if(cpuif_wr_ack) begin
-                    axil_resp_buffer_is_wr[axil_resp_wptr[1:0]] <= '1;
-                    axil_resp_buffer_err[axil_resp_wptr[1:0]] <= cpuif_wr_err;
-                end
-                if(axil_resp_wptr[1:0] == 2) begin
-                    axil_resp_wptr[1:0] <= '0;
-                    axil_resp_wptr[2] <= ~axil_resp_wptr[2];
-                end else begin
-                    axil_resp_wptr[1:0] <= axil_resp_wptr[1:0] + 1'b1;
-                end
-            end
-
-            // Advance read pointer when acknowledged
-            if(axil_resp_acked) begin
-                if(axil_resp_rptr[1:0] == 2) begin
-                    axil_resp_rptr[1:0] <= '0;
-                    axil_resp_rptr[2] <= ~axil_resp_rptr[2];
-                end else begin
-                    axil_resp_rptr[1:0] <= axil_resp_rptr[1:0] + 1'b1;
-                end
-            end
-        end
-    end
-
-    always_comb begin
-        axil_resp_acked = '0;
-        s_axil_bvalid = '0;
-        s_axil_rvalid = '0;
-        if(axil_resp_rptr != axil_resp_wptr) begin
-            if(axil_resp_buffer_is_wr[axil_resp_rptr[1:0]]) begin
-                s_axil_bvalid = '1;
-                if(s_axil_bready) axil_resp_acked = '1;
-            end else begin
-                s_axil_rvalid = '1;
-                if(s_axil_rready) axil_resp_acked = '1;
-            end
-        end
-
-        s_axil_rdata = axil_resp_buffer_rdata[axil_resp_rptr[1:0]];
-        if(axil_resp_buffer_err[axil_resp_rptr[1:0]]) begin
-            s_axil_bresp = 2'b10;
-            s_axil_rresp = 2'b10;
-        end else begin
-            s_axil_bresp = 2'b00;
-            s_axil_rresp = 2'b00;
-        end
-    end
+    assign cpuif_req = s_cpuif_req;
+    assign cpuif_req_is_wr = s_cpuif_req_is_wr;
+    assign cpuif_addr = s_cpuif_addr;
+    assign cpuif_wr_data = s_cpuif_wr_data;
+    assign cpuif_wr_biten = s_cpuif_wr_biten;
+    assign s_cpuif_req_stall_wr = cpuif_req_stall_wr;
+    assign s_cpuif_req_stall_rd = cpuif_req_stall_rd;
+    assign s_cpuif_rd_ack = cpuif_rd_ack;
+    assign s_cpuif_rd_err = cpuif_rd_err;
+    assign s_cpuif_rd_data = cpuif_rd_data;
+    assign s_cpuif_wr_ack = cpuif_wr_ack;
+    assign s_cpuif_wr_err = cpuif_wr_err;
 
     logic cpuif_req_masked;
     logic external_pending;

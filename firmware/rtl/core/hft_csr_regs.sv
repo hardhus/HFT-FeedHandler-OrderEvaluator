@@ -1,11 +1,13 @@
-// hft_csr_regs: the CSR map's register blocks behind one AXI4-Lite port (decision 41). axil_route2 sends
+// hft_csr_regs: the CSR map's register blocks behind one AXI4-Lite port (decision 41). axil_cpuif2 sends
 // every access in the order blocks' windows (RISK 0x0A00-0x0BFF, STRATEGY 0x1000-0x1FFF, TX 0x2000-0x2FFF)
-// to hft_order_csr and every other one to hft_csr; both decode absolute addresses and answer SLVERR for an
-// unmapped address or an illegal access. hft_csr has RISK, STRATEGY and TX as external blocks that never see
-// an access: their acks are tied low.
+// to hft_order_csr and every other one to hft_csr, through their PeakRDL passthrough interfaces with the
+// request from flops (A40); both decode absolute addresses and answer SLVERR for an unmapped address or an
+// illegal access. hft_csr has RISK, STRATEGY and TX as external blocks that never see an access: their acks
+// are tied low.
 // Clock domain : clk (host_clk)
-// Latency      : +1 cycle over the register block alone (axil_route2); accesses to one block overlap, a switch
-//                to the other block waits until every earlier access is answered (decision 43)
+// Latency      : +1 cycle over a register block with its own AXI4-Lite interface (axil_cpuif2); accesses to one
+//                block overlap, a switch to the other block waits until every earlier access is answered
+//                (decision 43)
 // Note         : a register block placed in a window later would answer SLVERR (test_csr_map checks the map).
 module hft_csr_regs (
     input logic clk,
@@ -40,20 +42,20 @@ module hft_csr_regs (
 );
   import hft_pkg::*;
 
-  logic [1:0] awvalid, awready, wvalid, wready, bvalid, bready, arvalid, arready, rvalid, rready;
-  logic [15:0] awaddr, araddr;
-  logic [2:0] awprot, arprot;
-  logic [31:0] wdata;
-  logic [3:0] wstrb, bresp, rresp;
-  logic [63:0] rdata;
+  // index 0 = hft_csr, 1 = hft_order_csr
+  logic [1:0] req, stall_wr, stall_rd, rd_ack, rd_err, wr_ack, wr_err;
+  logic        req_is_wr;
+  logic [15:0] addr;
+  logic [31:0] wr_data, wr_biten;
+  logic [63:0] rd_data;
 
-  axil_route2 #(
+  axil_cpuif2 #(
       .ADDR_W  (16),
       .DATA_W  (32),
       .N_WIN   (CSR_ORDER_N_WIN),
       .WIN_BASE(CSR_ORDER_WIN_BASE),
       .WIN_MASK(CSR_ORDER_WIN_MASK)
-  ) u_route (
+  ) u_bridge (
       .clk           (clk),
       .rst           (rst),
       .s_axil_awvalid(s_axil_awvalid),
@@ -75,25 +77,18 @@ module hft_csr_regs (
       .s_axil_rready (s_axil_rready),
       .s_axil_rdata  (s_axil_rdata),
       .s_axil_rresp  (s_axil_rresp),
-      .m_axil_awvalid(awvalid),
-      .m_axil_awready(awready),
-      .m_axil_awaddr (awaddr),
-      .m_axil_awprot (awprot),
-      .m_axil_wvalid (wvalid),
-      .m_axil_wready (wready),
-      .m_axil_wdata  (wdata),
-      .m_axil_wstrb  (wstrb),
-      .m_axil_bvalid (bvalid),
-      .m_axil_bready (bready),
-      .m_axil_bresp  (bresp),
-      .m_axil_arvalid(arvalid),
-      .m_axil_arready(arready),
-      .m_axil_araddr (araddr),
-      .m_axil_arprot (arprot),
-      .m_axil_rvalid (rvalid),
-      .m_axil_rready (rready),
-      .m_axil_rdata  (rdata),
-      .m_axil_rresp  (rresp)
+      .m_req         (req),
+      .m_req_is_wr   (req_is_wr),
+      .m_addr        (addr),
+      .m_wr_data     (wr_data),
+      .m_wr_biten    (wr_biten),
+      .m_req_stall_wr(stall_wr),
+      .m_req_stall_rd(stall_rd),
+      .m_rd_ack      (rd_ack),
+      .m_rd_err      (rd_err),
+      .m_rd_data     (rd_data),
+      .m_wr_ack      (wr_ack),
+      .m_wr_err      (wr_err)
   );
 
   hft_csr_pkg::hft_csr__in_t csr_in;
@@ -105,54 +100,40 @@ module hft_csr_regs (
   end
 
   hft_csr u_csr (
-      .clk           (clk),
-      .rst           (rst),
-      .s_axil_awready(awready[0]),
-      .s_axil_awvalid(awvalid[0]),
-      .s_axil_awaddr (awaddr),
-      .s_axil_awprot (awprot),
-      .s_axil_wready (wready[0]),
-      .s_axil_wvalid (wvalid[0]),
-      .s_axil_wdata  (wdata),
-      .s_axil_wstrb  (wstrb),
-      .s_axil_bready (bready[0]),
-      .s_axil_bvalid (bvalid[0]),
-      .s_axil_bresp  (bresp[1:0]),
-      .s_axil_arready(arready[0]),
-      .s_axil_arvalid(arvalid[0]),
-      .s_axil_araddr (araddr),
-      .s_axil_arprot (arprot),
-      .s_axil_rready (rready[0]),
-      .s_axil_rvalid (rvalid[0]),
-      .s_axil_rdata  (rdata[31:0]),
-      .s_axil_rresp  (rresp[1:0]),
-      .hwif_in       (csr_in),
-      .hwif_out      (hwif_out)
+      .clk                 (clk),
+      .rst                 (rst),
+      .s_cpuif_req         (req[0]),
+      .s_cpuif_req_is_wr   (req_is_wr),
+      .s_cpuif_addr        (addr),
+      .s_cpuif_wr_data     (wr_data),
+      .s_cpuif_wr_biten    (wr_biten),
+      .s_cpuif_req_stall_wr(stall_wr[0]),
+      .s_cpuif_req_stall_rd(stall_rd[0]),
+      .s_cpuif_rd_ack      (rd_ack[0]),
+      .s_cpuif_rd_err      (rd_err[0]),
+      .s_cpuif_rd_data     (rd_data[31:0]),
+      .s_cpuif_wr_ack      (wr_ack[0]),
+      .s_cpuif_wr_err      (wr_err[0]),
+      .hwif_in             (csr_in),
+      .hwif_out            (hwif_out)
   );
 
   hft_order_csr u_ocsr (
-      .clk           (clk),
-      .rst           (rst),
-      .s_axil_awready(awready[1]),
-      .s_axil_awvalid(awvalid[1]),
-      .s_axil_awaddr (awaddr),
-      .s_axil_awprot (awprot),
-      .s_axil_wready (wready[1]),
-      .s_axil_wvalid (wvalid[1]),
-      .s_axil_wdata  (wdata),
-      .s_axil_wstrb  (wstrb),
-      .s_axil_bready (bready[1]),
-      .s_axil_bvalid (bvalid[1]),
-      .s_axil_bresp  (bresp[3:2]),
-      .s_axil_arready(arready[1]),
-      .s_axil_arvalid(arvalid[1]),
-      .s_axil_araddr (araddr),
-      .s_axil_arprot (arprot),
-      .s_axil_rready (rready[1]),
-      .s_axil_rvalid (rvalid[1]),
-      .s_axil_rdata  (rdata[63:32]),
-      .s_axil_rresp  (rresp[3:2]),
-      .hwif_in       (ohwif_in),
-      .hwif_out      (ohwif_out)
+      .clk                 (clk),
+      .rst                 (rst),
+      .s_cpuif_req         (req[1]),
+      .s_cpuif_req_is_wr   (req_is_wr),
+      .s_cpuif_addr        (addr),
+      .s_cpuif_wr_data     (wr_data),
+      .s_cpuif_wr_biten    (wr_biten),
+      .s_cpuif_req_stall_wr(stall_wr[1]),
+      .s_cpuif_req_stall_rd(stall_rd[1]),
+      .s_cpuif_rd_ack      (rd_ack[1]),
+      .s_cpuif_rd_err      (rd_err[1]),
+      .s_cpuif_rd_data     (rd_data[63:32]),
+      .s_cpuif_wr_ack      (wr_ack[1]),
+      .s_cpuif_wr_err      (wr_err[1]),
+      .hwif_in             (ohwif_in),
+      .hwif_out            (ohwif_out)
   );
 endmodule

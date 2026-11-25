@@ -238,12 +238,13 @@ AXIS_VIOLATIONS = {
 
 ROUTE_TB = ["firmware/tb/sva/route_props.sv", "firmware/tb/sv/tb_route_props.sv"]
 ROUTE_VIOLATIONS = {
-    "a_route_aw": (1, "a write went to the slave its address is not routed to"),
-    "a_route_ar": (2, "a read went to the slave its address is not routed to"),
-    "a_one_slave": (3, "requests to both slaves in one cycle"),
-    "a_switch_drained": (4, "a request went to the other slave while accesses were in flight"),
-    "a_resp_owned": (5, "a response from a slave that has no access in flight"),
-    "a_m0_win_quiet": (6, "m0 got a request for an address in the windows"),
+    "a_route_wr": (1, "a write went to the block its address is not routed to"),
+    "a_route_rd": (2, "a read went to the block its address is not routed to"),
+    "a_one_slave": (3, "requests to both blocks in one cycle"),
+    "a_switch_drained": (4, "a request went to the other block while accesses were in flight"),
+    "a_resp_owned": (5, "a response from a block that has no access in flight"),
+    "a_m0_win_quiet": (6, "block 0 got a request for an address in the windows"),
+    "a_stall_hold": (7, "a stalled request dropped or changed before it was taken"),
 }
 
 AXIL_TB = ["firmware/tb/sva/axil_props.sv", "firmware/tb/sv/tb_axil_props.sv"]

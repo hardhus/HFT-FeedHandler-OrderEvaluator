@@ -25,7 +25,7 @@ F7 plans (audit 09, 10, 11, 12, 13, 14); this file is the contract.
 | `mold_stats` | Feed counters: one per packet status, plus messages, duplicate, oversize and gap counts (64 bit) | F3 |
 | `itch_stats` | ITCH counters of committed messages: one per class and one per outcome (64 bit) | F4 |
 | `hft_csr_wrap` | `hft_csr` plus the transfers between host and net clock: atomic NET and FEED commits (ITCH_CTRL in FEED), feed resync, symbol bitmap access, counter snapshot, RING block and ring counters, `cfg_epoch`; the order path's command channel, mailbox FIFO, kill and tx_en | F5, F3, F4, F6, F7 |
-| `hft_csr_regs` | Both register blocks behind one AXI4-Lite port: `axil_route2` sends the RISK, STRATEGY and TX windows to `hft_order_csr` | F7 |
+| `hft_csr_regs` | Both register blocks behind one AXI4-Lite port: `axil_cpuif2` sends the RISK, STRATEGY and TX windows to `hft_order_csr` (passthrough interfaces, request from flops, A40) | F7 |
 | `strategy_engine` | 8 host-programmed rules on ITCH A, F and P messages; an order fired by a message leaves only when its packet is accepted | F7 |
 | `risk_check` | The single pre-trade gate for hardware and host orders (kill, tx_en, exchange validity, locate allow bitmap, quantity, notional, budget, token bucket, TX queue, ring credit), the TX queue and the UserRefNum counter | F7 |
 | `order_tx_builder` | One order to one 92-byte frame: the host's Ethernet/IPv4/UDP template, SoupBinTCP `U`, OUCH 5.0 Enter Order; `ORDER_SENT` at the first beat | F7 |
@@ -817,7 +817,7 @@ they differ from a fresh `just gen`. The blocks are listed in [`filelists/csr.f`
 - AW and W are accepted in any order and stored; every accepted request gets exactly one response, in order,
   also while `bready`/`rready` are held low (legacy K5–K8).
 - Read latency includes one register stage inside the read mux (`--rt-read-fanin`, for timing).
-- Two register blocks behind one port (F7, decision 41): `hft_csr_regs`' router `axil_route2` sends accesses to RISK
+- Two register blocks behind one port (F7, decision 41): `hft_csr_regs`' bridge `axil_cpuif2` sends accesses to RISK
   (`0x0A00`–`0x0BFF`), STRATEGY (`0x1000`–`0x1FFF`) and TX (`0x2000`–`0x2FFF`) to `hft_order_csr` and the rest to
   `hft_csr`; each answers `SLVERR` for its own unmapped addresses. +1 `host_clk` cycle per access; accesses to one
   block overlap, a switch to the other waits until every earlier access is answered (decision 43), so responses

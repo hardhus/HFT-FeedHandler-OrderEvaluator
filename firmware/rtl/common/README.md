@@ -17,7 +17,7 @@ The CDC rules that go with these blocks are in [`CODING_STYLE.md`](../../CODING_
 | `cdc_async_fifo` | Gray-pointer async FIFO, FWFT, XPM_FIFO_ASYNC port names | Streams between domains: descriptor FIFO (net → host), order mailbox (host → net) |
 | `axis_register` | Forward AXI-Stream register (`tvalid`/payload registered) | Breaking long forward data paths |
 | `axis_skid_buffer` | AXI-Stream register slice, both directions registered | Module boundaries where `tready` must not be combinational |
-| `axil_route2` | 1:2 AXI4-Lite address router: skid buffer on AW, W and AR (ready from a flop), the target from `WIN_BASE`/`WIN_MASK` windows; accesses to one slave overlap, a switch to the other waits until every earlier access is answered, so responses stay in request order | Splitting a register map over two register blocks (F7 `hft_csr_regs`) |
+| `axil_cpuif2` | AXI4-Lite slave routed to two PeakRDL-regblock passthrough interfaces: skid buffer on AW, W and AR (ready from a flop), the target from `WIN_BASE`/`WIN_MASK` windows, the request to the blocks from flops; accesses to one block overlap, a switch to the other waits until every earlier access is answered, so responses stay in request order; a `DEPTH`-entry response buffer | Splitting a register map over two register blocks (F7 `hft_csr_regs`, A40) |
 
 **Which CDC block?** A level that may be sampled late and is held for more than 2 destination clock periods →
 `sync_bit`. A single event or a multi-bit value that changes rarely and must arrive whole → `cdc_handshake`. A stream of values, one per cycle → `cdc_async_fifo`. There is no CDC on the
@@ -33,7 +33,7 @@ tick-to-trade path; these blocks only affect the host, config and counter paths.
 | `cdc_async_fifo` | `WIDTH=64`, `DEPTH_LOG2=4` (≥ 4, both implementations), `SYNC_STAGES=2`, `IMPL="portable"`, `COMMIT=0`, `WR_COUNT=0` | `wr_clk` (`rst`, `wr_*`, `full`, `overflow`, `wr_rst_busy`, `wr_count`), `rd_clk` (`rd_*`, `dout`, `empty`, `underflow`, `rd_rst_busy`) | write → `!empty` ≤ `SYNC_STAGES+3` rd cycles | 1 word/cycle per side (≥ 95 % of the slower clock) for `SYNC_STAGES` ≤ 3; this is why `DEPTH_LOG2` ≥ 4: a shallower FIFO is shorter than the pointer round trip | `rst` synchronous to `wr_clk`, busy handshake (below) |
 | `axis_register` | `DATA_W=64` (multiple of 8), `USER_W=1` | `clk` | 1 cycle | 1 beat/cycle | `rst` sync (control only) |
 | `axis_skid_buffer` | `DATA_W=64` (multiple of 8), `USER_W=1` | `clk` | 1 cycle | 1 beat/cycle | `rst` sync (control only) |
-| `axil_route2` | `ADDR_W=16`, `DATA_W=32`, `N_WIN=1`, `WIN_BASE`, `WIN_MASK` (an address in any window goes to `m1`) | `clk` | +1 cycle per access | back to back to one slave; read before write, but a write first after a read when AW and W are both waiting (regblock's order) | `rst` sync; a request in flight at reset gets no response |
+| `axil_cpuif2` | `ADDR_W=16`, `DATA_W=32`, `N_WIN=1`, `WIN_BASE`, `WIN_MASK` (an address in any window goes to block 1), `DEPTH=4` (accesses unanswered at most) | `clk` | 2 cycles handshake → block request, 1 cycle block ack → response | back to back to one block; read before write, but a write first after a read when AW and W are both waiting | `rst` sync; a request in flight at reset gets no response |
 
 AXI-Stream ports on both AXIS blocks: `s_axis_{tdata,tkeep,tlast,tuser,tvalid,tready}` and the same with `m_axis_`.
 Unused fields are tied off by the caller and trimmed by synthesis. In `axis_register`, `s_axis_tready` is
@@ -108,7 +108,7 @@ sync_bit #(.STAGES(2)) u_kill_sync (.clk(net_clk), .d(host_kill), .q(net_kill));
 | `axis_register`, `axis_skid_buffer` | `test_axis_pipeline.py` (+ `axis_props` SVA) | 2 modules × DATA_W {8, 64} |
 | `cdc_handshake` | `test_cdc_handshake.py` | jitter × 4 clock profiles |
 | `cdc_async_fifo` | `test_cdc_async_fifo.py` (+ `fifo_props` SVA), `test_cdc_fifo_equiv.py` (Verilator), `just xsim-test` (XSIM, portable and XPM) | DEPTH_LOG2 {2, 4} × jitter × 4 clock profiles; equivalence seeds 1–3; `WR_COUNT=1` (`FillWatch`, `tc_wr_count_bound`) |
-| `axil_route2` | through `hft_csr_regs` in `test_hft_csr.py` (whole map, window edges and gaps), `route_props` SVA with its own TB in `test_sva_checkers.py` | 6 assertions, each violation firing only its own |
+| `axil_cpuif2` | through `hft_csr_regs` in `test_hft_csr.py` (whole map, window edges and gaps), `route_props` SVA (routing and the regblock CPUIF protocol) with its own TB in `test_sva_checkers.py` | 7 assertions, each violation firing only its own |
 
 Clock profiles: `same` (6.4/6.4 ns), `net2host` (6.4 → 4.0 ns), `host2net` (4.0 → 6.4 ns), `jitter` (both ±20%).
 Jitter mode (`HFT_SIM_CDC_JITTER`) makes `sync_bit` capture recently changed bits one cycle late at random, which

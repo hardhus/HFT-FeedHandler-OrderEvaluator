@@ -4,14 +4,6 @@
 // Generated CSR blocks hft_csr and hft_order_csr (firmware/rtl/core/gen, PeakRDL-regblock, same options):
 // waived per rule and message, for both files alike,
 // never edited by hand. Each waiver names what the generator emits and why it is harmless.
-// AXI4-Lite AxPROT is part of the port list; the register block grants every access.
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_?rprot'"
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Signal is not used: 's_axil_?rprot'"
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Signal is not used: 's_axil_awprot'"
-// Registers are 32-bit aligned: the two byte-address bits are not decoded.
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
-lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_order_csr.sv" -match "*Bits of signal are not used: 'axil_??addr'?1:0?"
 // Read fan-in retiming (--rt-read-fanin): stage 1 groups the read mux by the address high bits,
 // stage 2 selects by the low bits, so each stage uses only its part of the address.
 lint_off -rule UNUSEDSIGNAL -file "*/rtl/core/gen/hft_csr.sv" -match "*Bits of function variable are not used: 'addr'*"
