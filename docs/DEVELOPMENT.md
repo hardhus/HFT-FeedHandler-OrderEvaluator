@@ -324,7 +324,7 @@ Each run keeps its own Vivado log, `build/vivado/synth_<top>_<profile>_<part>[_<
 the full timing, utilization and CDC reports of each stage (`*_synth.rpt`, `*_place.rpt`, `*_route.rpt`) and the
 `synth.dcp` / `route.dcp` checkpoints are written as the stage ends, so a run that stops later (a tool crash in a long
 implementation) still leaves everything it reached; `HFT_STAGE` lines in the log mark the stages. `phys_opt_design`
-runs only when the routed WNS is between -0.5 ns and 0 (Vivado: it rarely helps below -0.5 ns, Physopt 32-745).
+runs when the routed WNS is negative (its reports are `*_physopt.rpt`); the gate uses the result.
 Cell counts and the LUTRAM rule of `cdc.tcl` cover both 7-series and UltraScale+ primitive names.
 The legacy top also synthesizes, but its port names are not in the port-to-clock map, so its CDC check is only partial:
 `just synth-ooc HFT_Top_Core net2host legacy.f`.

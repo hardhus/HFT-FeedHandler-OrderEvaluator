@@ -10,7 +10,7 @@
 #             (no board or pins needed) and gate on the routed timing instead of the synthesis
 #             estimate (unplaced wires), which is then printed as SYNTH_WNS
 # Reports: build/vivado/ooc/<top>_<profile>_<part>[_<generics>][_impl]/{utilization,timing_summary,cdc}.rpt (final),
-#   with impl also {timing_summary,utilization,cdc}_<stage>.rpt as each stage (synth, place, route) ends and
+#   with impl also {timing_summary,utilization,cdc}_<stage>.rpt as each stage (synth, place, route, physopt) ends and
 #   synth.dcp, route.dcp
 #   Log (justfile): build/vivado/synth_<top>_<profile>_<part>[_<generics>][_impl].log
 # Exits 1 if setup/hold slack is negative, report_cdc has Critical/Unsafe findings or a ram_style memory was not
@@ -159,13 +159,13 @@ if {$impl} {
   set route_wns [hft_stage route 1]
   # Post-route physical optimization when the routed design misses timing (A40, decision 44). After placement the
   # estimate was +0.501 ns and phys_opt_design did nothing; the CSR read path on the A7 at 125 MHz missed by
-  # 0.100 ns only after routing (79 % routing delay). A design that meets timing is left as routed. Below
-  # -0.5 ns it is skipped: Vivado reports it as unlikely to help there (Physopt 32-745), and the run fails anyway.
-  if {$route_wns ne "" && $route_wns < 0 && $route_wns >= -0.5} {
+  # 0.100 ns only after routing (79 % routing delay). A design that meets timing is left as routed. It runs at any
+  # negative WNS: F8 S2's A7 run at -0.530 ns gained 0.142 ns from it (a -0.5 ns cutoff had skipped it); a crash in
+  # it still leaves the route stage's reports and route.dcp.
+  if {$route_wns ne "" && $route_wns < 0} {
     phys_opt_design
     report_route_status -file [file join $out route_status.rpt]
-  } elseif {$route_wns ne "" && $route_wns < -0.5} {
-    puts "HFT_STAGE: $tag phys_opt_design skipped (routed WNS $route_wns < -0.5)"
+    hft_stage physopt
   }
   set r2r [list -from [all_registers -clock_pins] -to [all_registers -data_pins]]
 }
