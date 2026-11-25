@@ -170,6 +170,7 @@ module risk_check
 
   // ===================== Stage 0: arbiter, stateless checks =====================
   logic drain;  // cancelled orders still to write out
+  logic drain_q;  // = held_q != 0 (F8 S2: the compare was at the head of s_host_ready, on the A7 net_clk paths)
   logic take_host, in_valid;
   rorder_t in_ord;
   logic    in_inv;
@@ -437,7 +438,7 @@ module risk_check
   logic handover, drain_out, rej_dec;
   logic [QP-1:0] cancelled;  // live orders this cycle's cancel takes
 
-  assign drain      = held_q != '0;
+  assign drain      = drain_q;
   assign m_tx_valid = !drain && live_q != '0;
   assign handover   = m_tx_valid && m_tx_ready;
   assign rej_dec    = v3_q && reason != RISK_NONE && credits_q != '0;  // written: it has a credit
@@ -590,6 +591,7 @@ module risk_check
       budget_zero_q <= 1'b1;
       refs_zero_q   <= 1'b0;
       full_q        <= 1'b0;
+      drain_q       <= 1'b0;
     end else begin
       // an accept leaves the effective count - 1; it needs the count != 0
       tok_nz_q      <= cfg_lim_wr ? cfg_rate_burst != '0 : accept ? eff_gt1 : eff_nz;
@@ -598,6 +600,9 @@ module risk_check
       // live 8 stays 8 without a handover (full refuses the accept); live 7 becomes 8 with an accept and no
       // handover; a cancel empties it
       full_q        <= !cancel && !handover && (full_q || (live_q == QP'(QD - 1) && accept));
+      // held next = held - drain_out + cancelled: nonzero with a cancel that takes an order, with 2 or more held (one
+      // written out at most), or with 1 held that a reject keeps (drain_out = drain && !rej_dec)
+      drain_q       <= cancelled != '0 || held_q[QP-1:1] != '0 || (drain_q && rej_dec);
     end
   end
 

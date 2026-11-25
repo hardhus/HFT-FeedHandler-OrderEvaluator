@@ -209,6 +209,7 @@ bind risk_check risk_props #(
     .ref_next(ref_next_q),
     .credits(credits_q),
     .flags({
+      drain_q,
       burst_gt1_q,
       refill_gt1_q,
       full_q,
@@ -222,6 +223,7 @@ bind risk_check risk_props #(
       notional_gt_q
     }),
     .defs({
+      held_q != '0,
       rate_burst_q > 32'd1,
       rate_refill_q > 32'd1,
       live_q == QP'(QD),

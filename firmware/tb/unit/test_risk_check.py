@@ -72,7 +72,7 @@ BINS = [
     "userref_ignored_live", "userref_ignored_queue", "userref_ignored_zero", "refs_exhausted",
     "lookup_same_cycle_write", "invalid_host_clordid", "kill_masks_invalid", "second_cancel_while_draining",
     "accept_while_draining", "rej_dropped", "accept_last_credit", "last_budget_add_zero", "last_budget_add",
-    "token_tick_one_plus_one", "token_tick_refill_only",
+    "token_tick_one_plus_one", "token_tick_refill_only", "drain_last_preempted",
 ]  # fmt: skip
 
 
@@ -214,6 +214,8 @@ class Env:
             rej = (reason, o, cts)
         elif rej is not None and held_before:
             self.hit("drain_preempted")
+            if held_before == 1 and not new_held:
+                self.hit("drain_last_preempted")  # the last held order stays (risk_check drain_q, F8 S2)
         tx.held.extend(new_held)
         e.rej = rej
         if rej is not None:
@@ -814,6 +816,17 @@ async def every_bin(e: Env) -> None:
     for _ in range(64):
         await e.step(hw_order=hw())
     await e.drain()
+    # A reject decided while exactly one cancelled order is held keeps it (drain_last_preempted): a cancel holds
+    # two, and one invalid order is swept over the steps around it so that its reject lands on the held-1 cycle.
+    await e.step(limits=OPEN)
+    for k in range(-3, 3):
+        for q in range(1, 3):
+            await e.step(hw_order=hw(qty=q), ready=False)
+        await e.idle(3, ready=False)
+        for t in range(-3, 4):
+            await e.step(hw_order=hw(qty=0) if t == k else None, kill=True if t == 0 else None, ready=False)
+        await e.drain()
+        await e.step(kill=False)
 
 
 # ---------------------------------------------------------------- pytest

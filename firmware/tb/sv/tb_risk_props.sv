@@ -21,8 +21,8 @@ module tb_risk_props;
   logic          m_tx_valid = 1'b0;
   logic [  32:0] ref_next = 33'd1;
   logic [   4:0] credits = 5'd16;
-  logic [  10:0] flags = 11'b000_0010_1010;
-  logic [  10:0] defs = 11'b000_0010_1010;
+  logic [  11:0] flags = 12'b0000_0010_1010;
+  logic [  11:0] defs = 12'b0000_0010_1010;
 
   always begin
     #3.2 clk = ~clk;
@@ -77,8 +77,8 @@ module tb_risk_props;
       m_tx_valid = 1'b0;
       ref_next   = 33'd1;
       credits    = 5'd16;
-      flags      = 11'b000_0010_1010;
-      defs       = 11'b000_0010_1010;
+      flags      = 12'b0000_0010_1010;
+      defs       = 12'b0000_0010_1010;
     end
   endtask
 
@@ -121,7 +121,7 @@ module tb_risk_props;
     live       = '0;
     held       = v(6) ? 5'd9 : 5'd1;
     credits    = v(10) ? 5'd17 : 5'd16;
-    defs       = v(11) ? 11'b001_0010_1010 : 11'b000_0010_1010;
+    defs       = v(11) ? 12'b0001_0010_1010 : 12'b0000_0010_1010;
     m_tx_valid = v(7);
     idle();
     @(negedge clk);
