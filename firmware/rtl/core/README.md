@@ -364,6 +364,7 @@ downstream. The 23 type codes are in `hft_pkg` (`ITCH_T_*`, legacy K12) and are 
 | `m_ev_raw` | 512 | The input vector, unchanged (every class; the host decodes the classes the hardware does not) |
 | `m_res_valid`, `m_res_class`, `m_res_outcome` | 1, 3, 2 | One result per input message (`itch_class_e`, `itch_outcome_e`), for the counters |
 | `m_pkt_*` | as `s_pkt_*` | The packet events, with the messages' latency |
+| `m_pkt_gap_nz` | 1 | `m_pkt_gap != 0`, a register beside it: event_packer's GAP decision does not wait for the 64-bit test |
 
 ### Classes and the pass rule
 

@@ -93,6 +93,8 @@ class Cmd:
 def random_pkt() -> dict[str, int]:
     p = {k: random.getrandbits(w) for k, w in PKT_WIDTHS.items()}
     p["status"] = random.choice(list(MoldStatus)).value
+    # m_pkt_gap_nz: no gap, one bit anywhere (a test of part of the gap fails), or any value
+    p["gap"] = random.choice((0, 1 << random.randrange(64), p["gap"]))
     return p
 
 
@@ -314,6 +316,7 @@ class Dec:
             assert self.cycle - cyc == LATENCY, f"packet event {self.cycle - cyc} cycles after the input"
             got = {k: int(getattr(d, f"m_pkt_{k}").value) for k in PKT_PORTS}
             assert got == p, f"packet event {got}, sent {p}"
+            assert int(d.m_pkt_gap_nz.value) == int(p["gap"] != 0), f"m_pkt_gap_nz for gap {p['gap']:#x}"
             if self.keep:
                 self.order.append((self.cycle, "pkt"))
         else:

@@ -9,6 +9,8 @@ module packer_props
     input logic                                 rst,
     input logic                                 s_ev_valid,
     input logic                                 s_pkt_valid,
+    input logic [                         63:0] s_pkt_gap,
+    input logic                                 s_pkt_gap_nz,
     input logic                                 pkt_accepted,
     input logic                                 s1_valid,
     input logic                                 fifo_wr_en,
@@ -57,6 +59,13 @@ module packer_props
   assert property (@(posedge clk) disable iff (rst || !armed) s_pkt_valid |-> !s_ev_valid)
   else begin
     $error("packer_props: a message in the cycle of a packet event");
+  end
+
+  // s_pkt_gap_nz is registered upstream (itch_decoder) and must equal the gap test it replaces.
+  a_gap_nz :
+  assert property (@(posedge clk) disable iff (rst || !armed) s_pkt_valid |-> s_pkt_gap_nz == (s_pkt_gap != '0))
+  else begin
+    $error("packer_props: s_pkt_gap_nz differs from s_pkt_gap != 0");
   end
 
   a_ev_after_pkt :

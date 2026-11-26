@@ -1,9 +1,10 @@
 // tb_packer_props: checks the packer_props checker itself. Drives its ports directly: a message, a write, an
-// accepted packet event and its commit 1 cycle later, then one with 2 entries and its commit 2 cycles
-// later, a rejected event and its rollback, an order entry taken, written and its credit given back (the
-// queue read address pick follows rp + s1_ord, with rp away from 0), a full queue. Every property's antecedent is hit, so a clean run proves the
-// checker quiet. With HFT_VIOLATE=<k> exactly one property is violated (numbers in test_sva_checkers.py);
-// its assertion must fire. Values are set after a falling edge and sampled at the next rising edge.
+// accepted packet event and its commit 1 cycle later, then one with a gap (only its top bit set) and 2 entries
+// and its commit 2 cycles later, a rejected event and its rollback, an order entry taken, written and its credit
+// given back (the queue read address pick follows rp + s1_ord, with rp away from 0), a full queue. Every
+// property's antecedent is hit, so a clean run proves the checker quiet. With HFT_VIOLATE=<k> exactly one
+// property is violated (numbers in test_sva_checkers.py); its assertion must fire. Values are set after a
+// falling edge and sampled at the next rising edge.
 `timescale 1ns / 1ps
 module tb_packer_props;
   import hft_pkg::*;
@@ -12,6 +13,8 @@ module tb_packer_props;
   logic                         rst = 1'b1;
   logic                         s_ev_valid = 1'b0;
   logic                         s_pkt_valid = 1'b0;
+  logic [                 63:0] s_pkt_gap = '0;
+  logic                         s_pkt_gap_nz = 1'b0;
   logic                         pkt_accepted = 1'b0;
   logic                         s1_valid = 1'b0;
   logic                         fifo_wr_en = 1'b0;
@@ -39,6 +42,8 @@ module tb_packer_props;
       .rst            (rst),
       .s_ev_valid     (s_ev_valid),
       .s_pkt_valid    (s_pkt_valid),
+      .s_pkt_gap      (s_pkt_gap),
+      .s_pkt_gap_nz   (s_pkt_gap_nz),
       .pkt_accepted   (pkt_accepted),
       .s1_valid       (s1_valid),
       .fifo_wr_en     (fifo_wr_en),
@@ -148,9 +153,13 @@ module tb_packer_props;
     @(negedge clk);
     s_pkt_valid  = 1'b1;
     pkt_accepted = 1'b1;
+    s_pkt_gap    = 64'h8000_0000_0000_0000;  // only the top bit: the whole gap is tested
+    s_pkt_gap_nz = !v(15);  // 15: a_gap_nz
     @(negedge clk);
     s_pkt_valid  = 1'b0;
     pkt_accepted = 1'b0;
+    s_pkt_gap    = '0;
+    s_pkt_gap_nz = 1'b0;
     s1_valid     = 1'b1;
     fifo_wr_en   = 1'b1;
     @(negedge clk);
