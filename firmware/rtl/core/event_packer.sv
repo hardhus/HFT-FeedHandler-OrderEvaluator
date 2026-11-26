@@ -297,7 +297,10 @@ module event_packer
 
   // ===================== Stage 0 -> 1: which entry =====================
   logic s1_valid, s1_commit, s1_rollback, s1_late;
-  logic [DESC_W-1:0] s1_din;
+  // An EOS entry has most descriptor bits 0, so synthesis would make eos_q a synchronous reset of those s1_din flops
+  // (fanout ~675 to R pins, whose setup is far longer than D on the A7: F8 S2 net_clk paths). EXTRACT_RESET = no
+  // keeps it in the D logic (UG912 EXTRACT_RESET; synchronous resets only).
+  (* extract_reset = "no" *) logic [DESC_W-1:0] s1_din;
 
   logic next_valid, next_commit, next_rollback, next_eos;
   logic [DESC_W-1:0] next_din;
