@@ -92,22 +92,34 @@ module eth_ip_udp_rx
   end
 
   // ---- header fields (datapath, no reset; each written only on its own beat) ----
-  logic [      47:0] dst_mac_q;
-  logic [      63:0] sof_ts_q;
-  logic              rx_en_q;
-  logic              eth_ok_q;  // EtherType is IPv4
-  logic              ver_ihl_ok_q;  // version 4, IHL 5
-  logic [      15:0] ip_len_q;
-  logic              frag_ok_q;  // MF = 0 and offset = 0
-  logic              proto_ok_q;  // protocol is UDP
-  logic [      31:0] src_ip_q;
-  logic [      15:0] dst_ip_hi_q;
-  logic [CSUM_W-1:0] csum_q;  // header words of beats 1..3
+  logic [47:0] dst_mac_q;
+  logic [63:0] sof_ts_q;
+  logic        rx_en_q;
+  logic        eth_ok_q;  // EtherType is IPv4
+  logic        ver_ihl_ok_q;  // version 4, IHL 5
+  logic [15:0] ip_len_q;
+  logic        frag_ok_q;  // MF = 0 and offset = 0
+  logic        proto_ok_q;  // protocol is UDP
+  logic [31:0] src_ip_q;
+  logic [15:0] dst_ip_hi_q;
 
-  // Sum of the four 16-bit words of one beat.
-  function automatic logic [17:0] sum4(input logic [63:0] d);
-    return 18'(be16(d, 0)) + 18'(be16(d, 2)) + 18'(be16(d, 4)) + 18'(be16(d, 6));
+  // Header words of beats 1..3 as two partial sums (lanes 0-3 and 4-7 of beats 2 and 3), each beat adding two
+  // words to each: three operands through a carry-save stage, so one carry chain per beat (timing, F8 S2: the
+  // four-word sum and the add were two chains in a row on the A7 net_clk paths). The total fits CSUM_W bits.
+  logic [CSUM_W-1:0] csum0_q, csum1_q;
+  function automatic logic [CSUM_W-1:0] add3(input logic [CSUM_W-1:0] a, input logic [CSUM_W-1:0] b,
+                                             input logic [CSUM_W-1:0] c);
+    logic [CSUM_W-2:0] maj;  // the carries, shifted one place up below
+    maj = (a[CSUM_W-2:0] & b[CSUM_W-2:0]) | (a[CSUM_W-2:0] & c[CSUM_W-2:0]) | (b[CSUM_W-2:0] & c[CSUM_W-2:0]);
+    return (a ^ b ^ c) + {maj, 1'b0};
   endfunction
+  logic [CSUM_W-1:0] csum0_n, csum1_n;  // each partial sum plus two words of this beat
+  assign csum0_n = add3(
+      csum0_q, CSUM_W'(be16(s_axis_rx_tdata, 0)), CSUM_W'(be16(s_axis_rx_tdata, 2))
+  );
+  assign csum1_n = add3(
+      csum1_q, CSUM_W'(be16(s_axis_rx_tdata, 4)), CSUM_W'(be16(s_axis_rx_tdata, 6))
+  );
 
   always_ff @(posedge clk) begin
     if (sof) begin
@@ -118,18 +130,21 @@ module eth_ip_udp_rx
     if (at_beat[1]) begin
       eth_ok_q     <= be16(s_axis_rx_tdata, 4) == ETHERTYPE_IPV4;
       ver_ihl_ok_q <= s_axis_rx_tdata[8*6+:8] == IPV4_VER_IHL;
-      csum_q       <= CSUM_W'(be16(s_axis_rx_tdata, 6));  // loaded: no sum carried between frames
+      csum0_q      <= CSUM_W'(be16(s_axis_rx_tdata, 6));  // loaded: no sum carried between frames
+      csum1_q      <= '0;
     end
     if (at_beat[2]) begin
       ip_len_q   <= be16(s_axis_rx_tdata, 0);
       frag_ok_q  <= (be16(s_axis_rx_tdata, 4) & FRAG_MASK) == '0;
       proto_ok_q <= s_axis_rx_tdata[8*7+:8] == IP_PROTO_UDP;
-      csum_q     <= csum_q + CSUM_W'(sum4(s_axis_rx_tdata));
+      csum0_q    <= csum0_n;
+      csum1_q    <= csum1_n;
     end
     if (at_beat[3]) begin
       src_ip_q    <= be32(s_axis_rx_tdata, 2);
       dst_ip_hi_q <= be16(s_axis_rx_tdata, 6);
-      csum_q      <= csum_q + CSUM_W'(sum4(s_axis_rx_tdata));
+      csum0_q     <= csum0_n;
+      csum1_q     <= csum1_n;
     end
   end
 
@@ -208,7 +223,7 @@ module eth_ip_udp_rx
     if (stage_a) begin
       hit_q      <= hit_a;
       mac_ok_q   <= mac_ok_a;
-      csum_b_q   <= csum_q + CSUM_W'(be16(s_axis_rx_tdata, 0));
+      csum_b_q   <= add3(csum0_q, csum1_q, CSUM_W'(be16(s_axis_rx_tdata, 0)));
       len_ok_q   <= 17'(udp_len_a) + 17'd20 == 17'(ip_len_q) && udp_len_a > 16'd8;
       dst_ip_q   <= dst_ip_a;
       dst_port_q <= dst_port_a;
