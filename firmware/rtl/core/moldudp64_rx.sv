@@ -173,6 +173,7 @@ module moldudp64_rx
   logic        hdr2_d;
   logic [16:0] dup_n_q;
   logic        old_nb_q;
+  logic [63:0] e_ok_q;  // S + C: E after this packet if it is a normal one (accepted: bi_q == C)
 
   always_ff @(posedge clk) begin
     hdr2_d <= hdr2;
@@ -183,6 +184,7 @@ module moldudp64_rx
     if (hdr2_d) begin
       dup_n_q  <= !d_q[63] ? '0 : (nd_q[63:16] != '0) ? 17'h10000 : nd_q[16:0];
       old_nb_q <= d_q[63] && (nd_q[63:16] != '0 || nd_q[16:0] >= {1'b0, cnt_q});
+      e_ok_q   <= seq_q + 64'(cnt_q);
     end
   end
 
@@ -414,7 +416,7 @@ module moldudp64_rx
   assign dup     = synced_q && {1'b0, end_idx} < dup_n_q;
 
   // ---- packet status and counts ----
-  // On s1_pkt the packet's d_q, dup_n_q and old_nb_q are ready: the header beat is at least
+  // On s1_pkt the packet's d_q, dup_n_q, old_nb_q and e_ok_q are ready: the header beat is at least
   // one cycle before tlast for a packet with blocks (two before its stage 1), and a heartbeat
   // or end of session only needs d_q.
   logic [15:0] msgs_q, over_q, dups_q;  // per packet: output, oversize, duplicate messages
@@ -471,8 +473,9 @@ module moldudp64_rx
   end
 
   // ---- feed state: updated on the accounting cycle of an accepted packet (s1_pkt) ----
-  // E = S + C after a normal packet, S after a heartbeat or end of session: both are S + the
-  // number of blocks decoded (bi_q; 0 without blocks).
+  // E = S + C after a normal packet, S after a heartbeat or end of session. S + C is e_ok_q, summed
+  // in the cycle after the header beat (accepted means every block was decoded: bi_q == C), so this
+  // edge only selects.
   // Resync, like a double-buffered control register: a pulse after a packet's first beat and up
   // to its s1_pkt waits and is applied after that packet's update; a pulse between packets or
   // on a first beat is applied at once (before that packet, whose config is sampled there).
@@ -500,7 +503,7 @@ module moldudp64_rx
         flight_q <= 1'b0;
       end
       if (s1_pkt && accepted) begin
-        e_q      <= seq_q + 64'(bi_q);
+        e_q      <= hbeos ? seq_q : e_ok_q;
         synced_q <= 1'b1;
         if (status == MOLD_EOS) begin
           eos_q <= 1'b1;
