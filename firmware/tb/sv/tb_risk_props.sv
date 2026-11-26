@@ -1,7 +1,8 @@
 // tb_risk_props: checks the risk_props checker itself. Drives its ports directly: an accept with the path open,
-// its handover, an accept and its cancel, a drain. Every property's antecedent is hit, so a clean run proves
-// the checker quiet. With HFT_VIOLATE=<k> exactly one property is violated (numbers in test_sva_checkers.py);
-// its assertion must fire. Values are set after a falling edge and sampled at the next rising edge.
+// its handover, an accept and its cancel, a drain, a UserRefNum write with the queue empty. Every property's
+// antecedent is hit, so a clean run proves the checker quiet. With HFT_VIOLATE=<k> exactly one property is
+// violated (numbers in test_sva_checkers.py); its assertion must fire. Values are set after a falling edge and
+// sampled at the next rising edge.
 `timescale 1ns / 1ps
 module tb_risk_props;
   localparam int unsigned QD = 8;
@@ -23,6 +24,7 @@ module tb_risk_props;
   logic [   4:0] credits = 5'd16;
   logic [  14:0] flags = 15'b000_0000_0010_1010;
   logic [  14:0] defs = 15'b000_0000_0010_1010;
+  logic          uwr = 1'b0;
 
   always begin
     #3.2 clk = ~clk;
@@ -48,6 +50,7 @@ module tb_risk_props;
       .credits     (credits),
       .flags       (flags),
       .defs        (defs),
+      .uwr         (uwr),
       .lim_wr      (1'b0),
       .prod2       (64'd0),
       .max_notional(64'd0)
@@ -78,6 +81,7 @@ module tb_risk_props;
       ref_next   = 33'd1;
       credits    = 5'd16;
       flags      = 15'b000_0000_0010_1010;
+      uwr        = 1'b0;
       defs       = 15'b000_0000_0010_1010;
     end
   endtask
@@ -123,6 +127,11 @@ module tb_risk_props;
     credits    = v(10) ? 5'd17 : 5'd16;
     defs       = v(11) ? 15'b000_0001_0010_1010 : 15'b000_0000_0010_1010;
     m_tx_valid = v(7);
+    idle();
+    // A UserRefNum write with the queue empty (12: with an order live).
+    @(negedge clk);
+    uwr  = 1'b1;
+    live = v(12) ? 5'd1 : 5'd0;
     idle();
     @(negedge clk);
     handover = v(5);

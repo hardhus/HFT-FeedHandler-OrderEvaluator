@@ -417,26 +417,21 @@ module risk_check
   logic uwr;  // a TX_USERREF_NEXT write takes effect
   logic refs_z, refs_o;  // x + l == 2^32, == 2^32 - 1
   assign uwr = cmd_userref_wr && userref_ok;
+  // x = ref_next_q (+ 1 with a handover), as without a write. A write takes effect only with nothing queued
+  // (userref_ok: wr_q == rd_q; risk_props a_uwr_empty), so with live 0 and no handover: x = the value (< 2^32), l = 0
+  // and refs_z = 0, applied last (timing, F8 S2: the value's != 0 test in uwr was at the head of the A7 refs_zero_q
+  // path). refs_o is read only with an accept, which a write (only while killed) never meets.
+  logic refs_z_r;
   always_comb begin
-    if (cancel) begin
-      if (handover) begin  // x = ref_next_q + 1, l = 0
-        refs_z = ref_next_q == 33'hFFFF_FFFF;
-        refs_o = ref_next_q == 33'hFFFF_FFFE;
-      end else if (uwr) begin  // x = the value (< 2^32), l = 0
-        refs_z = 1'b0;
-        refs_o = cmd_userref_value == 32'hFFFF_FFFF;
-      end else begin  // x = ref_next_q, l = 0
-        refs_z = ref_next_q == 33'h1_0000_0000;
-        refs_o = ref_next_q == 33'hFFFF_FFFF;
-      end
-    end else if (handover || !uwr) begin  // x + l = ref_next_q + live_q
-      refs_z = sum_is_top(ref_next_q, live_q);
-      refs_o = sum_is_max(ref_next_q, live_q);
-    end else begin  // x = the value, l = live_q
-      refs_z = sum_is_top(33'(cmd_userref_value), live_q);
-      refs_o = sum_is_max(33'(cmd_userref_value), live_q);
+    if (cancel) begin  // l = 0
+      refs_z_r = handover ? ref_next_q == 33'hFFFF_FFFF : ref_next_q == 33'h1_0000_0000;
+      refs_o   = handover ? ref_next_q == 33'hFFFF_FFFE : ref_next_q == 33'hFFFF_FFFF;
+    end else begin  // x + l = ref_next_q + live_q (a handover moves one from live to ref_next)
+      refs_z_r = sum_is_top(ref_next_q, live_q);
+      refs_o   = sum_is_max(ref_next_q, live_q);
     end
   end
+  assign refs_z = refs_z_r && !uwr;
 
   // ===================== Queue =====================
   rorder_t        q_mem [QM];

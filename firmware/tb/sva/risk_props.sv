@@ -25,6 +25,7 @@ module risk_props #(
     input logic [CW-1:0] credits,
     input logic [14:0] flags,  // risk_check's precomputed decision predicates
     input logic [14:0] defs,  // their definitions, from the state (defs[5] without the commit cycle)
+    input logic uwr,  // a TX_USERREF_NEXT write takes effect
     input logic lim_wr,  // cfg_lim_wr or rst: the next cycle has no refill tick
     input logic [63:0] prod2,  // qty * price one stage before the decision
     input logic [63:0] max_notional
@@ -111,6 +112,13 @@ module risk_props #(
   always @(posedge clk) begin
     lim_wr_d <= lim_wr;
     prod_d   <= prod2;
+  end
+
+  // risk_check forms refs_zero_q next with a write as 0 and selects it last (F8 S2): that needs an empty queue.
+  a_uwr_empty :
+  assert property (@(posedge clk) disable iff (rst || !armed) uwr |-> held == '0 && live == '0 && !handover)
+  else begin
+    $error("risk_props: a UserRefNum write took effect with orders queued");
   end
 
   a_flags :

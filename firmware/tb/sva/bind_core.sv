@@ -242,6 +242,7 @@ bind risk_check risk_props #(
       o3_q.qty > max_qty_q,
       1'b0  // notional: risk_props compares prod2_q one cycle later
     }),
+    .uwr(uwr),
     .lim_wr(cfg_lim_wr || rst),
     .prod2(prod2_q),
     .max_notional(max_notional_q)

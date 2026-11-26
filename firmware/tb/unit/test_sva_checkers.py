@@ -188,6 +188,7 @@ RISK_VIOLATIONS = {
     "a_accept_has_credit": (9, "an order accepted with no ring credit"),
     "a_credits_bounded": (10, "more ring credits than the packer's order queue"),
     "a_flags": (11, "a precomputed decision flag differs from its definition"),
+    "a_uwr_empty": (12, "a UserRefNum write took effect with orders queued"),
 }
 
 AXI_WR_TB = ["firmware/tb/sva/axi_wr_props.sv", "firmware/tb/sv/tb_axi_wr_props.sv"]
