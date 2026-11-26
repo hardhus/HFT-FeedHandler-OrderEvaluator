@@ -109,6 +109,7 @@ module moldudp64_rx
   logic [47:0] seq_hi_q;  // seq[0..5] from beat 1
   logic [63:0] seq_q, seq_now, pkt_seq;
   logic [15:0] cnt_q, cnt_now, pkt_cnt;
+  logic hb_q, eosc_q;  // cnt_q == 0, cnt_q == MOLD_COUNT_EOS: the status compares, off s1_pkt
 
   assign seq_now = {seq_hi_q, lane[0], lane[1]};
   assign cnt_now = {lane[2], lane[3]};
@@ -120,8 +121,10 @@ module moldudp64_rx
       seq_hi_q <= {lane[2], lane[3], lane[4], lane[5], lane[6], lane[7]};
     end
     if (hdr2) begin
-      seq_q <= seq_now;
-      cnt_q <= cnt_now;
+      seq_q  <= seq_now;
+      cnt_q  <= cnt_now;
+      hb_q   <= cnt_now == '0;
+      eosc_q <= cnt_now == MOLD_COUNT_EOS;
     end
   end
 
@@ -425,7 +428,8 @@ module moldudp64_rx
   mold_status_e status;
   logic accepted, checked;
 
-  assign hbeos = s1_pkt_cnt == '0 || s1_pkt_cnt == MOLD_COUNT_EOS;
+  // s1_pkt_cnt is cnt_q (both load pkt_cnt), so hb_q and eosc_q are its compares, made on hdr2
+  assign hbeos = hb_q || eosc_q;
   // the whole packet is below E: a heartbeat or end of session with S < E, or S + C <= E
   assign old   = synced_q && (hbeos ? d_q[63] : old_nb_q);
   always_comb begin
@@ -445,9 +449,9 @@ module moldudp64_rx
       status = MOLD_MALFORMED;
     end else if (old) begin
       status = MOLD_DUP;
-    end else if (s1_pkt_cnt == '0) begin
+    end else if (hb_q) begin
       status = MOLD_HEARTBEAT;
-    end else if (s1_pkt_cnt == MOLD_COUNT_EOS) begin
+    end else if (eosc_q) begin
       status = MOLD_EOS;
     end else begin
       status = MOLD_OK;
