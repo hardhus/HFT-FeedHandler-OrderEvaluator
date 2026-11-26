@@ -115,17 +115,31 @@ module strategy_engine
   // the hits (hit_q); the fire is formed from hit_q after them (fire_d), so fired = fired_b_q | fire_d and
   // doa = doa_b_q | fire_d equal the state with the fire, one cycle on, as when the fire was registered.
   logic [N-1:0] fired_b_q, doa_b_q, hit_q, fire_d, fired_e, doa_e;
-  logic        kill_d_q;  // ctl_kill of the previous cycle  // doa: disarm on accept (decision 18)
+  logic kill_d_q;  // ctl_kill of the previous cycle  // doa: disarm on accept (decision 18)
 
   // Static error of the rule being written, and its threshold + offset.
-  logic [33:0] wr_sum;
-  logic        wr_err;
+  // The range test of threshold + offset (1 ..= OUCH_PRICE_LIMIT_MAX) is two sign bits of threshold + offset - k,
+  // each a three-operand sum through a carry-save stage, so one carry chain (timing, F8 S2: the sum and then two
+  // compares were three chains in a row on the A7 net_clk paths). 34 bits hold every value: the sum is in
+  // [-2^31, 2^32 + 2^31 - 2].
+  function automatic logic neg3(input logic [33:0] a, input logic [33:0] b,
+                                input logic [33:0] c);  // a + b + c < 0
+    logic [32:0] maj;  // the carries, shifted one place up below (mod 2^34)
+    maj = (a[32:0] & b[32:0]) | (a[32:0] & c[32:0]) | (b[32:0] & c[32:0]);
+    return 1'(((a ^ b ^ c) + {maj, 1'b0}) >> 33);
+  endfunction
+  logic [31:0] wr_sum;  // threshold + offset, mod 2^32 (thr_price_q; used only when in range)
+  logic [33:0] thr34, off34;
+  logic below1, above_max, wr_err;
+  assign thr34 = {2'b00, cfg_rule.price_threshold};
+  assign off34 = {{2{cfg_rule.price_offset[31]}}, cfg_rule.price_offset};
+  assign below1 = neg3(thr34, off34, -34'sd1);  // sum < 1
+  assign above_max = !neg3(thr34, off34, -34'({2'b00, OUCH_PRICE_LIMIT_MAX} + 34'd1));  // sum > max
   always_comb begin
-    wr_sum = {2'b00, cfg_rule.price_threshold} + {{2{cfg_rule.price_offset[31]}}, cfg_rule.price_offset};
+    wr_sum = cfg_rule.price_threshold + cfg_rule.price_offset;
     wr_err = cfg_rule.locate == '0 || !ouch_tif_ok(cfg_rule.tif) || cfg_rule.action_side == 2'd3 ||
         cfg_rule.qty == '0 || (!cfg_rule.qty_min && cfg_rule.qty >= OUCH_QTY_LIMIT) ||
-        (cfg_rule.price_threshold_mode &&
-         ($signed(wr_sum) < 34'sd1 || $signed(wr_sum) > $signed({2'b00, OUCH_PRICE_LIMIT_MAX})));
+        (cfg_rule.price_threshold_mode && (below1 || above_max));
   end
 
   // The lowest index of h (an explicit priority, no carry chain: timing, S5).
@@ -217,7 +231,7 @@ module strategy_engine
   always_ff @(posedge clk) begin
     if (cfg_rule_wr) begin
       rule_q[cfg_rule_idx]      <= cfg_rule;
-      thr_price_q[cfg_rule_idx] <= wr_sum[31:0];
+      thr_price_q[cfg_rule_idx] <= wr_sum;
       thr_cmp_q[cfg_rule_idx]   <= cfg_rule.price_threshold ^ {32{!cfg_rule.price_ge}};
     end
     if (rst) begin
