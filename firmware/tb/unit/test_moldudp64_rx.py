@@ -541,7 +541,8 @@ async def tc_malformed(dut):
     beat); the payload ending before the count is complete (in a
     message, after one byte of a length field, split or not, and right where a length field
     should start; a count larger than the blocks); a heartbeat or end of session that is not
-    20 B. The complete messages before the fault come out."""
+    20 B, also with a short length or a whole block after it. The complete messages before the
+    fault come out."""
     m = await start(dut)
     for e in range(8):
         good = pack(SESSION, m.next_seq(), msgs_of(fill_to_lane(3), len_to_lane(3, e)))
@@ -576,6 +577,10 @@ async def tc_malformed(dut):
     for build in (heartbeat, eos):
         for extra in (1, 3, 4, 5, 8, 12, 30):
             await m.send(build(SESSION, m.next_seq()) + random.randbytes(extra), intent=S.MALFORMED, name=f"{build.__name__} + {extra} B")
+        # what follows looks like a block (a short length or a whole 6-B block): still no block to decode
+        for n in (1, MIN_LEN):
+            tail = n.to_bytes(2, "big") + random.randbytes(n)
+            await m.send(build(SESSION, m.next_seq()) + tail, intent=S.MALFORMED, name=f"{build.__name__} + {n} B block")
     await m.finish()
 
 

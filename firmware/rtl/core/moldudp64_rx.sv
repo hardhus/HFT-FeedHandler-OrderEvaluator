@@ -80,7 +80,8 @@ module moldudp64_rx
   // Offset of the first length field's low byte from lane 0 of beat HDR_BEAT.
   localparam logic [LP_W-1:0] LP_FIRST = LP_W'(MOLD_HDR_LEN + 1 - 8 * HDR_BEAT);
 
-  if (HDR_BEAT != 2 || LP_FIRST >= 8 || MOLD_MIN_LEN + 2 < 8 || MOLD_MAX_MSG % 8 != 0)
+  if (HDR_BEAT != 2 || LP_FIRST >= 8 || MOLD_MIN_LEN + 2 < 8 || MOLD_MAX_MSG % 8 != 0 ||
+      32'(LP_FIRST) + MOLD_MIN_LEN < 8)
   begin : g_check
     $error("moldudp64_rx: header beats, one boundary per beat or vector width do not hold");
   end
@@ -221,6 +222,7 @@ module moldudp64_rx
   logic [15:0] blen;  // length field decoded in this beat
   logic blk_nz, blk_one;  // blk != 0, blk == 1
   logic dec, unsup_now, newblk, nb_over, nb_end;
+  logic dec_h, dec_b, new_h, new_b;  // dec, newblk on hdr2 (o = LP_FIRST) and after it (o = o_q)
   logic [MOLD_MSG_LEN_W-1:0] nb_len;
   logic [               2:0] cur_e;
   logic in_win, cur_end, end_ev, end_new, end_over, emit, start;
@@ -261,21 +263,28 @@ module moldudp64_rx
   assign blk_one = blk_left_q == 16'd1;  // used once a block ends in its beat: never in hdr2
   assign blen = l_len[o];
 
-  assign dec = live && blk_nz && wz && vld[o];
-  assign unsup_now = dec && l_short[o];
-  assign newblk = dec && !unsup_now;
+  // dec and newblk split by hdr2: the count compares on hdr2 meet a fixed lane (l_short[LP_FIRST])
+  // and stay out of the select by o_q that every later beat uses.
+  assign dec_h = live && hdr2 && cnt_now != '0 && cnt_now != MOLD_COUNT_EOS && vld[LP_FIRST[2:0]];
+  assign dec_b = live && !hdr2 && blk_left_q != '0 && wz_q && vld[o_q];
+  assign new_h = dec_h && !l_short[LP_FIRST[2:0]];
+  assign new_b = dec_b && !l_short[o_q];
+  assign dec = dec_h || dec_b;
+  assign unsup_now = dec && !newblk;
+  assign newblk = new_h || new_b;
   assign nb_over = l_over[o];
   assign nb_len = nb_over ? '0 : blen[MOLD_MSG_LEN_W-1:0];
   assign dec_seq = hdr2 ? seq_now : seq_q + 64'(bi_q);
   assign dec_idx = hdr2 ? '0 : bi_q;
 
-  assign nb_end = newblk && l_end[o];
+  // a block of MOLD_MIN_LEN or more cannot end in its hdr2 beat (LP_FIRST + MOLD_MIN_LEN >= 8)
+  assign nb_end = new_b && l_end[o_q];
   // The current block ends in this beat (offset 2..9) at lane o - 2.
   assign in_win = (wz && o >= 3'd2) || (w1 && o <= 3'd1);
   assign cur_e = o - 3'd2;
   assign cur_end = live && (blk_act_q || pend_q) && in_win && vld[cur_e];
 
-  assign start = live && (pend_q || (newblk && o != 3'd7));
+  assign start = live && (pend_q || (new_h && LP_FIRST[2:0] != 3'd7) || (new_b && o_q != 3'd7));
   assign s_new = pend_q ? 3'd0 : o + 3'd1;
   assign end_ev = cur_end || nb_end;
   assign end_new = nb_end || (cur_end && pend_q);  // the ending message starts in this beat
