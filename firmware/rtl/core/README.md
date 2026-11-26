@@ -1025,8 +1025,11 @@ Measured in `test_hft_csr_wrap.tc_kill_latency` (all five clock profiles), from 
 | Kill write | Time | Conditions |
 |---|---|---|
 | on an idle bus | 13.4–27.4 ns | |
-| behind a command in flight | 68–108 ns | mailbox empty, so the command is not fenced |
-| behind a command fenced by a full mailbox | 217–328 ns | 16 orders, `risk_check` taking one every 2 cycles (decision 12), no hardware order in between |
+| behind a command in flight | 68–109 ns | mailbox empty, so the command is not fenced |
+| behind a command fenced by a full mailbox | 217–330 ns | 16 orders, `risk_check` taking one every 2 cycles (decision 12), no hardware order in between |
+
+The net2host and host2net values are exact and repeat run after run; the jitter profiles' values depend on the
+seed, so their ends move by a few ns between runs (the upper ends above cover the runs measured so far).
 
 The last row is the best case of that situation, not its worst. A fenced command waits until every earlier
 `MBOX_SEND` has been taken by `risk_check` and decided, and `risk_check` takes a host order only in a cycle with
