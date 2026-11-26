@@ -24,7 +24,7 @@ packages.
 git clone https://github.com/hardhus/HFT-FeedHandler-OrderEvaluator.git
 cd HFT-FeedHandler-OrderEvaluator
 ./scripts/bootstrap.sh     # apt prerequisites (asks for sudo once), uv, just, pinned tools, Python env
-just ci                    # doctor + lint + test
+just ci                    # doctor + gen-check + lint + test + cosim + test-long
 ```
 
 `bootstrap.sh` installs uv and just into `~/.local/bin` and then runs `just setup`. It is idempotent: a second run
@@ -59,6 +59,7 @@ just gen                  # regenerate the CSR outputs (hft_csr.rdl) and the eve
 just gen-check            # fail if a generated file differs from a fresh `just gen` (part of `just ci`)
 just test                 # the cocotb tests, in parallel, without the long ones
 just test-long            # the long tests only (marker long): minutes each; `just ci` and GitHub run them
+just cosim                # C++ co-simulation: HFT_Core under Verilator (CMake), smoke test against Python vectors
 just test-one reset_sync  # tests matching a name (pytest -k)
 just test-one net_model   # golden-model self-tests only (no simulator, seconds)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths

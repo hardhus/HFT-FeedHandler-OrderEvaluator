@@ -173,9 +173,21 @@ gen-check:
     done
     [ $fail = 0 ] && echo "gen-check: generated files are up to date" || { echo "gen-check: FAILED (run: just gen)"; exit 1; }
 
-# doctor + gen-check + lint + test + test-long
+# Verilator C++ co-simulation (audit/15 §2.7): vectors from the Python models, HFT_Core with its assertions built by
+# CMake (verilate()), the smoke test through ctest (two seeds). Output under $HFT_BUILD_DIR/cosim.
+[script("bash")]
 [unix]
-ci: doctor gen-check lint test test-long
+cosim:
+    set -euo pipefail
+    out="$HFT_BUILD_DIR/cosim"
+    PYTHONPATH=firmware/tb uv run --frozen python firmware/tb/common/cosim_vectors.py "$out/smoke.vec"
+    cmake -S software -B "$out/cmake" -DCMAKE_BUILD_TYPE=Release -DHFT_VECTORS="$out/smoke.vec"
+    cmake --build "$out/cmake" -j "$(nproc)"
+    ctest --test-dir "$out/cmake" --output-on-failure
+
+# doctor + gen-check + lint + test + cosim + test-long
+[unix]
+ci: doctor gen-check lint test cosim test-long
 
 # ---------- Windows: forward Linux recipes to WSL ----------
 
@@ -239,7 +251,12 @@ gen:
 gen-check:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just gen-check"
 
-# doctor + gen-check + lint + test + test-long in WSL
+# The C++ co-simulation in WSL
+[windows]
+cosim:
+    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just cosim"
+
+# doctor + gen-check + lint + test + cosim + test-long in WSL
 [windows]
 ci:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just ci"
