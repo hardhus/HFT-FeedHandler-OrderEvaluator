@@ -263,6 +263,7 @@ module risk_check
   logic [QP-1:0] held_q;  // cancelled, not written out yet: the slots from rd on
   logic [QP-1:0] live_q;  // queued, not cancelled
   logic [CW-1:0] credits_q;
+  logic credits_zero_q;  // = credits_q == 0 (F8 S2: in the decision's flat AND)
   logic userref_ok;  // a TX_USERREF_NEXT write takes effect (decision 22)
 
   // Predicates the decision reads, each registered from next-state values one cycle ahead (timing, S5): the
@@ -345,13 +346,19 @@ module risk_check
       reason = RISK_RATE;
     end else if (full) begin
       reason = RISK_TX_BUSY;
-    end else if (credits_q == '0) begin
+    end else if (credits_zero_q) begin
       reason = RISK_RING_FULL;
     end else begin
       reason = RISK_NONE;
     end
   end
-  assign accept = v3_q && reason == RISK_NONE;
+  // The decision as a flat AND of the flags, beside the reason's priority chain (timing, F8 S2: accept and rej_dec
+  // came out of that chain, and rej_dec drives the ~490-bit reject mux on the A7 net_clk worst paths). pass_nc: no
+  // reason but RING_FULL; reason == RISK_NONE iff pass_nc and a credit (risk_props a_flags checks both outputs).
+  logic pass_nc;
+  assign pass_nc = !ctl_kill && ctl_tx_en && !inv3_q && !refs_zero_q && hit3_q && !qty_gt_q && !notional_gt_q &&
+      !budget_zero_q && rate_ok && !full;
+  assign accept = v3_q && pass_nc && !credits_zero_q;
 
   // Budget: spend, then add, saturating at 2^32 - 1. Both candidates (no accept, accept), then accept selects.
   // bsum1 = budget_q - 1 + add, the same value mod 2^33 as bsum0 - 1, but the decrement comes off the flop, so the
@@ -441,7 +448,7 @@ module risk_check
   assign drain      = drain_q;
   assign m_tx_valid = !drain && live_q != '0;
   assign handover   = m_tx_valid && m_tx_ready;
-  assign rej_dec    = v3_q && reason != RISK_NONE && credits_q != '0;  // written: it has a credit
+  assign rej_dec    = v3_q && !pass_nc && !credits_zero_q;  // written: it has a credit
   assign drain_out  = drain && !rej_dec;
   assign cancelled  = cancel ? live_q - QP'(handover) : '0;
 
@@ -538,6 +545,7 @@ module risk_check
       held_q             <= '0;
       live_q             <= '0;
       credits_q          <= CW'(RISK_RING_CREDITS);
+      credits_zero_q     <= 1'b0;
       ev_rej_dropped     <= 1'b0;
     end else begin
       m_rej_valid <= rej_dec || drain_out;
@@ -562,9 +570,11 @@ module risk_check
       end else if (handover) begin
         rd_q <= rd_q + 1'b1;
       end
-      held_q                <= held_q - QP'(drain_out) + cancelled;
-      credits_q             <= credits_q - CW'(v3_q && credits_q != '0) + CW'(ring_credit_ret);
-      ev_rej_dropped        <= v3_q && reason != RISK_NONE && credits_q == '0;
+      held_q <= held_q - QP'(drain_out) + cancelled;
+      credits_q <= credits_q - CW'(v3_q && !credits_zero_q) + CW'(ring_credit_ret);
+      // 0 next: none returned, and none left or the last one taken by this decision
+      credits_zero_q <= !ring_credit_ret && (credits_zero_q || (credits_q == CW'(1) && v3_q));
+      ev_rej_dropped        <= v3_q && credits_zero_q;  // no credit: a reject (RING_FULL at least), not written
       ev_rej_dropped_reason <= reason;
       if (cancel) begin
         live_q <= '0;

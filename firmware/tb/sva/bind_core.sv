@@ -209,6 +209,9 @@ bind risk_check risk_props #(
     .ref_next(ref_next_q),
     .credits(credits_q),
     .flags({
+      accept,
+      rej_dec,
+      credits_zero_q,
       drain_q,
       burst_gt1_q,
       refill_gt1_q,
@@ -223,6 +226,9 @@ bind risk_check risk_props #(
       notional_gt_q
     }),
     .defs({
+      v3_q && reason == RISK_NONE,  // the decision from the reason's priority chain
+      v3_q && reason != RISK_NONE && credits_q != '0,
+      credits_q == '0,
       held_q != '0,
       rate_burst_q > 32'd1,
       rate_refill_q > 32'd1,
