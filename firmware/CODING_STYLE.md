@@ -1,7 +1,6 @@
 # Firmware coding style
 
-These rules apply to new RTL under `firmware/rtl/{common,core,platform}`. Code in `firmware/rtl/legacy/` is a
-read-only reference and is replaced phase by phase; do not copy its patterns.
+These rules apply to the RTL under `firmware/rtl/{common,core,platform}`.
 
 `just lint` enforces most of this: Verilator `-Wall`, Verible style rules from
 [`.rules.verible_lint`](../.rules.verible_lint) and the formatter check. A lint failure blocks CI. Waivers in

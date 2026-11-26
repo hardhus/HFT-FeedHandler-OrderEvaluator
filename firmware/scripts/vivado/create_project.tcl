@@ -1,4 +1,5 @@
-# Regenerate the (board-less) Vivado project from the shared filelists.
+# Regenerate the (board-less) Vivado project from the shared filelists: HFT_Core, no simulation sources
+# (the tests are cocotb + Verilator).
 # Usage: vivado -mode batch -source create_project.tcl -tclargs ?part? ?proj_dir?
 set script_dir [file dirname [file normalize [info script]]]
 set fw         [file normalize [file join $script_dir .. ..]]
@@ -9,16 +10,18 @@ source [file join $script_dir read_f.tcl]
 create_project hft $projdir -part $part -force
 set_property target_language Verilog [current_project]
 
-set srcs [concat [read_f $fw/filelists/legacy.f] [read_f $fw/filelists/common.f]]
+set srcs {}
+foreach l {common.f xilinx.f core.f csr.f top.f} {
+  set srcs [concat $srcs [read_f [file join $fw filelists $l]]]
+}
 add_files -norecurse $srcs
-add_files -fileset sim_1 -norecurse [glob $fw/tb/legacy/*.sv]
 set_property file_type SystemVerilog [get_files -all *.sv]
+# as synth_ooc.tcl: xilinx.f's wrappers need XPM
+set_property verilog_define {HFT_HAVE_XPM} [current_fileset]
+auto_detect_xpm
 
-set_property top HFT_Top_Core [get_filesets sources_1]
-set_property top tb_hft_top_torture [get_filesets sim_1]
-set_property top_lib xil_defaultlib [get_filesets sim_1]
+set_property top HFT_Core [get_filesets sources_1]
 update_compile_order -fileset sources_1
-update_compile_order -fileset sim_1
 
 puts "Project created: $projdir/hft.xpr (part $part)"
 close_project

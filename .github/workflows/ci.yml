@@ -47,12 +47,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           just ci
 
-      - name: Legacy lint report
-        if: always()
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          just lint-legacy || true
-
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
@@ -61,7 +55,6 @@ jobs:
           path: |
             build/test-results.xml
             build/long-results.xml
-            build/lint/legacy.log
             build/sim/*/results.xml
           if-no-files-found: ignore
 

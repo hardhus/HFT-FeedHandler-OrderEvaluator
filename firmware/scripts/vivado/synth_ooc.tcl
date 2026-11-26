@@ -40,7 +40,7 @@ set out [file normalize [file join $fw .. build vivado ooc $tag]]
 file mkdir $out
 source [file join $script_dir read_f.tcl]
 
-# Clock periods (ns) per profile. Legacy names kept for HFT_Top_Core.
+# Clock periods (ns) per profile.
 set net 6.400
 set host 4.000
 switch $profile {
@@ -50,7 +50,7 @@ switch $profile {
   default { error "profile must be net2host, host2net or net2host125" }
 }
 set clock_periods [dict create clk $a wr_clk $a src_clk $a rd_clk $b dst_clk $b \
-  clk_net $net net_clk $net clk_host $host host_clk $host clk_pcie 8.000]
+  net_clk $net host_clk $host]
 
 # Synchronous ports -> clock (for I/O delays, so report_cdc knows every port's domain).
 # Asynchronous inputs (sync_bit.d, reset_sync.rst_in) are deliberately left unclocked; any other

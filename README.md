@@ -32,14 +32,13 @@ for the RTL rules.
 | `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), order path (strategy rules, pre-trade risk, OUCH 5.0 order TX), CSR block and counters |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
 | `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
-| `firmware/rtl/legacy/` | First prototype, kept as a read-only reference until it is replaced |
 | `firmware/filelists/` | `.f` filelists shared by Verilator, cocotb and Vivado |
-| `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), SVA checkers (`sva/`), self-checking SV testbenches (`sv/`), legacy SV testbenches |
+| `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), SVA checkers (`sva/`), self-checking SV testbenches (`sv/`) |
 | `firmware/scripts/vivado/` | Vivado Tcl: project generation, OOC synthesis gate, XSIM runs |
 | `firmware/constraints/` | Netlist-driven CDC constraints (`cdc.tcl`) |
 | `firmware/lint/` | Verilator waivers and Verible format flags |
 | `scripts/` | Bootstrap, setup and doctor scripts; `gen_csr.sh` (PeakRDL) |
-| `software/` | C++ host side: early stage, to be rebuilt around the DMA ring interface |
+| `software/` | C++ host side: generated headers (`include/gen/`: CSR map, ring descriptors) |
 
 ## Stack
 
@@ -176,6 +175,3 @@ never cached or uploaded.
   as the exchange would read it, with its `ORDER_SENT`.
 - Not seen in these ranges: broken trade (B), LULD (J), retail interest (N), DLCR (O), MWCB decline (W) and
   operational halt (h). The synthetic tests cover them.
-
-The legacy prototype under `firmware/rtl/legacy/` has known issues and will be replaced block by block in the following
-phases.

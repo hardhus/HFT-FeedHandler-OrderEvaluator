@@ -100,21 +100,6 @@ lint:
     echo "lint: ${#srcs[@]} file(s), $([ $fail = 0 ] && echo clean || echo FAILED)"
     exit $fail
 
-# Lint legacy RTL for the record (non-blocking). XPM-dependent modules are skipped.
-[script("bash")]
-[unix]
-lint-legacy:
-    mkdir -p "$HFT_BUILD_DIR/lint"
-    log="$HFT_BUILD_DIR/lint/legacy.log"
-    : > "$log"
-    L=firmware/rtl/legacy
-    verilator --lint-only -Wall --top-module udp_parser    $L/hft_pkg.sv $L/axis_if.sv $L/udp_parser.sv    >>"$log" 2>&1
-    verilator --lint-only -Wall --top-module register_bank $L/hft_pkg.sv $L/axil_if.sv $L/register_bank.sv >>"$log" 2>&1
-    echo "skipped: HFT_Top, async_fifo_wrapper (need xpm_fifo_async)" >> "$log"
-    echo "== verible (style, all legacy files)" >> "$log"
-    verible-verilog-lint --ruleset=all --rules_config=.rules.verible_lint $L/*.sv >>"$log" 2>&1
-    echo "legacy lint: $(grep -cE '%(Warning|Error)' "$log") verilator + $(grep -cE '\[Style: ' "$log") verible findings -> $log"
-
 # Run all cocotb tests in parallel (extra pytest args are passed through as given, e.g. -k "a or b")
 [positional-arguments]
 [unix]
@@ -208,11 +193,6 @@ doctor:
 [windows]
 lint:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just lint"
-
-# Lint legacy RTL in WSL (report only)
-[windows]
-lint-legacy:
-    wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just lint-legacy"
 
 # Run all cocotb tests in WSL
 [windows]

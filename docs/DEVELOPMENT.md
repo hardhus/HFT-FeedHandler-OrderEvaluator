@@ -62,7 +62,6 @@ just test-long            # the long tests only (marker long): minutes each; `ju
 just test-one reset_sync  # tests matching a name (pytest -k)
 just test-one net_model   # golden-model self-tests only (no simulator, seconds)
 just waves reset_sync     # re-run with FST tracing and print the .fst paths
-just lint-legacy          # lint report for the legacy RTL -> build/lint/legacy.log
 just itch-real            # real Nasdaq data: the model check (downloads into build/itch-real, a few minutes)
 just itch-real-rtl        # real Nasdaq data through itch_decoder and the system test (see below)
 ```
@@ -280,7 +279,7 @@ them with the installer's "Add Design Tools or Devices" and check with `get_part
 console.
 
 ```powershell
-just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr (no board part)
+just vivado-project                      # build/vivado/xc7a100tcsg324-1/hft.xpr: HFT_Core, no board part
 just synth-ooc cdc_handshake host2net     # build/vivado/ooc/<top>_<profile>_<part>/{timing_summary,utilization,cdc}.rpt
 just synth-ooc cdc_async_fifo_ooc net2host IMPL:xpm   # generics as NAME:VALUE
 just synth-ooc-on xcku5p-ffvb676-2-e eth_ip_udp_rx_ooc net2host core.f synth_ooc_core.f   # another part
@@ -326,8 +325,6 @@ the full timing, utilization and CDC reports of each stage (`*_synth.rpt`, `*_pl
 implementation) still leaves everything it reached; `HFT_STAGE` lines in the log mark the stages. `phys_opt_design`
 runs when the routed WNS is negative (its reports are `*_physopt.rpt`); the gate uses the result.
 Cell counts and the LUTRAM rule of `cdc.tcl` cover both 7-series and UltraScale+ primitive names.
-The legacy top also synthesizes, but its port names are not in the port-to-clock map, so its CDC check is only partial:
-`just synth-ooc HFT_Top_Core net2host legacy.f`.
 
 The project file is generated and never committed. Sources come from the same filelists that Verilator uses.
 
