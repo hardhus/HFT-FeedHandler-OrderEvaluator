@@ -81,6 +81,11 @@ module hft_csr (
             logic ID;
             logic VERSION;
             logic SCRATCH;
+            logic RESET_SEEN;
+            struct {
+                logic LO;
+                logic HI;
+            } TS_SNAPSHOT;
         } GLOBAL;
         struct {
             logic NET_CTRL;
@@ -325,6 +330,15 @@ module hft_csr (
         decoded_reg_strb.GLOBAL.SCRATCH = cpuif_req_masked & (cpuif_addr == 16'h8);
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h8);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h8);
+        decoded_reg_strb.GLOBAL.RESET_SEEN = cpuif_req_masked & (cpuif_addr == 16'hc);
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'hc);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'hc);
+        decoded_reg_strb.GLOBAL.TS_SNAPSHOT.LO = cpuif_req_masked & (cpuif_addr == 16'h10) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h10);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h10) & !cpuif_req_is_wr;
+        decoded_reg_strb.GLOBAL.TS_SNAPSHOT.HI = cpuif_req_masked & (cpuif_addr == 16'h14) & !cpuif_req_is_wr;
+        is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h14);
+        is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h14) & !cpuif_req_is_wr;
         decoded_reg_strb.NET.NET_CTRL = cpuif_req_masked & (cpuif_addr == 16'h100);
         is_valid_addr |= cpuif_req_masked & (cpuif_addr == 16'h100);
         is_valid_rw |= cpuif_req_masked & (cpuif_addr == 16'h100);
@@ -724,6 +738,12 @@ module hft_csr (
                     logic load_next;
                 } value;
             } SCRATCH;
+            struct {
+                struct {
+                    logic next;
+                    logic load_next;
+                } seen;
+            } RESET_SEEN;
         } GLOBAL;
         struct {
             struct {
@@ -903,6 +923,11 @@ module hft_csr (
                     logic [31:0] value;
                 } value;
             } SCRATCH;
+            struct {
+                struct {
+                    logic value;
+                } seen;
+            } RESET_SEEN;
         } GLOBAL;
         struct {
             struct {
@@ -1064,6 +1089,28 @@ module hft_csr (
         end else begin
             if(field_combo.GLOBAL.SCRATCH.value.load_next) begin
                 field_storage.GLOBAL.SCRATCH.value.value <= field_combo.GLOBAL.SCRATCH.value.next;
+            end
+        end
+    end
+    // Field: hft_csr.GLOBAL.RESET_SEEN.seen
+    always_comb begin
+        automatic logic [0:0] next_c;
+        automatic logic load_next_c;
+        next_c = field_storage.GLOBAL.RESET_SEEN.seen.value;
+        load_next_c = '0;
+        if(decoded_reg_strb.GLOBAL.RESET_SEEN && decoded_req_is_wr) begin // SW write
+            next_c = (field_storage.GLOBAL.RESET_SEEN.seen.value & ~decoded_wr_biten[0:0]) | (decoded_wr_data[0:0] & decoded_wr_biten[0:0]);
+            load_next_c = '1;
+        end
+        field_combo.GLOBAL.RESET_SEEN.seen.next = next_c;
+        field_combo.GLOBAL.RESET_SEEN.seen.load_next = load_next_c;
+    end
+    always_ff @(posedge clk) begin
+        if(rst) begin
+            field_storage.GLOBAL.RESET_SEEN.seen.value <= 1'h1;
+        end else begin
+            if(field_combo.GLOBAL.RESET_SEEN.seen.load_next) begin
+                field_storage.GLOBAL.RESET_SEEN.seen.value <= field_combo.GLOBAL.RESET_SEEN.seen.next;
             end
         end
     end
@@ -1833,10 +1880,19 @@ module hft_csr (
             readback_data_var[ad_hi(16'h0)][31:0] = 32'h48465431;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h4)) begin
-            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50004;
+            readback_data_var[ad_hi(16'h4)][31:0] = 32'h50005;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h8)) begin
             readback_data_var[ad_hi(16'h8)][31:0] = field_storage.GLOBAL.SCRATCH.value.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'hc)) begin
+            readback_data_var[ad_hi(16'hc)][0] = field_storage.GLOBAL.RESET_SEEN.seen.value;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h10)) begin
+            readback_data_var[ad_hi(16'h10)][31:0] = hwif_in.GLOBAL.TS_SNAPSHOT.LO.value.next;
+        end
+        if(ad_low(rd_mux_addr) == ad_low(16'h14)) begin
+            readback_data_var[ad_hi(16'h14)][31:0] = hwif_in.GLOBAL.TS_SNAPSHOT.HI.value.next;
         end
         if(ad_low(rd_mux_addr) == ad_low(16'h100)) begin
             readback_data_var[ad_hi(16'h100)][0] = field_storage.NET.NET_CTRL.rx_en.value;

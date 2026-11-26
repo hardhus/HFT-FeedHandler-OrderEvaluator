@@ -1,5 +1,5 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
-// Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*,
+// Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, ts_now,
 //                sym_*, cnt_ring_*, rx_stats, mold_stats, itch_stats, ctl_*, cmd_*, loc_*, m_host_*, ord_*,
 //                st_*, ev_*, order_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
@@ -87,6 +87,8 @@
 //                (RING_ORDER_QUEUED), st_armed (RULE_ARMED) and st_budget (BUDGET) in the same net_clk cycle as
 //                the other banks. ord_sent_*, ord_rej_*, ord_lost_* and ord_queued must be event_packer's own
 //                order inputs and its cnt_ord_queued (order_stats header): no extra delay (audit/14 S7 A5).
+// Timestamp    : the snapshot takes ts_now (HFT_Core's ts_q) in the same net_clk cycle as the counters, as
+//                TS_SNAPSHOT (audit/15 decision 9): no delay, the value on the acceptance edge.
 // Reset        : host_rst and net_rst asserted together (one source, one reset_sync per domain,
 //                cdc_handshake contract). After reset cfg_rx_en, cfg_feed_en, cfg_session_check,
 //                cfg_resync and cfg_class_en are 0; the other cfg_* are undefined until the first
@@ -181,6 +183,9 @@ module hft_csr_wrap
     input logic [63:0] feed_expected_seq,
     input logic        feed_synced,
     input logic        feed_eos,
+
+    // HFT_Core's timestamp counter (TS_SNAPSHOT)
+    input logic [63:0] ts_now,
 
     // itch_decoder symbol bitmap command port
     output logic        sym_req_valid,
@@ -457,6 +462,7 @@ module hft_csr_wrap
     logic [63:0]                      expected_seq;
     logic                             synced;
     logic                             eos;
+    logic [63:0]                      ts;
   } snap_t;
 
   logic snap, snap_pending_q, snap_req_ready, snap_req_net, snap_net_pending_q, snap_data_ready;
@@ -617,6 +623,7 @@ module hft_csr_wrap
   assign snap_src.expected_seq        = feed_seq_q[FEED_DELAY-1];
   assign snap_src.synced              = feed_synced_q[FEED_DELAY-1];
   assign snap_src.eos                 = feed_eos_q[FEED_DELAY-1];
+  assign snap_src.ts                  = ts_now;
 
   always_ff @(posedge net_clk) begin
     if (net_rst) begin
@@ -785,6 +792,8 @@ module hft_csr_wrap
   assign hwif_in.FEED.EXPECTED_SEQ.HI.value.next = snap_cnt.expected_seq[63:32];
   assign hwif_in.FEED.FEED_STATE.synced.next = snap_cnt.synced;
   assign hwif_in.FEED.FEED_STATE.eos.next = snap_cnt.eos;
+  assign hwif_in.GLOBAL.TS_SNAPSHOT.LO.value.next = snap_cnt.ts[31:0];
+  assign hwif_in.GLOBAL.TS_SNAPSHOT.HI.value.next = snap_cnt.ts[63:32];
 
   // ---- RING: event_ring_writer, in this clock domain ----
   assign host_ring_enable = hwif_out.RING.RING_CTRL.enable.value;

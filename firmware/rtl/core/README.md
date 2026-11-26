@@ -831,7 +831,7 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 
 | Base | Block | Registers |
 |------|-------|-----------|
-| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0004`), `SCRATCH` (RW) |
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0005`), `SCRATCH` (RW), `RESET_SEEN` (RW, 1 after reset; see Software contract after reset); snapshot: `TS_SNAPSHOT` (`LO`/`HI`) at `0x0010`, the timestamp counter (F8) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
@@ -850,7 +850,8 @@ For the same reason the resync value (`RESYNC_SEQ`, written by software) and the
 
 `VERSION` is major.minor: a minor step only adds registers (software written for an older minor still works), a
 major step changes existing ones. The F3 FEED block made it `0x0005_0001`, the F4 ITCH block and SYMBOL
-`0x0005_0002`, the F6 RING block `0x0005_0003`, the F7 RISK, STRATEGY, TX blocks and LOCATE_ALLOW `0x0005_0004`.
+`0x0005_0002`, the F6 RING block `0x0005_0003`, the F7 RISK, STRATEGY, TX blocks and LOCATE_ALLOW `0x0005_0004`,
+the F8 `RESET_SEEN` and `TS_SNAPSHOT` `0x0005_0005`.
 
 The generated read mux has one register stage per 512-byte window (`--rt-read-fanin`), and the logic in front of it
 grows with the registers in that window: RING at `0x0300`, in FEED's window, failed the Artix-7 125 MHz gate. A new
@@ -858,6 +859,17 @@ block goes in a window with room; `test_read_windows_stay_small` allows at most 
 whole map's address decoder failed the same gate (−0.384 ns), so the order blocks got their own register block behind
 the router (decisions 40, 41); `test_router_windows_hold_exactly_the_order_blocks` checks that the router's windows
 hold exactly RISK, STRATEGY and TX.
+
+### Software contract after reset
+
+Every reset of the core (`rst_in`) puts the whole configuration back at its reset values; `GLOBAL.RESET_SEEN` reads 1
+after it (F8, audit/15 decisions 3 and 10). Only a reset writes the bit.
+0. Read `ID` and `VERSION`, then write `RESET_SEEN` = 0, before any other block. A reset while software configures
+   sets the bit again after that write, so it is not lost.
+1. Configure the blocks (NET, FEED and ITCH, SYMBOL, RING, the order blocks), each by its own protocol below.
+
+Software reads `RESET_SEEN` at start-up and in its health check (slow path); 1 means the core was reset since the
+last configuration, so it starts again at step 0. `RESET_SEEN` is not an interrupt cause.
 
 ### Config commit (NET)
 
@@ -920,6 +932,11 @@ first snapshot. `STATS_SEQ` counts landed snapshots and changes one `host_clk` e
 
 Latency (handshakes free): `STATS_CTRL` pulse → request accepted 1 `host_clk` edge; request at net → counters
 taken 1 `net_clk` edge.
+
+The snapshot also takes the core's timestamp counter (`ts_q`, `net_clk` cycles since reset, the clock of every
+`sof_ts`) on the same edge, as `GLOBAL.TS_SNAPSHOT` (F8, audit/15 decision 9): an event counted in a snapshot
+happened before its `TS_SNAPSHOT`, so the host can place the counters, and the ring entries they count, on the
+core's time.
 
 The same snapshot also updates the FEED block's `EXPECTED_SEQ`, `FEED_STATE` and `MOLD_*` registers, taken in
 the same `net_clk` cycle; `STATS_SEQ` counts them too. `mold_stats` counts the `moldudp64_rx` packet events:
@@ -1115,6 +1132,7 @@ their own first reset; regblock's generated assertions are not.
 | SYMBOL at the same five profiles, against a model of the decoder's command port with backpressure: every access reaches the port once, in order, unchanged; exact latencies; BRESP after the write is in effect; waiting during the sweep; resets while a command waits and in flight (10 each) | `tb/unit/test_hft_csr_wrap.py` (`tc_sym_*`) |
 | RING (F6): every register through the bus, `PROD_IDX`, status and live counters following their inputs; the ring counters aligned with the ITCH and MOLD counters at every cycle around a packet event; `cfg_epoch` against hand-written counts (consecutive writes, coalesced commits, a held pulse, a write of 0, reset) | `tb/unit/test_hft_csr_wrap.py` |
 | Order path (F7) at the same five profiles, against a model of `strategy_engine`, `risk_check` and `order_tx_builder` at their command ports: rule shadow and indirect commit, every command once, in bus order, whole, response after its effect, the fence behind `MBOX_SEND`s and behind kill/tx_en writes, `TX_COMMIT` only with the path closed, status bits, mailbox FIFO and `MBOX_SPACE`, kill latency, the kill hold after reset, resets during a command, order counters in the snapshot | `tb/unit/test_hft_csr_wrap.py` (`tc_rule_commit` … `tc_snapshot_order_counters`) |
+| F8 at the same five profiles: `RESET_SEEN` hand-checked (1 after every reset, only software clears it); `TS_SNAPSHOT` in every snapshot (any 64-bit `ts_now` per cycle), whole in `LO`/`HI` for hand-picked values and exactly the counting `ts_now` of the acceptance edge; system: `RESET_SEEN` and the configuration across a mid-run reset with `ts_q` restarting at 0, and every ring entry a snapshot counts older than its `TS_SNAPSHOT` | `tb/unit/test_hft_csr_wrap.py` (`tc_reset_seen`, `tc_ts_snapshot`), `tb/system/test_rx_csr.py` (`tc_reset_seen`, `tc_ts_snapshot`) |
 | Router (F7): the whole map through `hft_csr_regs` (window edges and gaps answer `SLVERR`), `axil_props` on the port and both blocks, `route_props` (6, each violation firing only its own), the window selftest | `tb/unit/test_hft_csr.py`, `tb/sva/route_props.sv`, `tb/selftest/test_csr_map.py` |
 | System: `eth_ip_udp_rx` + `moldudp64_rx` + `itch_decoder` + `hft_csr_wrap`, each frame against the F2 model, each payload against the MoldUDP64 model and each message against the ITCH model under the configuration it used; 2000 random frames with random commits and snapshots, 2000 feed frames with resyncs and the accounting identity, 2000 ITCH frames with bitmap and `ITCH_CTRL` changes and the ITCH identities | `tb/system/test_rx_csr.py` |
 

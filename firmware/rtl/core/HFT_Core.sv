@@ -344,6 +344,7 @@ module HFT_Core
       .feed_expected_seq      (feed_expected_seq),
       .feed_synced            (feed_synced),
       .feed_eos               (feed_eos),
+      .ts_now                 (ts_q),
       .sym_req_valid          (sym_req_valid),
       .sym_req_ready          (sym_req_ready),
       .sym_req_wr             (sym_req_wr),

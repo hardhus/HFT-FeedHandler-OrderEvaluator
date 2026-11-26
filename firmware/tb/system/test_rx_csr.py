@@ -117,6 +117,7 @@ RX_PKTS_LO, RX_BYTES_LO = 0x0410, 0x0418
 DROP_LO = {"DISABLED": 0x0420, "FCS": 0x0428, "MAC": 0x0430, "ETHERTYPE": 0x0438, "IP_HDR": 0x0440,
            "FRAG": 0x0448, "PROTO": 0x0450, "FILTER": 0x0458, "LEN": 0x0460}  # fmt: skip
 ID, VERSION = 0x0000, 0x0004
+RESET_SEEN, NET_CTRL = 0x000C, 0x0100  # F8; the NET block's first shadow register
 
 # Hand-written: the RING block (audit/13 S6).
 RING_CTRL, RING_BASE_LO, RING_BASE_HI, RING_SIZE_LOG2, CONS_IDX, PROD_IDX, RING_STATUS = (
@@ -311,6 +312,7 @@ class System:
         self.ring_wanted = 0  # packet entries the model has given so far
         self.ring_log: list[dict] = []  # entries read, decoded (with keep)
         self.ring_size_log2 = 0
+        self.retired = False  # set before a reset of the core: the chain model does not follow resets
         cocotb.start_soon(self._monitor())
 
     async def send(self, frame: bytes, tuser: bool = False, gap: int = 0, name: str = "") -> Sent:
@@ -348,6 +350,8 @@ class System:
         while True:
             await RisingEdge(d.net_clk)
             await ReadOnly()
+            if self.retired:
+                return
             self.cycle += 1
             assert not r.net_rst.value, "net reset after start (the chain model does not follow resets)"
             self._itch_out()
@@ -878,7 +882,7 @@ async def tc_bring_up(dut):
     committed, so every payload packet reaches moldudp64_rx as MOLD_DISABLED."""
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0004, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0005, OKAY)
     frames = []
     for i in range(5):  # before any commit: receiver off
         frames.append((await sysm.send(udp_frame(bytes(range(20 + i))), gap=2)).frame)
@@ -1564,7 +1568,7 @@ async def tc_ring_bring_up(dut):
     C = ItchClass
     w, sysm = await start(dut)
     assert await w.drv.read(ID) == (0x48465431, OKAY)
-    assert await w.drv.read(VERSION) == (0x0005_0004, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0005, OKAY)
     host = RingHost(dut, w, sysm, 4)
     await host.enable()
     assert await w.drv.read(RING_BASE_LO) == (RING_BASE & 0xFFFF_FFFF, OKAY)
@@ -1761,6 +1765,117 @@ async def tc_ring_errors(dut):
     assert v["RING_COMMIT_ENTRIES"] == 4 == 3 + 1
     assert not any(host.read(RING_BASE + 128, 128)), "the refused burst reached memory"
     assert host.read(RING_BASE + 2 * 128, 8) == (102).to_bytes(8, "little"), "no retry: the next entry follows"
+    w.feed.check_done()
+
+
+async def reset_core(dut) -> None:
+    """A reset of the core mid-run (rst_in, as the platform gives it): both synchronized resets rise and fall. ts_q
+    is 0 while the net reset holds it and then counts the net edges after it (no random start here: the restart
+    itself is checked; u_wrap's copy of the net reset stands for ts_q's, every copy is equal in every cycle)."""
+    dut.rst_in.value = 1
+    for _ in range(6):
+        await RisingEdge(dut.host_clk)
+        await RisingEdge(dut.net_clk)
+    dut.rst_in.value = 0
+    low = 0  # net edges that sampled the net reset low
+    for _ in range(200):
+        await ReadOnly()
+        assert int(dut.ts_q.value) == low, f"ts_q {int(dut.ts_q.value)} after {low} net edges out of reset"
+        rst = bool(dut.u_wrap.net_rst.value)
+        if low >= 8 and not dut.u_wrap.host_rst.value:
+            break
+        await RisingEdge(dut.net_clk)
+        low += int(not rst)
+    else:
+        raise AssertionError("the synchronized resets never fell")
+    await RisingEdge(dut.host_clk)
+
+
+@cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_reset_seen(dut):
+    """F8 decisions 3 and 10 as software sees a reset: RESET_SEEN is 1 after reset; software writes 0 right after ID
+    and VERSION, configures and runs traffic (a snapshot and the traffic leave it 0). A reset of the core mid-run
+    sets it again, puts the configuration and every counter back (the receiver drops frames as DISABLED, the
+    snapshot registers read 0) and restarts ts_q at 0; software sees the 1, writes 0, configures again, and the
+    traffic is right again (every outcome against the chain model, the counters against the snapshot model)."""
+    w, sysm = await start(dut)
+    assert await w.drv.read(ID) == (0x48465431, OKAY)
+    assert await w.drv.read(VERSION) == (0x0005_0005, OKAY)
+    assert await w.drv.read(RESET_SEEN) == (1, OKAY), "RESET_SEEN after the first reset"
+    assert await w.drv.write(RESET_SEEN, 0) == OKAY
+    await configure(w, NET_FEED)
+    await configure_feed(w, FEED_ON)
+    for i in range(5):
+        await send_feed(sysm, 100 + i, [order(1, i)])
+    await sysm.finish()
+    v = named(await snapshot_checked(w))
+    assert (v["MOLD_OK"], v["MOLD_MSGS"]) == (5, 5)
+    assert await w.drv.read(RESET_SEEN) == (0, OKAY), "traffic or a snapshot changed RESET_SEEN"
+
+    sysm.retired = True
+    await reset_core(dut)
+    w.regs = {}
+    w.snap = Snap(w, drive=False)
+    sysm = System(dut, w)
+    assert await w.drv.read(RESET_SEEN) == (1, OKAY), "the reset did not set RESET_SEEN"
+    assert await w.snap.seq() == 0
+    assert await w.snap.read_counters() == [0] * len(SNAP_NAMES), "a snapshot register survived the reset"
+    assert await w.drv.read(NET_CTRL) == (0, OKAY), "the NET shadow survived the reset"
+    for i in range(3):  # the configuration is gone: the receiver is off
+        await send_feed(sysm, 105 + i, [order(1, i)])
+    await sysm.finish()
+    assert await w.drv.write(RESET_SEEN, 0) == OKAY
+    await configure(w, NET_FEED)
+    await configure_feed(w, FEED_ON)
+    for i in range(5):
+        await send_feed(sysm, 200 + i, [order(1, i)])
+    await sysm.finish()
+    v = named(await snapshot_checked(w))
+    assert (v["DROP_DISABLED"], v["MOLD_OK"], v["MOLD_MSGS"]) == (3, 5, 5)
+    assert await w.drv.read(RESET_SEEN) == (0, OKAY)
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=50, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ts_snapshot(dut):
+    """TS_SNAPSHOT against the ring (F8 decision 9): 60 packets while snapshots are taken. Every entry a snapshot
+    counts in RING_COMMIT_ENTRIES has a sof_ts below that snapshot's TS_SNAPSHOT (its packet came before the
+    snapshot), and two snapshots' TS_SNAPSHOT differ by exactly the net edges between their acceptance edges (ts_q
+    counts one per edge). The test checks that some snapshot caught a packet in flight (arrived, not committed)."""
+    w, sysm, host = await ring_system(dut, 8)
+    sent = False
+
+    async def traffic() -> None:
+        nonlocal sent
+        for i in range(60):
+            await send_feed(sysm, 100 + 2 * i, [order(1, 2 * i), order(1, 2 * i + 1)], gap=random.randint(0, 20))
+        sent = True
+
+    task = cocotb.start_soon(traffic())
+    snaps: list[tuple[int, int, int]] = []  # (STATS_SEQ, TS_SNAPSHOT, RING_COMMIT_ENTRIES)
+
+    async def take() -> None:
+        v = named(await snapshot_checked(w))
+        snaps.append((len(w.snap.accepts), v["TS_SNAPSHOT"], v["RING_COMMIT_ENTRIES"]))
+
+    while not sent:
+        await take()
+        for _ in range(random.randint(0, 30)):
+            await RisingEdge(dut.host_clk)
+    await task
+    await host.drain()
+    await take()
+    entries = sysm.ring_log
+    assert len(entries) == 120 == snaps[-1][2]
+    caught = 0
+    for seq, ts, n in snaps:
+        late = [e["sof_ts"] for e in entries[:n] if e["sof_ts"] >= ts]
+        assert not late, f"snapshot {seq}: TS_SNAPSHOT {ts:#x}, counted entries with sof_ts {late}"
+        caught += any(e["sof_ts"] < ts for e in entries[n:])
+    assert caught, "no snapshot caught a packet between its first beat and its commit"
+    for (s1, t1, _), (s2, t2, _) in zip(snaps, snaps[1:]):
+        edges = w.snap.edge_index[w.snap.accepts[s2 - 1]] - w.snap.edge_index[w.snap.accepts[s1 - 1]]
+        assert (t2 - t1) & MASK64 == edges, f"snapshots {s1}, {s2}: TS_SNAPSHOT moved {t2 - t1}, {edges} net edges"
     w.feed.check_done()
 
 

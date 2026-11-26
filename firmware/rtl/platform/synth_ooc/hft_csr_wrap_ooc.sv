@@ -7,7 +7,7 @@
 // a register here; F8 S2 moved it into the wrapper, where risk_check needs it too).
 // Not used in simulation.
 // Clock domain : host_clk (s_axil_*, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
-//                cnt_ring_*, and the order path: ctl_*, cmd_*, loc_*, m_host_*, st_*, ev_*, ord_*)
+//                cnt_ring_*, ts_now, and the order path: ctl_*, cmd_*, loc_*, m_host_*, st_*, ev_*, ord_*)
 module hft_csr_wrap_ooc
   import hft_pkg::*;
 #(
@@ -88,6 +88,7 @@ module hft_csr_wrap_ooc
     input logic          [63:0] feed_expected_seq,
     input logic                 feed_synced,
     input logic                 feed_eos,
+    input logic          [63:0] ts_now,
 
     output logic        sym_req_valid,
     input  logic        sym_req_ready,
@@ -168,7 +169,7 @@ module hft_csr_wrap_ooc
   logic       [15:0] stat_bytes_q;
   logic mpkt_valid_q, feed_synced_q, feed_eos_q;
   mold_status_e mpkt_status_q;
-  logic [63:0] mpkt_gap_q, feed_expected_seq_q;
+  logic [63:0] mpkt_gap_q, feed_expected_seq_q, ts_now_q;
   logic [15:0] mpkt_msgs_q, mpkt_dup_msgs_q, mpkt_oversize_q;
   logic mres_valid_q, sym_req_ready_q, sym_rsp_valid_q;
   itch_class_e          mres_class_q;
@@ -221,6 +222,7 @@ module hft_csr_wrap_ooc
     feed_expected_seq_q       <= feed_expected_seq;
     feed_synced_q             <= feed_synced;
     feed_eos_q                <= feed_eos;
+    ts_now_q                  <= ts_now;
     mres_valid_q              <= mres_valid;
     mres_class_q              <= mres_class;
     mres_outcome_q            <= mres_outcome;
@@ -319,6 +321,7 @@ module hft_csr_wrap_ooc
       .feed_expected_seq      (feed_expected_seq_q),
       .feed_synced            (feed_synced_q),
       .feed_eos               (feed_eos_q),
+      .ts_now                 (ts_now_q),
       .sym_req_valid          (sym_req_valid),
       .sym_req_ready          (sym_req_ready_q),
       .sym_req_wr             (sym_req_wr),

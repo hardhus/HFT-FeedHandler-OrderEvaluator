@@ -39,12 +39,15 @@ EXTERNAL = {
     "TX.TX_COMMIT", "TX.TX_USERREF_NEXT", "TX.TX_USERREF",
 }  # fmt: skip
 
-# Every register of the map (F5 + F3 FEED block + F4 ITCH block + F6 RING block + F7 RISK, STRATEGY, TX):
+# Every register of the map (F5 + F3 FEED block + F4 ITCH block + F6 RING block + F7 RISK, STRATEGY, TX + F8 GLOBAL):
 # path -> address.
 EXPECTED = {
     "GLOBAL.ID": 0x0000,
     "GLOBAL.VERSION": 0x0004,
     "GLOBAL.SCRATCH": 0x0008,
+    "GLOBAL.RESET_SEEN": 0x000C,
+    "GLOBAL.TS_SNAPSHOT.LO": 0x0010,
+    "GLOBAL.TS_SNAPSHOT.HI": 0x0014,
     "NET.NET_CTRL": 0x0100,
     "NET.LOCAL_MAC_LO": 0x0104,
     "NET.LOCAL_MAC_HI": 0x0108,
@@ -257,7 +260,9 @@ def test_read_windows_stay_small():
 def test_constants():
     regs = regs_by_path()
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
-    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0004  # + F3 FEED, F4 ITCH, SYMBOL, F6 RING, F7 (minor)
+    assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0005  # + F3 FEED, F4 ITCH, SYMBOL, F6 RING, F7, F8 (minor)
+    seen = regs["GLOBAL.RESET_SEEN"].fields[0]
+    assert (seen.reset, seen.sw_read, seen.sw_write, seen.hw_write) == (1, True, True, False), "1 after reset, only sw writes"
 
 
 def test_drop_counters_follow_reason_codes():
@@ -436,6 +441,7 @@ def test_access_kinds():
         return {(True, True): "RW", (True, False): "RO", (False, True): "WO"}[r.readable, r.writable]
 
     ro = {"GLOBAL.ID", "GLOBAL.VERSION", "NET.NET_STATUS", "STATS.STATS_SEQ", "FEED.FEED_STATUS", "FEED.FEED_STATE"}
+    ro |= {"GLOBAL.TS_SNAPSHOT.LO", "GLOBAL.TS_SNAPSHOT.HI"}  # RESET_SEEN is RW (software clears it)
     ro |= {p for p in EXPECTED if p.startswith(("STATS.", "FEED.", "ITCH.", "RING.")) and p.endswith((".LO", ".HI"))}
     ro |= {"RING.PROD_IDX", "RING.RING_STATUS"}
     ro -= {"FEED.RESYNC_SEQ_LO", "FEED.RESYNC_SEQ_HI"}  # software writes the resync value

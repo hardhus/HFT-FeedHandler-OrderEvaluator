@@ -8,26 +8,6 @@ package hft_csr_pkg;
     localparam HFT_CSR_SIZE = 'hc000;
 
     typedef struct {
-        logic next;
-    } hft_csr__NET__NET_STATUS__commit_busy__in_t;
-
-    typedef struct {
-        hft_csr__NET__NET_STATUS__commit_busy__in_t commit_busy;
-    } hft_csr__NET__NET_STATUS__in_t;
-
-    typedef struct {
-        hft_csr__NET__NET_STATUS__in_t NET_STATUS;
-    } hft_csr__NET__in_t;
-
-    typedef struct {
-        logic next;
-    } hft_csr__FEED__FEED_STATUS__commit_busy__in_t;
-
-    typedef struct {
-        hft_csr__FEED__FEED_STATUS__commit_busy__in_t commit_busy;
-    } hft_csr__FEED__FEED_STATUS__in_t;
-
-    typedef struct {
         logic [31:0] next;
     } hft_csr__counter64__LO__value__in_t;
 
@@ -47,6 +27,30 @@ package hft_csr_pkg;
         hft_csr__counter64__LO__in_t LO;
         hft_csr__counter64__HI__in_t HI;
     } hft_csr__counter64__in_t;
+
+    typedef struct {
+        hft_csr__counter64__in_t TS_SNAPSHOT;
+    } hft_csr__GLOBAL__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__NET__NET_STATUS__commit_busy__in_t;
+
+    typedef struct {
+        hft_csr__NET__NET_STATUS__commit_busy__in_t commit_busy;
+    } hft_csr__NET__NET_STATUS__in_t;
+
+    typedef struct {
+        hft_csr__NET__NET_STATUS__in_t NET_STATUS;
+    } hft_csr__NET__in_t;
+
+    typedef struct {
+        logic next;
+    } hft_csr__FEED__FEED_STATUS__commit_busy__in_t;
+
+    typedef struct {
+        hft_csr__FEED__FEED_STATUS__commit_busy__in_t commit_busy;
+    } hft_csr__FEED__FEED_STATUS__in_t;
 
     typedef struct {
         logic next;
@@ -211,6 +215,7 @@ package hft_csr_pkg;
     } hft_csr__LOCATE_ALLOW__external__in_t;
 
     typedef struct {
+        hft_csr__GLOBAL__in_t GLOBAL;
         hft_csr__NET__in_t NET;
         hft_csr__FEED__in_t FEED;
         hft_csr__STATS__in_t STATS;

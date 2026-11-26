@@ -58,6 +58,8 @@ REASONS = ("KILL", "TX_OFF", "INVALID", "LOCATE", "QTY", "NOTIONAL", "BUDGET", "
 ORD_NAMES = [f"STRATEGY.RULE_FIRED_{n}" for n in range(8)] + ["RISK.ORDERS_SENT_HW", "RISK.ORDERS_SENT_HOST"]
 ORD_NAMES += [f"RISK.RISK_REJECT_{r}" for r in REASONS] + ["RING.RING_DROP_ORDERS"]
 SNAP_NAMES += ORD_NAMES + ["RING.RING_ORDER_QUEUED", "STRATEGY.RULE_ARMED", "RISK.BUDGET"]
+# The timestamp counter taken with them (ts_now on the acceptance edge, F8 decision 9).
+SNAP_NAMES += ["GLOBAL.TS_SNAPSHOT"]
 # Snapshot registers of one word (the others are 64-bit LO/HI pairs).
 SINGLE = {"FEED.FEED_STATE", "RING.RING_ORDER_QUEUED", "STRATEGY.RULE_ARMED", "RISK.BUDGET"}
 N_CNT = len(SNAP_NAMES)
@@ -477,7 +479,7 @@ class Snap:
     sampled FEED_DELAY net edges before E. ITCH counters: a result waits for its packet event, which adds it for OK, HEARTBEAT and EOS
     and drops it otherwise; a result on the edge of a packet event belongs to the next packet. The order counters
     count the ord_* events sampled before E (order_stats, no delay), and ord_queued, st_armed and st_budget are
-    the values sampled on E."""
+    the values sampled on E. TS_SNAPSHOT is ts_now sampled on E."""
 
     def __init__(self, w: Wrap, drive: bool = True):
         self.w, self.dut = w, w.root
@@ -490,6 +492,7 @@ class Snap:
         self.ring_at: dict[int, tuple[int, int, int]] = {}  # net edge -> the cnt_ring_* it sampled
         self.ord_events: list[tuple[int, list[int]]] = []  # (sampling net edge, order counter increments)
         self.levels_at: dict[int, tuple[int, int, int]] = {}  # net edge -> (ord_queued, st_armed, st_budget)
+        self.ts_at: dict[int, int] = {}  # net edge -> the ts_now it sampled
         self.edges: list[int] = []  # every net edge, in order
         self.edge_index: dict[int, int] = {}  # net edge -> its index in edges
         self.accepts: list[int] = []  # net edges that take a snapshot (data handshake accepts)
@@ -543,6 +546,8 @@ class Snap:
             dut.ord_queued.value = rng.randint(0, 16)
             dut.st_armed.value = rng.getrandbits(8)
             dut.st_budget.value = rng.choice([0, 0xFFFF_FFFF, rng.getrandbits(32)])
+            # Any timestamp each cycle (the snapshot must take the one of its acceptance edge, all 64 bits).
+            dut.ts_now.value = rng.choice([0, MASK64, rng.getrandbits(64)])
             if rng.random() < 0.1:
                 dut.feed_expected_seq.value = rng.getrandbits(64)
                 dut.feed_synced.value = rng.getrandbits(1)
@@ -573,12 +578,14 @@ class Snap:
             ring = (int(dut.cnt_ring_commit_entries.value), int(dut.cnt_ring_drop_pkts.value),
                     int(dut.cnt_ring_drop_entries.value))  # fmt: skip
             levels = (int(dut.ord_queued.value), int(dut.st_armed.value), int(dut.st_budget.value))
+            ts = int(dut.ts_now.value)
             ord_inc = None if dut.net_rst.value else ord_increments(dut)
             await RisingEdge(dut.net_clk)
             edge = get_sim_time()
             self.feed_at[edge] = feed
             self.ring_at[edge] = ring
             self.levels_at[edge] = levels
+            self.ts_at[edge] = ts
             if ord_inc is not None and any(ord_inc):
                 self.ord_events.append((edge, ord_inc))
             self.edge_index[edge] = len(self.edges)
@@ -656,7 +663,7 @@ class Snap:
                 break
             o = [a + b for a, b in zip(o, inc, strict=True)]
         base = [v & MASK64 for v in c + m + it] + list(self.ring_at[edge]) + [e, synced | eos << 1]
-        return base + [v & MASK64 for v in o] + list(self.levels_at[edge])
+        return base + [v & MASK64 for v in o] + list(self.levels_at[edge]) + [self.ts_at[edge]]
 
     async def read_counters(self) -> list[int]:
         """Every snapshot register, in SNAP_NAMES order (64-bit values from LO and HI)."""

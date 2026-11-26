@@ -20,7 +20,7 @@ extern "C" {
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bm 0xffffffff
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bp 0
 #define HFT_CSR__GLOBAL__VERSION__VERSION_bw 32
-#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50004
+#define HFT_CSR__GLOBAL__VERSION__VERSION_reset 0x50005
 
 // reg - hft_csr::GLOBAL::SCRATCH
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bm 0xffffffff
@@ -28,11 +28,35 @@ extern "C" {
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_bw 32
 #define HFT_CSR__GLOBAL__SCRATCH__VALUE_reset 0x0
 
+// reg - hft_csr::GLOBAL::RESET_SEEN
+#define HFT_CSR__GLOBAL__RESET_SEEN__SEEN_bm 0x1
+#define HFT_CSR__GLOBAL__RESET_SEEN__SEEN_bp 0
+#define HFT_CSR__GLOBAL__RESET_SEEN__SEEN_bw 1
+#define HFT_CSR__GLOBAL__RESET_SEEN__SEEN_reset 0x1
+
+// reg - hft_csr__counter64::LO
+#define HFT_CSR__COUNTER64__LO__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64__LO__VALUE_bp 0
+#define HFT_CSR__COUNTER64__LO__VALUE_bw 32
+
+// reg - hft_csr__counter64::HI
+#define HFT_CSR__COUNTER64__HI__VALUE_bm 0xffffffff
+#define HFT_CSR__COUNTER64__HI__VALUE_bp 0
+#define HFT_CSR__COUNTER64__HI__VALUE_bw 32
+
+// regfile - hft_csr__counter64
+typedef struct __attribute__ ((__packed__)) {
+    uint32_t LO;
+    uint32_t HI;
+} hft_csr__counter64_t;
+
 // regfile - hft_csr::GLOBAL
 typedef struct __attribute__ ((__packed__)) {
     uint32_t ID;
     uint32_t VERSION;
     uint32_t SCRATCH;
+    uint32_t RESET_SEEN;
+    hft_csr__counter64_t TS_SNAPSHOT;
 } hft_csr__GLOBAL_t;
 
 // reg - hft_csr::NET::NET_CTRL
@@ -163,22 +187,6 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bm 0x1
 #define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bp 0
 #define HFT_CSR__FEED__FEED_STATUS__COMMIT_BUSY_bw 1
-
-// reg - hft_csr__counter64::LO
-#define HFT_CSR__COUNTER64__LO__VALUE_bm 0xffffffff
-#define HFT_CSR__COUNTER64__LO__VALUE_bp 0
-#define HFT_CSR__COUNTER64__LO__VALUE_bw 32
-
-// reg - hft_csr__counter64::HI
-#define HFT_CSR__COUNTER64__HI__VALUE_bm 0xffffffff
-#define HFT_CSR__COUNTER64__HI__VALUE_bp 0
-#define HFT_CSR__COUNTER64__HI__VALUE_bw 32
-
-// regfile - hft_csr__counter64
-typedef struct __attribute__ ((__packed__)) {
-    uint32_t LO;
-    uint32_t HI;
-} hft_csr__counter64_t;
 
 // reg - hft_csr::FEED::FEED_STATE
 #define HFT_CSR__FEED__FEED_STATE__SYNCED_bm 0x1
@@ -737,7 +745,7 @@ typedef struct __attribute__ ((__packed__)) {
 // addrmap - hft_csr
 typedef struct __attribute__ ((__packed__)) {
     hft_csr__GLOBAL_t GLOBAL;
-    uint8_t RESERVED_c_ff[0xf4];
+    uint8_t RESERVED_18_ff[0xe8];
     hft_csr__NET_t NET;
     uint8_t RESERVED_160_1ff[0xa0];
     hft_csr__FEED_t FEED;

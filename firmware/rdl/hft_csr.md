@@ -31,15 +31,17 @@ Don't override. Generated from: hft_csr
 
 - Absolute Address: 0x0
 - Base Offset: 0x0
-- Size: 0xC
+- Size: 0x18
 
-<p>Identification and a scratch register.</p>
+<p>Identification, a scratch register, the reset flag and the time of the last snapshot. TS_SNAPSHOT is the core's timestamp counter (net clock cycles since reset, 64 bit, the clock of every sof_ts in the ring) taken by STATS_CTRL.snapshot in the same net clock cycle as the snapshot counters: an event counted in a snapshot happened before its TS_SNAPSHOT.</p>
 
-|Offset|Identifier|        Name        |
-|------|----------|--------------------|
-|  0x0 |    ID    |   Identification   |
-|  0x4 |  VERSION |Register map version|
-|  0x8 |  SCRATCH |       Scratch      |
+|Offset| Identifier|        Name        |
+|------|-----------|--------------------|
+| 0x00 |     ID    |   Identification   |
+| 0x04 |  VERSION  |Register map version|
+| 0x08 |  SCRATCH  |       Scratch      |
+| 0x0C | RESET_SEEN|     Reset seen     |
+| 0x10 |TS_SNAPSHOT|   64-bit counter   |
 
 ### ID register
 
@@ -63,11 +65,11 @@ Don't override. Generated from: hft_csr
 
 |Bits|Identifier|Access| Reset |Name|
 |----|----------|------|-------|----|
-|31:0|  version |   r  |0x50004|  — |
+|31:0|  version |   r  |0x50005|  — |
 
 #### version field
 
-<p>Major.minor of this map: 0x0005_0004 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block and the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
+<p>Major.minor of this map: 0x0005_0005 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block, the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap, and the F8 RESET_SEEN and TS_SNAPSHOT. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.</p>
 
 ### SCRATCH register
 
@@ -82,6 +84,59 @@ Don't override. Generated from: hft_csr
 #### value field
 
 <p>Read/write, no hardware effect: bus read-back test.</p>
+
+### RESET_SEEN register
+
+- Absolute Address: 0xC
+- Base Offset: 0xC
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|  0 |   seen   |  rw  | 0x1 |  — |
+
+#### seen field
+
+<p>1 after every reset of the core (rst_in): the whole configuration is back at its reset values. Software writes 0 at the start of configuring, right after checking ID and VERSION and before any other block, and reads it at start-up and in its health check: 1 means the core was reset since, so it configures everything again. A reset while software configures sets it again after that 0, so it is not lost. Only a reset writes it; no other hardware effect, no interrupt.</p>
+
+## TS_SNAPSHOT register file
+
+- Absolute Address: 0x10
+- Base Offset: 0x10
+- Size: 0x8
+
+|Offset|Identifier|   Name  |
+|------|----------|---------|
+|  0x0 |    LO    | Low word|
+|  0x4 |    HI    |High word|
+
+### LO register
+
+- Absolute Address: 0x10
+- Base Offset: 0x0
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [31:0] at the last snapshot.</p>
+
+### HI register
+
+- Absolute Address: 0x14
+- Base Offset: 0x4
+- Size: 0x4
+
+|Bits|Identifier|Access|Reset|Name|
+|----|----------|------|-----|----|
+|31:0|   value  |   r  |  —  |  — |
+
+#### value field
+
+<p>Counter bits [63:32] at the last snapshot.</p>
 
 ## NET register file
 
@@ -1431,7 +1486,7 @@ Don't override. Generated from: hft_csr
 - Base Offset: 0x400
 - Size: 0x68
 
-<p>Receive counters (net clock domain, 64 bit, wrap; cleared only by reset). Software reads them through a snapshot: read STATS_SEQ, write STATS_CTRL.snapshot, wait until STATS_SEQ changes, then read. All counters of one snapshot are taken in the same net clock cycle. DROP_<reason> is at 0x0420 + 8 * (reason - 1), reason = rx_reason_e in hft_pkg.sv.</p>
+<p>Receive counters (net clock domain, 64 bit, wrap; cleared only by reset). Software reads them through a snapshot: read STATS_SEQ, write STATS_CTRL.snapshot, wait until STATS_SEQ changes, then read. All counters of one snapshot are taken in the same net clock cycle, with GLOBAL.TS_SNAPSHOT. DROP_<reason> is at 0x0420 + 8 * (reason - 1), reason = rx_reason_e in hft_pkg.sv.</p>
 
 |Offset|  Identifier  |       Name       |
 |------|--------------|------------------|

@@ -89,6 +89,8 @@ from model.net import RxReason
 
 RUNTIME_PARAMS = ("ratio", "group")
 STAGES = 2
+RESET_SEEN = addr("GLOBAL.RESET_SEEN")
+TS_LO, TS_HI = addr("GLOBAL.TS_SNAPSHOT.LO"), addr("GLOBAL.TS_SNAPSHOT.HI")
 
 
 def jitter() -> bool:
@@ -128,7 +130,7 @@ async def start(dut) -> Wrap:
                  "ev_userref_ignored", "st_userref", "st_budget", "loc_req_ready", "loc_rsp_valid", "loc_rsp_rdata",
                  "st_tx_cfg_valid", "ev_cfg_refused", "m_host_ready", "ord_fire_valid", "ord_fire_rule",
                  "ord_sent_valid", "ord_sent_source", "ord_rej_valid", "ord_rej_reason", "ord_lost_valid",
-                 "ord_lost_reason", "ord_queued"):  # fmt: skip
+                 "ord_lost_reason", "ord_queued", "ts_now"):  # fmt: skip
         getattr(dut, name).value = 0
     dut.host_rst.value = 1
     dut.net_rst.value = 1
@@ -277,6 +279,67 @@ async def tc_reset_during_commit(dut):
         await w.commit()
         await w.wait_idle()
         assert await w.applied() == cfg
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_reset_seen(dut):
+    """RESET_SEEN (F8 decisions 3 and 10), hand-written values: 1 after reset; software's writes read back (bit 0
+    only); nothing but a reset sets it; every reset sets it again, also right after software wrote 0."""
+    w = await start(dut)
+    assert await w.drv.read(RESET_SEEN) == (1, OKAY), "RESET_SEEN reset value"
+    for data, want in ((0, 0), (1, 1), (0xFFFF_FFFE, 0), (0xFFFF_FFFF, 1), (0, 0)):
+        assert await w.drv.write(RESET_SEEN, data) == OKAY
+        assert await w.drv.read(RESET_SEEN) == (want, OKAY), f"wrote {data:#x}"
+    w.snap.p_valid = 0.5
+    seq, got = await w.snap.snapshot()  # hardware updates elsewhere in the map do not touch it
+    await w.snap.check(seq, got)
+    assert await w.drv.read(RESET_SEEN) == (0, OKAY), "RESET_SEEN changed without a reset"
+    for _ in range(3):
+        await reset(dut)  # the driver is idle; it keeps the bus
+        assert await w.drv.read(RESET_SEEN) == (1, OKAY), "a reset did not set RESET_SEEN"
+        assert await w.drv.write(RESET_SEEN, 0) == OKAY
+        for _ in range(w.rng.randint(0, 20)):
+            await RisingEdge(dut.host_clk)
+        assert await w.drv.read(RESET_SEEN) == (0, OKAY)
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_ts_snapshot(dut):
+    """TS_SNAPSHOT (F8 decision 9), hand-checked: ts_now held at hand-picked values reads back whole in LO and HI;
+    then ts_now counts one per net edge from t0, and each snapshot holds t0 + the net edges from the start to its
+    acceptance edge - 1 (the value presented before that edge: the edge's own sample, not one before or after)."""
+    w = await start(dut)
+    w.snap.drive = False
+    for value in (0x0123_4567_89AB_CDEF, MASK64, 0, 1 << 32, 0xFFFF_FFFF, 0x8000_0000_0000_0001):
+        dut.ts_now.value = value
+        seq, got = await w.snap.snapshot()
+        await w.snap.check(seq, got)
+        assert await w.drv.read(TS_LO) == (value & 0xFFFF_FFFF, OKAY), f"TS_SNAPSHOT.LO of {value:#x}"
+        assert await w.drv.read(TS_HI) == (value >> 32, OKAY), f"TS_SNAPSHOT.HI of {value:#x}"
+    t0 = 0xFFFF_FFFF_FFFF_FF00  # crosses the 32-bit and the 64-bit wrap
+    await RisingEdge(dut.net_clk)
+    e0 = get_sim_time()  # t0 is presented to the next edge, t0 + k - 1 to the k-th edge after e0
+    dut.ts_now.value = t0
+
+    async def count() -> None:
+        v = t0
+        while True:
+            await RisingEdge(dut.net_clk)
+            v = (v + 1) & MASK64
+            dut.ts_now.value = v
+
+    counter = cocotb.start_soon(count())
+    for _ in range(8):
+        for _ in range(w.rng.randint(0, 40)):
+            await RisingEdge(dut.host_clk)
+        seq, got = await w.snap.snapshot()
+        await w.snap.check(seq, got)
+        lo, r1 = await w.drv.read(TS_LO)
+        hi, r2 = await w.drv.read(TS_HI)
+        assert r1 == r2 == OKAY
+        k = w.snap.edge_index[w.snap.accepts[seq - 1]] - w.snap.edge_index[e0]
+        assert hi << 32 | lo == (t0 + k - 1) & MASK64, f"snapshot {seq}: TS_SNAPSHOT {hi << 32 | lo:#x}, {k} edges"
+    counter.cancel()
 
 
 @cocotb.test(timeout_time=2, timeout_unit="ms")  # a broken DUT must fail, not hang

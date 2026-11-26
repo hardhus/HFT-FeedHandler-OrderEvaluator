@@ -11,6 +11,9 @@
 OFS(GLOBAL.ID, 0x0000);
 OFS(GLOBAL.VERSION, 0x0004);
 OFS(GLOBAL.SCRATCH, 0x0008);
+OFS(GLOBAL.RESET_SEEN, 0x000C);
+OFS(GLOBAL.TS_SNAPSHOT.LO, 0x0010);
+OFS(GLOBAL.TS_SNAPSHOT.HI, 0x0014);
 
 // NET
 OFS(NET.NET_CTRL, 0x0100);
@@ -261,7 +264,8 @@ static_assert(sizeof(hft_csr_t) == 0xC000, "the map ends after LOCATE_ALLOW");
 
 // Field layout and constants used by software.
 static_assert(HFT_CSR__GLOBAL__ID__ID_reset == 0x48465431, "ID is \"HFT1\"");
-static_assert(HFT_CSR__GLOBAL__VERSION__VERSION_reset == 0x00050004, "F5 map + F3 FEED + F4 ITCH, SYMBOL + F6 RING + F7");
+static_assert(HFT_CSR__GLOBAL__VERSION__VERSION_reset == 0x00050005, "F5 map + F3 FEED + F4 ITCH, SYMBOL + F6 RING + F7 + F8");
+static_assert(HFT_CSR__GLOBAL__RESET_SEEN__SEEN_reset == 1 && HFT_CSR__GLOBAL__RESET_SEEN__SEEN_bp == 0, "RESET_SEEN");
 static_assert(HFT_CSR__RISK__RISK_CTRL__KILL_reset == 1, "kill is 1 after reset (decision 5)");
 static_assert(HFT_CSR__TX__TX_CTRL__TX_EN_reset == 0, "tx_en is 0 after reset");
 static_assert(HFT_CSR__STRATEGY__RULE_CTRL__TIF_bp == 16 && HFT_CSR__STRATEGY__RULE_CTRL__ACTION_SIDE_bp == 8, "RULE_CTRL");
