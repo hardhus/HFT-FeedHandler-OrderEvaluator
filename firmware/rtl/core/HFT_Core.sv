@@ -19,10 +19,11 @@
 // Order path   : itch_decoder m_ev_* and m_fwd_pkt_* -> strategy_engine -> risk_check (with the host mailbox)
 //                -> order_tx_builder -> m_axis_tx_* (audit/14 §2.2). strategy_engine sees only the messages that
 //                itch_decoder outputs (m_ev_valid: not MASKED or FILTERED), so a rule's locate must pass the FEED
-//                class and SYMBOL filters (decision 39). The effective tx_en of strategy_engine and risk_check is
-//                ctl_tx_en && st_cfg_valid (decision 26). LOCATE_ALLOW is risk_check's bitmap. ORDER_SENT,
-//                RISK_REJECT and lost rejects go to event_packer's order inputs, and order_stats counts the same
-//                signals (hft_csr_wrap header, audit/14 S7 A5); event_packer returns ring credits to risk_check.
+//                class and SYMBOL filters (decision 39). strategy_engine and risk_check take ctl_tx_en, which
+//                hft_csr_wrap already gates with st_tx_cfg_valid (decision 26). LOCATE_ALLOW is risk_check's
+//                bitmap. ORDER_SENT, RISK_REJECT and lost rejects go to event_packer's order inputs, and
+//                order_stats counts the same signals (hft_csr_wrap header, audit/14 S7 A5); event_packer returns
+//                ring credits to risk_check.
 // irq          : host_clk, level. Tied to 0 for now (the ring interrupt comes in F8 S5).
 // Latency      : those of its blocks
 module HFT_Core
@@ -146,8 +147,8 @@ module HFT_Core
   // event_packer's order queue
   logic                         ring_credit_ret;
   logic [RING_ORD_QUEUED_W-1:0] ring_ord_queued;
-  // Order path controls (hft_csr_wrap) and the effective tx_en (ctl_tx_en && st_cfg_valid, decision 26)
-  logic ctl_kill, ctl_tx_en, tx_en_eff;
+  // Order path controls (hft_csr_wrap); ctl_tx_en already includes st_tx_cfg_valid (decision 26)
+  logic ctl_kill, ctl_tx_en;
   // The net_clk timestamp counter
   logic [63:0] ts_q;
 
@@ -556,8 +557,6 @@ module HFT_Core
   );
 
   // ---- Order path (header) ----
-  assign tx_en_eff = ctl_tx_en && st_tx_cfg_valid;
-
   strategy_engine u_strategy (
       .clk            (net_clk),
       .rst            (net_rst[NR_STRATEGY]),
@@ -575,7 +574,7 @@ module HFT_Core
       .s_pkt_valid    (m_fwd_pkt_valid),
       .s_pkt_status   (m_fwd_pkt_status),
       .ctl_kill       (ctl_kill),
-      .ctl_tx_en      (tx_en_eff),
+      .ctl_tx_en      (ctl_tx_en),
       .cfg_rule_wr    (cfg_rule_wr),
       .cfg_rule_idx   (cfg_rule_idx),
       .cfg_rule       (cfg_rule),
@@ -624,7 +623,7 @@ module HFT_Core
       .s_host_tif           (m_host_tif),
       .s_host_clordid       (m_host_clordid),
       .ctl_kill             (ctl_kill),
-      .ctl_tx_en            (tx_en_eff),
+      .ctl_tx_en            (ctl_tx_en),
       .cfg_lim_wr           (cfg_lim_wr),
       .cfg_max_qty          (cfg_max_qty),
       .cfg_max_notional     (cfg_max_notional),
