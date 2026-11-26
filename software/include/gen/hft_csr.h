@@ -50,6 +50,23 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t HI;
 } hft_csr__counter64_t;
 
+// reg - hft_csr::GLOBAL::IRQ_EN
+#define HFT_CSR__GLOBAL__IRQ_EN__RING_bm 0x1
+#define HFT_CSR__GLOBAL__IRQ_EN__RING_bp 0
+#define HFT_CSR__GLOBAL__IRQ_EN__RING_bw 1
+#define HFT_CSR__GLOBAL__IRQ_EN__RING_reset 0x0
+
+// reg - hft_csr::GLOBAL::IRQ_RING_IDX
+#define HFT_CSR__GLOBAL__IRQ_RING_IDX__IDX_bm 0xffffffff
+#define HFT_CSR__GLOBAL__IRQ_RING_IDX__IDX_bp 0
+#define HFT_CSR__GLOBAL__IRQ_RING_IDX__IDX_bw 32
+#define HFT_CSR__GLOBAL__IRQ_RING_IDX__IDX_reset 0x0
+
+// reg - hft_csr::GLOBAL::IRQ_STATUS
+#define HFT_CSR__GLOBAL__IRQ_STATUS__RING_bm 0x1
+#define HFT_CSR__GLOBAL__IRQ_STATUS__RING_bp 0
+#define HFT_CSR__GLOBAL__IRQ_STATUS__RING_bw 1
+
 // regfile - hft_csr::GLOBAL
 typedef struct __attribute__ ((__packed__)) {
     uint32_t ID;
@@ -57,6 +74,9 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t SCRATCH;
     uint32_t RESET_SEEN;
     hft_csr__counter64_t TS_SNAPSHOT;
+    uint32_t IRQ_EN;
+    uint32_t IRQ_RING_IDX;
+    uint32_t IRQ_STATUS;
 } hft_csr__GLOBAL_t;
 
 // reg - hft_csr::NET::NET_CTRL
@@ -325,6 +345,11 @@ typedef struct __attribute__ ((__packed__)) {
 #define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bp 1
 #define HFT_CSR__RING__RING_STATUS__ENABLE_ERR_bw 1
 
+// reg - hft_csr::RING::RING_DONE_IDX
+#define HFT_CSR__RING__RING_DONE_IDX__DONE_bm 0xffffffff
+#define HFT_CSR__RING__RING_DONE_IDX__DONE_bp 0
+#define HFT_CSR__RING__RING_DONE_IDX__DONE_bw 32
+
 // reg - hft_csr__counter64_live::LO
 #define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bm 0xffffffff
 #define HFT_CSR__COUNTER64_LIVE__LO__VALUE_bp 0
@@ -341,6 +366,11 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t HI;
 } hft_csr__counter64_live_t;
 
+// reg - hft_csr::RING::RING_BUSY
+#define HFT_CSR__RING__RING_BUSY__BUSY_bm 0x1
+#define HFT_CSR__RING__RING_BUSY__BUSY_bp 0
+#define HFT_CSR__RING__RING_BUSY__BUSY_bw 1
+
 // reg - hft_csr::RING::RING_ORDER_QUEUED
 #define HFT_CSR__RING__RING_ORDER_QUEUED__QUEUED_bm 0x1f
 #define HFT_CSR__RING__RING_ORDER_QUEUED__QUEUED_bp 0
@@ -355,10 +385,11 @@ typedef struct __attribute__ ((__packed__)) {
     uint32_t CONS_IDX;
     uint32_t PROD_IDX;
     uint32_t RING_STATUS;
-    uint8_t RESERVED_1c_1f[0x4];
+    uint32_t RING_DONE_IDX;
     hft_csr__counter64_live_t RING_WRITTEN;
     hft_csr__counter64_live_t RING_BRESP_ERR;
-    uint8_t RESERVED_30_3f[0x10];
+    uint32_t RING_BUSY;
+    uint8_t RESERVED_34_3f[0xc];
     hft_csr__counter64_t RING_COMMIT_ENTRIES;
     hft_csr__counter64_t RING_DROP_PKTS;
     hft_csr__counter64_t RING_DROP_ENTRIES;
@@ -745,7 +776,7 @@ typedef struct __attribute__ ((__packed__)) {
 // addrmap - hft_csr
 typedef struct __attribute__ ((__packed__)) {
     hft_csr__GLOBAL_t GLOBAL;
-    uint8_t RESERVED_18_ff[0xe8];
+    uint8_t RESERVED_24_ff[0xdc];
     hft_csr__NET_t NET;
     uint8_t RESERVED_160_1ff[0xa0];
     hft_csr__FEED_t FEED;

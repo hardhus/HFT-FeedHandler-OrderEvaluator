@@ -12,12 +12,21 @@
 // Enable       : the host writes cfg_cons = 0 and zeroes the region before each enable (its rule, audit/13 S5).
 //                A rising edge of cfg_enable with cfg_cons != 0 is refused: status_enable_err is set and the
 //                writer stays stopped, since a stale cons would overwrite unread entries in silence. The same
-//                for cfg_size_log2 outside RING_SIZE_LOG2_MIN..MAX. Disable and enable again to retry. An accepted rising edge sets prod to 0 and takes base and size_log2, which
-//                are ignored until the next one, and clears both status bits. Base bits 11:0 are ignored (4 KiB
-//                aligned, so no burst crosses 4 KiB). Falling edge: bursts in flight finish, no new entry starts.
+//                for cfg_size_log2 outside RING_SIZE_LOG2_MIN..MAX, and while bursts of the last run are still
+//                unanswered (busy, below): they would land in the new run's region and count in it. Disable and
+//                enable again to retry. An accepted rising edge sets prod and done_idx to 0 and takes base and
+//                size_log2, which are ignored until the next one, and clears both status bits. Base bits 11:0 are
+//                ignored (4 KiB aligned, so no burst crosses 4 KiB). Falling edge: bursts in flight finish, no new
+//                entry starts.
+// Status       : running = enabled by an accepted edge (0 in that edge's cycle and as soon as cfg_enable falls);
+//                busy = running or bursts unanswered: the host waits for busy = 0 after a disable before it
+//                zeroes the region (audit/15 A9).
 // Errors       : a BRESP other than OKAY counts in cnt_bresp_err and sets status_bresp_err; no retry.
 // Counters     : CNT_W bits each, wrapping, cleared only by rst. cnt_written + cnt_bresp_err = answered bursts;
-//                prod_idx counts bursts started.
+//                prod_idx counts bursts started. done_idx (32 bits, wrapping, 0 at an accepted enable) counts the
+//                bursts of this run answered (OKAY or not; B comes in order): prod_idx - bursts unanswered. A
+//                bridge returns BRESP once the write is ordered before any later TLP (PG194), so an interrupt on
+//                done_idx comes after its entries are in host memory (audit/15 A7).
 // Reset        : rst clears everything; AWVALID and WVALID go low. Reset the memory side with it.
 module event_ring_writer
   import hft_pkg::*;
@@ -44,6 +53,9 @@ module event_ring_writer
     input  logic [ 4:0] cfg_size_log2,
     input  logic [31:0] cfg_cons,
     output logic [31:0] prod_idx,
+    output logic [31:0] done_idx,
+    output logic        running,
+    output logic        busy,
     output logic        status_bresp_err,
     output logic        status_enable_err,
 
@@ -82,7 +94,7 @@ module event_ring_writer
   logic enable_q, running_q, run, start, start_ok;
   logic [51:0] base_q;  // address bits 63:12
   logic [31:0] mask_q;  // N - 1
-  logic [31:0] cons_q, prod_q, used;
+  logic [31:0] cons_q, prod_q, done_q, used;
   logic [56:0] addr_q;  // address bits 63:7 of entry prod_q
   logic phase_q, last_slot, full_q;
   logic raw_valid_q, take, w_free, aw_free;
@@ -92,12 +104,15 @@ module event_ring_writer
   logic b_fire, b_ok;
 
   assign start = cfg_enable && !enable_q;
-  assign start_ok = start && cfg_cons == '0 && cfg_size_log2 >= 5'(RING_SIZE_LOG2_MIN)
+  assign start_ok = start && cfg_cons == '0 && out_q == '0 && cfg_size_log2 >= 5'(RING_SIZE_LOG2_MIN)
       && cfg_size_log2 <= 5'(RING_SIZE_LOG2_MAX);
   assign run = cfg_enable && running_q;
   assign used = prod_q - cons_q;
   assign last_slot = (prod_q & mask_q) == mask_q;
   assign prod_idx = prod_q;
+  assign done_idx = done_q;  // a register: the CSR read path and the irq compare take no carry chain
+  assign running = run;
+  assign busy = run || out_q != '0;
 
   // A new burst needs both channels free: AW and W start together and then go on their own.
   assign w_free = !m_axi_hmw_wvalid || (m_axi_hmw_wready && m_axi_hmw_wlast);
@@ -137,6 +152,7 @@ module event_ring_writer
       base_q            <= '0;
       mask_q            <= '0;
       prod_q            <= '0;
+      done_q            <= '0;
       addr_q            <= '0;
       phase_q           <= 1'b1;
       full_q            <= 1'b0;
@@ -193,6 +209,12 @@ module event_ring_writer
         m_axi_hmw_wlast  <= beat_q == BEAT_W'(BEATS - 2);
       end
 
+      // start_ok needs out_q == 0, so no B can come in its cycle.
+      if (start_ok) begin
+        done_q <= '0;
+      end else if (b_fire) begin
+        done_q <= done_q + 32'd1;
+      end
       if (b_fire) begin
         if (b_ok) begin
           cnt_written <= cnt_written + CNT_W'(1);

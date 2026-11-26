@@ -215,6 +215,8 @@ RING_VIOLATIONS = {
     "a_outstanding": (7, "more bursts unanswered than MAX_OUTSTANDING"),
     "a_enable_refused": (8, "an enable with a stale cons was not refused"),
     "a_enable_bad_size": (9, "an enable with a size out of range was not refused"),
+    "a_done_eq": (10, "done_idx differs from prod - bursts unanswered"),
+    "a_enable_busy": (11, "an enable with bursts of the last run unanswered was not refused"),
 }
 
 FIFO_TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props.sv"]
@@ -264,6 +266,14 @@ MBOX_VIOLATIONS = {
     "a_stall_stable": (1, "order changed or valid dropped before it was taken"),
     "a_gap_after_take": (2, "an order offered in the cycle after a take"),
 }
+IRQ_TB = ["firmware/tb/sva/irq_props.sv", "firmware/tb/sv/tb_irq_props.sv"]
+IRQ_VIOLATIONS = {
+    "a_irq_reset": (1, "irq high after reset"),
+    "a_irq_off": (2, "irq with IRQ_EN.ring = 0 or the ring not running"),
+    "a_irq_handled": (3, "irq with RING_DONE_IDX = IRQ_RING_IDX"),
+    "a_irq_on": (4, "no irq for a pending ring interrupt"),
+    "a_status": (5, "IRQ_STATUS.ring differs from running && RING_DONE_IDX != IRQ_RING_IDX"),
+}
 ARM_TB = ["firmware/tb/sva/assert_arm.sv", "firmware/tb/sv/tb_assert_arm.sv"]
 ARM_VIOLATIONS = {"a_after_arm": (1, "assertion fired while bad is high")}
 CHECKERS = {
@@ -279,6 +289,7 @@ CHECKERS = {
     "axil": ("tb_axil_props", AXIL_TB, AXIL_VIOLATIONS),
     "route": ("tb_route_props", ROUTE_TB, ROUTE_VIOLATIONS),
     "mbox": ("tb_mbox_props", MBOX_TB, MBOX_VIOLATIONS),
+    "irq": ("tb_irq_props", IRQ_TB, IRQ_VIOLATIONS),
 }
 
 

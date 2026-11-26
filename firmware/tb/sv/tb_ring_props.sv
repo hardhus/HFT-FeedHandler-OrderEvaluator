@@ -1,6 +1,6 @@
 // tb_ring_props: checks the ring_props checker itself. Drives its ports directly: an enable, bursts over a whole
 // pass of a 16-entry ring until it is full, one more after the host frees a slot, up to the limit of bursts
-// unanswered. Every property's antecedent is hit, so a clean run proves the checker quiet. With HFT_VIOLATE=<k>
+// unanswered, then a disable and an enable with them still unanswered. Every property's antecedent is hit, so a clean run proves the checker quiet. With HFT_VIOLATE=<k>
 // exactly one property is violated (numbers in test_sva_checkers.py); its assertion must fire. Values are set
 // after a falling edge and sampled at the next rising edge.
 `timescale 1ns / 1ps
@@ -26,6 +26,7 @@ module tb_ring_props;
   logic [     56:0] addr_q = {BASE, 5'd0};
   logic             phase_q = 1'b1;
   logic [OUT_W-1:0] out_q = '0;
+  logic [     31:0] done_q = '0;
 
   always begin
     #2 clk = ~clk;
@@ -49,7 +50,8 @@ module tb_ring_props;
       .cons_q       (cons_q),
       .addr_q       (addr_q),
       .phase_q      (phase_q),
-      .out_q        (out_q)
+      .out_q        (out_q),
+      .done_q       (done_q)
   );
 
   // 1 when this run violates property k.
@@ -61,11 +63,12 @@ module tb_ring_props;
 `endif  // HFT_VIOLATE
   endfunction
 
-  // prod_q and everything that follows from it.
+  // prod_q and everything that follows from it (done_q with the bursts unanswered at the time).
   task automatic set_prod(input logic [31:0] prod);
     prod_q  = prod;
     addr_q  = {BASE, 5'd0} + 57'(prod & MASK);
     phase_q = (prod & (MASK + 32'd1)) == '0;
+    done_q  = prod - 32'(out_q);
   endtask
 
   task automatic idle(input int unsigned n = 1);
@@ -176,9 +179,29 @@ module tb_ring_props;
       idle();
     end
 
-    // Bursts unanswered, up to the limit.
+    // Bursts unanswered, up to the limit (taken earlier: done_q is that much behind prod).
     @(negedge clk);
-    out_q = OUT_W'(MAX_OUTSTANDING) + (v(7) ? OUT_W'(1) : '0);  // 7: a_outstanding
+    out_q  = OUT_W'(MAX_OUTSTANDING) + (v(7) ? OUT_W'(1) : '0);  // 7: a_outstanding
+    done_q = prod_q - 32'(out_q);
+    idle(2);
+    if (v(10)) begin  // 10: a_done_eq
+      @(negedge clk);
+      done_q = done_q + 32'd1;
+      idle();
+      done_q = done_q - 32'd1;
+    end
+
+    // A disable with them still unanswered, then an enable: refused (busy).
+    @(negedge clk);
+    enable_q = 1'b0;
+    idle();
+    @(negedge clk);
+    start = 1'b1;
+    @(negedge clk);
+    start    = 1'b0;
+    enable_q = v(11);  // 11: a_enable_busy
+    idle();
+    enable_q = 1'b0;
     idle(2);
     $display("HFT_TB_RESULT: PASS");
     $finish;

@@ -280,6 +280,7 @@ async def tc_indexes_wrap_at_2_32(dut):
     await FallingEdge(dut.clk)
     dut.u_ring_props.armed.value = 0  # the jump is not a step of prod: ring_props looks away for it alone
     dut.prod_q.value = start
+    dut.done_q.value = start  # nothing unanswered: done_idx = prod
     dut.addr_q.value = slot_addr(BASE, start, size_log2) >> 7
     dut.phase_q.value = phase_of(start, size_log2)
     dut.cfg_cons.value = start
@@ -400,6 +401,73 @@ async def tc_enable_with_bad_size_is_refused(dut):
         assert b.prod() == 1, f"size_log2 {size_log2}: prod {b.prod()}"
         await b.disable()
         b.put(1)
+
+
+@cocotb.test()
+async def tc_done_idx_running_busy(dut):
+    """done_idx, running and busy by hand (audit/15 A6, A7, A9). done_idx counts the answered bursts of this run, an
+    error answer too, and stays behind prod while B is held; running is 0 in the cycle of the enable edge and as soon
+    as cfg_enable falls; busy stays 1 after a disable until the last burst is answered, and an enable meanwhile is
+    refused (prod, done_idx unchanged); once idle, an enable is accepted and starts both at 0."""
+    b = await bench(dut)
+
+    async def now() -> tuple[int, int, int, int]:
+        await ReadOnly()
+        out = (int(dut.prod_idx.value), int(dut.done_idx.value), int(dut.running.value), int(dut.busy.value))
+        await RisingEdge(dut.clk)
+        return out
+
+    assert await now() == (0, 0, 0, 0)
+    await FallingEdge(dut.clk)
+    dut.cfg_base.value = BASE
+    dut.cfg_size_log2.value = 4
+    dut.cfg_enable.value = 1
+    await ReadOnly()
+    assert (int(dut.running.value), int(dut.busy.value)) == (0, 0), "running in the cycle of the enable edge"
+    await RisingEdge(dut.clk)
+    assert await now() == (0, 0, 1, 1)
+
+    b.ready(0.0, b_pause=1.0)  # B held: bursts start, none is answered
+    b.put(3)
+    for _ in range(200):
+        if (await now())[0] == 3:
+            break
+    assert await now() == (3, 0, 1, 1), "done_idx moved without a B"
+    b.mem.bad_addrs |= {BASE + 3 * 128 + 64 * k for k in range(2)}  # the next entry is answered with an error
+    b.put(1)
+    b.ready(0.0)
+    await b.wait_written(4)
+    await b.idle(4)
+    assert await now() == (4, 4, 1, 1), "an error answer counts in done_idx"
+    assert b.bresp_errs() == 1
+
+    # A disable with bursts unanswered.
+    b.ready(0.0, b_pause=1.0)
+    b.put(2)
+    for _ in range(200):
+        if (await now())[0] == 6:
+            break
+    await FallingEdge(dut.clk)
+    dut.cfg_enable.value = 0
+    await ReadOnly()
+    assert (int(dut.running.value), int(dut.busy.value)) == (0, 1), "running at once 0, busy while unanswered"
+    await RisingEdge(dut.clk)
+    await b.idle(8)
+    assert await now() == (6, 4, 0, 1)
+    # An enable now (clean cons and size): refused, nothing restarts.
+    await b.enable(size_log2=4)
+    await b.idle(2)
+    assert await now() == (6, 4, 0, 1), "an enable while busy restarted the ring"
+    assert int(dut.status_enable_err.value) == 1
+    await b.disable()
+    b.ready(0.0)
+    for _ in range(200):
+        if (await now())[3] == 0:
+            break
+    assert await now() == (6, 6, 0, 0), "busy after the last answer"
+    await b.enable(size_log2=4)
+    assert await now() == (0, 0, 1, 1), "the accepted enable starts prod and done_idx at 0"
+    assert int(dut.status_enable_err.value) == 0 and int(dut.status_bresp_err.value) == 0
 
 
 @cocotb.test()

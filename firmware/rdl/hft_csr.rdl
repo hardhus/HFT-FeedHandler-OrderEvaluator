@@ -498,7 +498,7 @@ addrmap hft_csr {
 
     regfile {
         name = "Global";
-        desc = "Identification, a scratch register, the reset flag and the time of the last snapshot. TS_SNAPSHOT is the core's timestamp counter (net clock cycles since reset, 64 bit, the clock of every sof_ts in the ring) taken by STATS_CTRL.snapshot in the same net clock cycle as the snapshot counters: an event counted in a snapshot happened before its TS_SNAPSHOT.";
+        desc = "Identification, a scratch register, the reset flag, the time of the last snapshot and the ring interrupt (IRQ_*, host clock domain). TS_SNAPSHOT is the core's timestamp counter (net clock cycles since reset, 64 bit, the clock of every sof_ts in the ring) taken by STATS_CTRL.snapshot in the same net clock cycle as the snapshot counters: an event counted in a snapshot happened before its TS_SNAPSHOT.";
 
         reg {
             name = "Identification";
@@ -511,7 +511,7 @@ addrmap hft_csr {
         reg {
             name = "Register map version";
             field {
-                desc = "Major.minor of this map: 0x0005_0005 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block, the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap, and the F8 RESET_SEEN and TS_SNAPSHOT. A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
+                desc = "Major.minor of this map: 0x0005_0005 is the F5 map with the F3 FEED block, the F4 ITCH block and SYMBOL bitmap, the F6 RING block, the F7 RISK, STRATEGY and TX blocks and LOCATE_ALLOW bitmap, and the F8 RESET_SEEN, TS_SNAPSHOT and ring interrupt (IRQ_*, RING_DONE_IDX, RING_BUSY). A minor step only adds registers (software for an older minor still works); a major step changes existing ones. Software checks it before use.";
                 sw = r; hw = na;
             } version[31:0] = 32'h0005_0005;
         } VERSION @ 0x4;
@@ -533,6 +533,30 @@ addrmap hft_csr {
         } RESET_SEEN @ 0xC;
 
         hft_csr__counter64 TS_SNAPSHOT @ 0x10;  // timestamp counter at the last snapshot
+
+        reg {
+            name = "Interrupt enable";
+            field {
+                desc = "The ring interrupt may raise irq. 0 after reset.";
+                sw = rw; hw = r;
+            } ring[0:0] = 1'b0;
+        } IRQ_EN @ 0x18;
+
+        reg {
+            name = "Interrupt ring index";
+            field {
+                desc = "The ring entries the host has handled for the interrupt: a wrapping 32-bit count, the arithmetic of RING_DONE_IDX. The ring interrupt is pending while the ring runs and RING_DONE_IDX differs from it. Write 0 before every enable, with CONS_IDX = 0 (RING_DONE_IDX starts at 0).";
+                sw = rw; hw = r;
+            } idx[31:0] = 32'h0;
+        } IRQ_RING_IDX @ 0x1C;
+
+        reg {
+            name = "Interrupt status";
+            field {
+                desc = "The ring interrupt is pending: the ring runs (an accepted enable, RING_CTRL.enable still 1) and RING_DONE_IDX != IRQ_RING_IDX. Live, before IRQ_EN; irq = IRQ_EN.ring && this, one host clock later. irq is a level, but an MSI or MSI-X shell sends one message per rising edge: after writing IRQ_RING_IDX the host reads this register and goes on handling entries while it is 1.";
+                sw = r; hw = w;
+            } ring[0:0];
+        } IRQ_STATUS @ 0x20;
     } GLOBAL @ 0x0000;
 
     regfile {
@@ -725,7 +749,7 @@ addrmap hft_csr {
 
     regfile {
         name = "Host event ring";
-        desc = "event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; before EVERY enable the host fills it with zeros and writes CONS_IDX = 0. The hardware checks only CONS_IDX and the size, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES + RING_DROP_ORDERS + RING_ORDER_QUEUED = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS + ORDERS_SENT_HW + ORDERS_SENT_HOST + the sum of RISK_REJECT_<reason>; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.";
+        desc = "event_ring_writer configuration and state, in the host clock domain (no commit, no snapshot, except the net counters below). Host obligations: the region is 2^RING_SIZE_LOG2 entries of 128 B, aligned to 4 KiB; after a disable the host waits for RING_BUSY = 0, and before EVERY enable it fills the region with zeros and writes CONS_IDX = 0 (and IRQ_RING_IDX = 0 when it uses the interrupt). The hardware checks only CONS_IDX, the size and busy, on the rising edge of RING_CTRL.enable: otherwise the enable is refused (RING_STATUS.enable_err) and the writer stays stopped. It cannot detect a region left dirty, or a CONS_IDX that passes the entries written. The host reads each 64 B line's ctrl byte with acquire and only then the fields, checks that both lines' phase match, and writes CONS_IDX from time to time (posted, for example every N/4 entries). Identities: at every snapshot RING_COMMIT_ENTRIES + RING_DROP_ENTRIES + RING_DROP_ORDERS + RING_ORDER_QUEUED = ITCH_OUT + MOLD_GAP_EVENTS + MOLD_EOS + ORDERS_SENT_HW + ORDERS_SENT_HOST + the sum of RISK_REJECT_<reason>; with the ring path idle RING_COMMIT_ENTRIES = RING_WRITTEN + RING_BRESP_ERR.";
 
         reg {
             name = "Ring control";
@@ -770,7 +794,7 @@ addrmap hft_csr {
         reg {
             name = "Producer index";
             field {
-                desc = "Bursts started since the last accepted enable, live, wrapping. An entry counted here may still be on its way: the phase bits tell which entries are in memory.";
+                desc = "Bursts started since the last accepted enable, live, wrapping. An entry counted here may still be on its way: the phase bits tell which entries are in memory (RING_DONE_IDX counts the answered ones).";
                 sw = r; hw = w;
             } prod[31:0];
         } PROD_IDX @ 0x14;
@@ -782,13 +806,29 @@ addrmap hft_csr {
                 sw = r; hw = w;
             } bresp_err[0:0];
             field {
-                desc = "The last rising edge of RING_CTRL.enable was refused: CONS_IDX was not 0 or RING_SIZE_LOG2 was not in 4..20. Stays set until an accepted enable.";
+                desc = "The last rising edge of RING_CTRL.enable was refused: CONS_IDX was not 0, RING_SIZE_LOG2 was not in 4..20, or RING_BUSY was 1 (F8: before, an enable right after a disable was taken while bursts of the last run were still on their way, and they could land in the new run's zeroed region). Stays set until an accepted enable.";
                 sw = r; hw = w;
             } enable_err[1:1];
         } RING_STATUS @ 0x18;
 
+        reg {
+            name = "Done index";
+            field {
+                desc = "Bursts of the current run answered (BRESP OKAY or not), live, wrapping, 0 at an accepted enable: PROD_IDX minus the bursts on their way. A bridge answers once the write is ordered before any later TLP (PG194), so the entries counted here are in host memory before an interrupt that follows; the ring interrupt compares IRQ_RING_IDX with it. An entry counted here with no phase change in memory was answered with an error (RING_STATUS.bresp_err).";
+                sw = r; hw = w;
+            } done[31:0];
+        } RING_DONE_IDX @ 0x1C;
+
         hft_csr__counter64_live RING_WRITTEN   @ 0x20;  // entries answered with OKAY
         hft_csr__counter64_live RING_BRESP_ERR @ 0x28;  // entries answered with another BRESP
+
+        reg {
+            name = "Ring busy";
+            field {
+                desc = "The writer runs or bursts of its last run are unanswered, live (a state, not an error: RING_STATUS keeps only the error bits, 0 = no error). After a disable the host waits for 0 before it fills the region with zeros: a burst still on its way would land after them. An enable while it is 1 is refused (RING_STATUS.enable_err).";
+                sw = r; hw = w;
+            } busy[0:0];
+        } RING_BUSY @ 0x30;
 
         // Net clock domain, updated by STATS_CTRL.snapshot with the STATS, MOLD_* and ITCH_* counters.
         hft_csr__counter64 RING_COMMIT_ENTRIES @ 0x40;  // entries committed to the FIFO, GAP and EOS included

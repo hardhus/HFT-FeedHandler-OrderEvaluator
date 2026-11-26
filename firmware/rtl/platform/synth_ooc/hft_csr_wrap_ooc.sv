@@ -6,7 +6,7 @@
 // audit/15): the host_clk write to net_clk read path ends there, inside the CDC constraint and the gate (S9 put
 // a register here; F8 S2 moved it into the wrapper, where risk_check needs it too).
 // Not used in simulation.
-// Clock domain : host_clk (s_axil_*, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
+// Clock domain : host_clk (s_axil_*, host_ring_*, irq), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, sym_*,
 //                cnt_ring_*, ts_now, and the order path: ctl_*, cmd_*, loc_*, m_host_*, st_*, ev_*, ord_*)
 module hft_csr_wrap_ooc
   import hft_pkg::*;
@@ -67,10 +67,14 @@ module hft_csr_wrap_ooc
     output logic [ 4:0] host_ring_size_log2,
     output logic [31:0] host_ring_cons,
     input  logic [31:0] host_ring_prod_idx,
+    input  logic [31:0] host_ring_done_idx,
+    input  logic        host_ring_running,
+    input  logic        host_ring_busy,
     input  logic        host_ring_bresp_err,
     input  logic        host_ring_enable_err,
     input  logic [63:0] host_ring_cnt_written,
     input  logic [63:0] host_ring_cnt_bresp_err,
+    output logic        irq,
 
     input logic [63:0] cnt_ring_commit_entries,
     input logic [63:0] cnt_ring_drop_pkts,
@@ -175,8 +179,8 @@ module hft_csr_wrap_ooc
   itch_class_e          mres_class_q;
   itch_outcome_e        mres_outcome_q;
   logic          [31:0] sym_rsp_rdata_q;
-  logic          [31:0] ring_prod_idx_q;
-  logic ring_bresp_err_q, ring_enable_err_q;
+  logic [31:0] ring_prod_idx_q, ring_done_idx_q;
+  logic ring_bresp_err_q, ring_enable_err_q, ring_running_q, ring_busy_q;
   logic [63:0] ring_cnt_written_q, ring_cnt_bresp_err_q;
   logic [63:0] cnt_ring_commit_entries_q, cnt_ring_drop_pkts_q, cnt_ring_drop_entries_q;
   logic [STRAT_N_RULES-1:0] st_armed_q, st_error_q;
@@ -202,6 +206,9 @@ module hft_csr_wrap_ooc
     arprot_q             <= s_axil_arprot;
     rready_q             <= s_axil_rready;
     ring_prod_idx_q      <= host_ring_prod_idx;
+    ring_done_idx_q      <= host_ring_done_idx;
+    ring_running_q       <= host_ring_running;
+    ring_busy_q          <= host_ring_busy;
     ring_bresp_err_q     <= host_ring_bresp_err;
     ring_enable_err_q    <= host_ring_enable_err;
     ring_cnt_written_q   <= host_ring_cnt_written;
@@ -302,10 +309,14 @@ module hft_csr_wrap_ooc
       .host_ring_size_log2    (host_ring_size_log2),
       .host_ring_cons         (host_ring_cons),
       .host_ring_prod_idx     (ring_prod_idx_q),
+      .host_ring_done_idx     (ring_done_idx_q),
+      .host_ring_running      (ring_running_q),
+      .host_ring_busy         (ring_busy_q),
       .host_ring_bresp_err    (ring_bresp_err_q),
       .host_ring_enable_err   (ring_enable_err_q),
       .host_ring_cnt_written  (ring_cnt_written_q),
       .host_ring_cnt_bresp_err(ring_cnt_bresp_err_q),
+      .irq                    (irq),
       .cnt_ring_commit_entries(cnt_ring_commit_entries_q),
       .cnt_ring_drop_pkts     (cnt_ring_drop_pkts_q),
       .cnt_ring_drop_entries  (cnt_ring_drop_entries_q),

@@ -18,7 +18,8 @@ module ring_props #(
     input logic [     31:0] cons_q,
     input logic [     56:0] addr_q,
     input logic             phase_q,
-    input logic [OUT_W-1:0] out_q
+    input logic [OUT_W-1:0] out_q,
+    input logic [     31:0] done_q
 );
   logic size_ok;
   assign size_ok = int'(cfg_size_log2) >= 4 && int'(cfg_size_log2) <= 20;
@@ -61,7 +62,8 @@ module ring_props #(
   end
 
   a_prod_start :
-  assert property (@(posedge clk) disable iff (rst || !armed) start && cfg_cons == '0 && size_ok |=> prod_q == '0)
+  assert property (@(posedge clk) disable iff (rst || !armed)
+      start && cfg_cons == '0 && size_ok && out_q == '0 |=> prod_q == '0)
   else begin
     $error("ring_props: prod not 0 after enable");
   end
@@ -95,5 +97,18 @@ module ring_props #(
   assert property (@(posedge clk) disable iff (rst || !armed) int'(out_q) <= int'(MAX_OUTSTANDING))
   else begin
     $error("ring_props: more bursts unanswered than MAX_OUTSTANDING");
+  end
+
+  // done_q is a register of its own (no carry chain on the CSR read path): it must stay what it stands for.
+  a_done_eq :
+  assert property (@(posedge clk) disable iff (rst || !armed) done_q == prod_q - 32'(out_q))
+  else begin
+    $error("ring_props: done_idx differs from prod - bursts unanswered");
+  end
+
+  a_enable_busy :
+  assert property (@(posedge clk) disable iff (rst || !armed) start && out_q != '0 |=> !enable_q)
+  else begin
+    $error("ring_props: an enable with bursts of the last run unanswered was not refused");
   end
 endmodule

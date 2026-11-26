@@ -167,7 +167,8 @@ bind event_ring_writer ring_props #(
     .cons_q       (cons_q),
     .addr_q       (addr_q),
     .phase_q      (phase_q),
-    .out_q        (out_q)
+    .out_q        (out_q),
+    .done_q       (done_q)
 );
 
 bind strategy_engine strategy_props #(

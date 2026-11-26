@@ -81,3 +81,15 @@ bind hft_csr_wrap mbox_props #(
       m_host_side, m_host_qty, m_host_price, m_host_locate, m_host_stock, m_host_tif, m_host_clordid
     })
 );
+
+// Ring interrupt (audit/15 decisions 4 and 11, A6, A7): the cause from the inputs and the CSR fields, not from irq_pend.
+bind hft_csr_wrap irq_props u_irq_props (
+    .clk     (host_clk),
+    .rst     (host_rst),
+    .irq     (irq),
+    .status  (hwif_in.GLOBAL.IRQ_STATUS.ring.next),
+    .en      (hwif_out.GLOBAL.IRQ_EN.ring.value),
+    .running (host_ring_running),
+    .done_idx(host_ring_done_idx),
+    .ring_idx(hwif_out.GLOBAL.IRQ_RING_IDX.idx.value)
+);

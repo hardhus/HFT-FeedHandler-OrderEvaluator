@@ -29,7 +29,16 @@ package hft_csr_pkg;
     } hft_csr__counter64__in_t;
 
     typedef struct {
+        logic next;
+    } hft_csr__GLOBAL__IRQ_STATUS__ring__in_t;
+
+    typedef struct {
+        hft_csr__GLOBAL__IRQ_STATUS__ring__in_t ring;
+    } hft_csr__GLOBAL__IRQ_STATUS__in_t;
+
+    typedef struct {
         hft_csr__counter64__in_t TS_SNAPSHOT;
+        hft_csr__GLOBAL__IRQ_STATUS__in_t IRQ_STATUS;
     } hft_csr__GLOBAL__in_t;
 
     typedef struct {
@@ -145,6 +154,14 @@ package hft_csr_pkg;
 
     typedef struct {
         logic [31:0] next;
+    } hft_csr__RING__RING_DONE_IDX__done__in_t;
+
+    typedef struct {
+        hft_csr__RING__RING_DONE_IDX__done__in_t done;
+    } hft_csr__RING__RING_DONE_IDX__in_t;
+
+    typedef struct {
+        logic [31:0] next;
     } hft_csr__counter64_live__LO__value__in_t;
 
     typedef struct {
@@ -165,6 +182,14 @@ package hft_csr_pkg;
     } hft_csr__counter64_live__in_t;
 
     typedef struct {
+        logic next;
+    } hft_csr__RING__RING_BUSY__busy__in_t;
+
+    typedef struct {
+        hft_csr__RING__RING_BUSY__busy__in_t busy;
+    } hft_csr__RING__RING_BUSY__in_t;
+
+    typedef struct {
         logic [4:0] next;
     } hft_csr__RING__RING_ORDER_QUEUED__queued__in_t;
 
@@ -175,8 +200,10 @@ package hft_csr_pkg;
     typedef struct {
         hft_csr__RING__PROD_IDX__in_t PROD_IDX;
         hft_csr__RING__RING_STATUS__in_t RING_STATUS;
+        hft_csr__RING__RING_DONE_IDX__in_t RING_DONE_IDX;
         hft_csr__counter64_live__in_t RING_WRITTEN;
         hft_csr__counter64_live__in_t RING_BRESP_ERR;
+        hft_csr__RING__RING_BUSY__in_t RING_BUSY;
         hft_csr__counter64__in_t RING_COMMIT_ENTRIES;
         hft_csr__counter64__in_t RING_DROP_PKTS;
         hft_csr__counter64__in_t RING_DROP_ENTRIES;
@@ -227,6 +254,27 @@ package hft_csr_pkg;
         hft_csr__SYMBOL__external__in_t SYMBOL;
         hft_csr__LOCATE_ALLOW__external__in_t LOCATE_ALLOW;
     } hft_csr__in_t;
+
+    typedef struct {
+        logic value;
+    } hft_csr__GLOBAL__IRQ_EN__ring__out_t;
+
+    typedef struct {
+        hft_csr__GLOBAL__IRQ_EN__ring__out_t ring;
+    } hft_csr__GLOBAL__IRQ_EN__out_t;
+
+    typedef struct {
+        logic [31:0] value;
+    } hft_csr__GLOBAL__IRQ_RING_IDX__idx__out_t;
+
+    typedef struct {
+        hft_csr__GLOBAL__IRQ_RING_IDX__idx__out_t idx;
+    } hft_csr__GLOBAL__IRQ_RING_IDX__out_t;
+
+    typedef struct {
+        hft_csr__GLOBAL__IRQ_EN__out_t IRQ_EN;
+        hft_csr__GLOBAL__IRQ_RING_IDX__out_t IRQ_RING_IDX;
+    } hft_csr__GLOBAL__out_t;
 
     typedef struct {
         logic value;
@@ -504,6 +552,7 @@ package hft_csr_pkg;
     } hft_csr__LOCATE_ALLOW__external__out_t;
 
     typedef struct {
+        hft_csr__GLOBAL__out_t GLOBAL;
         hft_csr__NET__out_t NET;
         hft_csr__FEED__out_t FEED;
         hft_csr__STATS__out_t STATS;

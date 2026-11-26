@@ -1,5 +1,5 @@
 // hft_csr_wrap: host CSR block (generated hft_csr) and its transfers to the net clock domain.
-// Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, ts_now,
+// Clock domain : host_clk (s_axil_*, hft_csr, host_ring_*, irq), net_clk (cfg_*, stat_*, mpkt_*, mres_*, feed_*, ts_now,
 //                sym_*, cnt_ring_*, rx_stats, mold_stats, itch_stats, ctl_*, cmd_*, loc_*, m_host_*, ord_*,
 //                st_*, ev_*, order_stats)
 // Config commit: the NET registers are a shadow. A NET_COMMIT pulse copies the whole shadow into a
@@ -50,6 +50,9 @@
 // Ring         : the RING registers are event_ring_writer's: host_clk, no transfer, no commit.
 //                RING_WRITTEN and RING_BRESP_ERR are live (the host reads HI, LO, HI); the
 //                cnt_ring_* counters are in the snapshot.
+// Interrupt    : irq (host_clk, level, a register) = IRQ_EN.ring && IRQ_STATUS.ring, IRQ_STATUS.ring =
+//                host_ring_running && host_ring_done_idx != IRQ_RING_IDX (audit/15 decisions 4 and 11, A6, A7): one
+//                host_clk edge after its cause. No W1C, no arm bit (K5): the host clears it by writing IRQ_RING_IDX.
 // Symbols      : SYMBOL (regblock external mem) accesses go to itch_decoder's command port: the
 //                request (write flag, word address, data, byte strobes) over one cdc_handshake,
 //                the response (read data) back over another. rd_ack/wr_ack come when the response
@@ -158,10 +161,14 @@ module hft_csr_wrap
     output logic [ 4:0] host_ring_size_log2,
     output logic [31:0] host_ring_cons,
     input  logic [31:0] host_ring_prod_idx,
+    input  logic [31:0] host_ring_done_idx,
+    input  logic        host_ring_running,
+    input  logic        host_ring_busy,
     input  logic        host_ring_bresp_err,
     input  logic        host_ring_enable_err,
     input  logic [63:0] host_ring_cnt_written,
     input  logic [63:0] host_ring_cnt_bresp_err,
+    output logic        irq,
 
     // event_packer counters, net_clk
     input logic [63:0] cnt_ring_commit_entries,
@@ -809,6 +816,22 @@ module hft_csr_wrap
   assign hwif_in.RING.RING_WRITTEN.HI.value.next = host_ring_cnt_written[63:32];
   assign hwif_in.RING.RING_BRESP_ERR.LO.value.next = host_ring_cnt_bresp_err[31:0];
   assign hwif_in.RING.RING_BRESP_ERR.HI.value.next = host_ring_cnt_bresp_err[63:32];
+  assign hwif_in.RING.RING_DONE_IDX.done.next = host_ring_done_idx;
+  assign hwif_in.RING.RING_BUSY.busy.next = host_ring_busy;
+
+  // ---- ring interrupt: see Interrupt ----
+  logic irq_pend;
+
+  assign irq_pend = host_ring_running && host_ring_done_idx != hwif_out.GLOBAL.IRQ_RING_IDX.idx.value;
+  assign hwif_in.GLOBAL.IRQ_STATUS.ring.next = irq_pend;
+
+  always_ff @(posedge host_clk) begin
+    if (host_rst) begin
+      irq <= 1'b0;
+    end else begin
+      irq <= hwif_out.GLOBAL.IRQ_EN.ring.value && irq_pend;
+    end
+  end
 
   // ---- host -> net ----
   net_cfg_t cfg_dst;

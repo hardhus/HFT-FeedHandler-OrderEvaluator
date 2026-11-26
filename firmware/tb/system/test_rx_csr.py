@@ -57,7 +57,7 @@ from pathlib import Path
 
 import cocotb
 import pytest
-from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.triggers import Event as Signal, ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 
 from common.axi_ram import Ram, write_bus
@@ -118,6 +118,7 @@ DROP_LO = {"DISABLED": 0x0420, "FCS": 0x0428, "MAC": 0x0430, "ETHERTYPE": 0x0438
            "FRAG": 0x0448, "PROTO": 0x0450, "FILTER": 0x0458, "LEN": 0x0460}  # fmt: skip
 ID, VERSION = 0x0000, 0x0004
 RESET_SEEN, NET_CTRL = 0x000C, 0x0100  # F8; the NET block's first shadow register
+IRQ_EN, IRQ_RING_IDX, IRQ_STATUS, RING_DONE_IDX, RING_BUSY = 0x0018, 0x001C, 0x0020, 0x081C, 0x0830  # F8 S5
 
 # Hand-written: the RING block (audit/13 S6).
 RING_CTRL, RING_BASE_LO, RING_BASE_HI, RING_SIZE_LOG2, CONS_IDX, PROD_IDX, RING_STATUS = (
@@ -747,6 +748,7 @@ class RingHost:
             f"RING_COMMIT_ENTRIES {v['RING_COMMIT_ENTRIES']}, RING_WRITTEN {written}, RING_BRESP_ERR {errors}")
         assert await self.w.drv.read(PROD_IDX) == (self.cons.idx & 0xFFFF_FFFF, OKAY)
         assert await self.w.drv.read(RING_STATUS) == (0, OKAY)
+        assert await self.w.drv.read(RING_BUSY) == (1, OKAY), "the ring runs"
 
 
 
@@ -1876,6 +1878,122 @@ async def tc_ts_snapshot(dut):
     for (s1, t1, _), (s2, t2, _) in zip(snaps, snaps[1:]):
         edges = w.snap.edge_index[w.snap.accepts[s2 - 1]] - w.snap.edge_index[w.snap.accepts[s1 - 1]]
         assert (t2 - t1) & MASK64 == edges, f"snapshots {s1}, {s2}: TS_SNAPSHOT moved {t2 - t1}, {edges} net edges"
+    w.feed.check_done()
+
+
+@cocotb.test(timeout_time=50, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_irq_ring(dut):
+    """The ring interrupt as a host driven only by it (audit/15 decisions 4 and 11, A6, A7). The shell is MSI-like:
+    one interrupt per rising edge of irq. The handler reads every entry in memory, writes CONS_IDX and IRQ_RING_IDX,
+    then reads IRQ_STATUS and goes on while it is 1 (the host rule: an entry answered after its last poll leaves irq
+    high, with no new edge). 60 packets in bursts: every entry is read (against the chain model) with no polling
+    outside the handler, and the test checks that the re-check found work at least once (the race happened). Then:
+    irq stays 0 with IRQ_EN off; after a disable IRQ_STATUS is 0 with entries unhandled and busy falls; a refused
+    enable (stale CONS_IDX) leaves IRQ_STATUS 0 although the old PROD_IDX differs from IRQ_RING_IDX (A6); a clean
+    enable starts RING_DONE_IDX at 0."""
+    w, sysm = await start(dut)
+    drv = w.drv
+    host = RingHost(dut, w, sysm, 6)
+    host.hold = True  # its own consumer never runs: entries are read only in the handler
+    assert await drv.write(IRQ_RING_IDX, 0) == OKAY
+    assert await drv.write(IRQ_EN, 1) == OKAY
+    await configure(w, NET_FEED)
+    await host.enable()
+    await configure_feed(w, replace(FEED_ON, class_en=(1 << N_CLASS) - 1))
+    for a in (IRQ_STATUS, RING_DONE_IDX, PROD_IDX):
+        assert await drv.read(a) == (0, OKAY), f"{a:#06x} before any entry"
+    assert not dut.irq.value
+    stats = Counter()
+    edge = Signal()  # cocotb Event (model.itch has its own Event)
+
+    async def msi() -> None:
+        prev = 0
+        while True:
+            await RisingEdge(dut.host_clk)
+            await ReadOnly()
+            now = int(dut.irq.value)
+            if now and not prev:
+                stats["msi"] += 1
+                edge.set()
+            prev = now
+
+    async def handler() -> None:
+        while True:
+            await edge.wait()
+            edge.clear()
+            while True:
+                while (entry := host.cons.poll()) is not None:
+                    sysm.ring_entry(host.cons.idx - 1, entry)
+                idx = host.cons.idx & 0xFFFF_FFFF
+                assert await drv.write(CONS_IDX, idx) == OKAY
+                assert await drv.write(IRQ_RING_IDX, idx) == OKAY
+                pending, resp = await drv.read(IRQ_STATUS)
+                assert resp == OKAY
+                if not pending:
+                    break
+                stats["recheck"] += 1
+
+    cocotb.start_soon(msi())
+    cocotb.start_soon(handler())
+    seq = 100
+    for burst in range(12):
+        for _ in range(5):
+            n = random.randint(1, 3)
+            await send_feed(sysm, seq, [order(1, seq + k) for k in range(n)], gap=random.randint(0, 3))
+            seq += n
+        for _ in range(random.randint(0, 400)):
+            await RisingEdge(dut.net_clk)
+    await sysm.finish()
+    for _ in range(20_000):
+        await RisingEdge(dut.host_clk)
+        if sysm.ring_read == sysm.ring_commit == seq - 100:
+            break
+    else:
+        raise AssertionError(f"{sysm.ring_read} entries read by the handler, {sysm.ring_commit} committed")
+    for _ in range(50):
+        await RisingEdge(dut.host_clk)
+    assert stats["msi"] >= 2 and stats["recheck"] >= 1, f"no race exercised: {dict(stats)}"
+    assert not dut.irq.value
+    total = seq - 100
+    assert await drv.read(RING_DONE_IDX) == (total, OKAY)
+    assert await drv.read(PROD_IDX) == (total, OKAY)
+    assert await drv.read(IRQ_STATUS) == (0, OKAY)
+
+    # Entries left unhandled (the host index behind): pending; IRQ_EN off silences irq, not IRQ_STATUS.
+    assert await drv.write(IRQ_EN, 0) == OKAY
+    assert await drv.write(IRQ_RING_IDX, total - 1) == OKAY
+    assert await drv.read(IRQ_STATUS) == (1, OKAY)
+    for _ in range(4):
+        await RisingEdge(dut.host_clk)
+        await ReadOnly()
+        assert not dut.irq.value, "irq with IRQ_EN off"
+    await RisingEdge(dut.host_clk)
+    # A disable: nothing pending any more, busy falls (no burst in flight).
+    assert await drv.write(IRQ_EN, 1) == OKAY
+    assert await drv.write(RING_CTRL, 0) == OKAY
+    assert await drv.read(IRQ_STATUS) == (0, OKAY), "pending with the ring stopped"
+    assert await drv.read(RING_BUSY) == (0, OKAY), "busy with the ring stopped and idle"
+    # A refused enable (stale CONS_IDX): the old PROD_IDX stays, the ring does not run, nothing pending (A6).
+    assert await drv.write(RING_CTRL, 1) == OKAY  # CONS_IDX is still `total`
+    assert await drv.read(RING_STATUS) == (0b010, OKAY)
+    assert await drv.read(PROD_IDX) == (total, OKAY)
+    assert await drv.read(IRQ_STATUS) == (0, OKAY), "pending after a refused enable"
+    for _ in range(4):
+        await RisingEdge(dut.host_clk)
+        await ReadOnly()
+        assert not dut.irq.value, "irq after a refused enable"
+    await RisingEdge(dut.host_clk)
+    # The host rule before an enable: CONS_IDX = 0 and IRQ_RING_IDX = 0 (the region is still all read entries:
+    # nothing is sent after this, so nothing is read from it).
+    assert await drv.write(RING_CTRL, 0) == OKAY
+    assert await drv.write(CONS_IDX, 0) == OKAY
+    assert await drv.write(IRQ_RING_IDX, 0) == OKAY
+    assert await drv.write(RING_CTRL, 1) == OKAY
+    assert await drv.read(RING_STATUS) == (0, OKAY), "accepted: no error"
+    assert await drv.read(RING_BUSY) == (1, OKAY), "accepted: running"
+    for a in (RING_DONE_IDX, PROD_IDX, IRQ_STATUS):
+        assert await drv.read(a) == (0, OKAY), f"{a:#06x} after the clean enable"
+    assert not dut.irq.value
     w.feed.check_done()
 
 

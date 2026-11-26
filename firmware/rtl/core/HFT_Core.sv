@@ -24,7 +24,9 @@
 //                bitmap. ORDER_SENT, RISK_REJECT and lost rejects go to event_packer's order inputs, and
 //                order_stats counts the same signals (hft_csr_wrap header, audit/14 S7 A5); event_packer returns
 //                ring credits to risk_check.
-// irq          : host_clk, level. Tied to 0 for now (the ring interrupt comes in F8 S5).
+// irq          : host_clk, level, from hft_csr_wrap: IRQ_EN.ring && the ring running && RING_DONE_IDX != IRQ_RING_IDX,
+//                registered (audit/15 decisions 4 and 11, A6, A7). An MSI/MSI-X shell sends one message per rising
+//                edge, so the host re-checks IRQ_STATUS after writing IRQ_RING_IDX (core README).
 // Latency      : those of its blocks
 module HFT_Core
   import hft_pkg::*;
@@ -180,7 +182,8 @@ module HFT_Core
   logic [10:0] sym_req_addr;
   logic [31:0] sym_req_wdata, sym_rsp_rdata;
   logic [3:0] sym_req_wstrb;
-  logic ring_enable, ring_bresp_err, ring_enable_err;
+  logic ring_enable, ring_bresp_err, ring_enable_err, ring_running, ring_busy;
+  logic [31:0] ring_done_idx;
   logic [63:0] ring_base, ring_cnt_written, ring_cnt_bresp_err;
   logic [4:0] ring_size_log2;
   logic [31:0] ring_cons, ring_prod_idx;
@@ -325,10 +328,14 @@ module HFT_Core
       .host_ring_size_log2    (ring_size_log2),
       .host_ring_cons         (ring_cons),
       .host_ring_prod_idx     (ring_prod_idx),
+      .host_ring_done_idx     (ring_done_idx),
+      .host_ring_running      (ring_running),
+      .host_ring_busy         (ring_busy),
       .host_ring_bresp_err    (ring_bresp_err),
       .host_ring_enable_err   (ring_enable_err),
       .host_ring_cnt_written  (ring_cnt_written),
       .host_ring_cnt_bresp_err(ring_cnt_bresp_err),
+      .irq                    (irq),
       .cnt_ring_commit_entries(ring_commit_entries),
       .cnt_ring_drop_pkts     (ring_drop_pkts),
       .cnt_ring_drop_entries  (ring_drop_entries),
@@ -843,6 +850,9 @@ module HFT_Core
       .cfg_size_log2    (ring_size_log2),
       .cfg_cons         (ring_cons),
       .prod_idx         (ring_prod_idx),
+      .done_idx         (ring_done_idx),
+      .running          (ring_running),
+      .busy             (ring_busy),
       .status_bresp_err (ring_bresp_err),
       .status_enable_err(ring_enable_err),
       .m_axi_hmw_awaddr (m_axi_hmw_awaddr),
@@ -870,6 +880,4 @@ module HFT_Core
       ts_q <= ts_q + 64'd1;
     end
   end
-
-  assign irq = 1'b0;
 endmodule

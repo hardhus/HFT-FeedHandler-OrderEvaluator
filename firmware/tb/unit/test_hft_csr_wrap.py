@@ -40,6 +40,7 @@ measured on an idle bus and behind a command (README).
 
 import os
 from dataclasses import replace
+from pathlib import Path
 
 import cocotb
 import pytest
@@ -47,6 +48,7 @@ from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, gather
 from cocotb.utils import get_sim_time
 
 from common.clocks import PROFILES, profile, start_clock
+from common.coverage import Coverage
 from common.csr_env import (
     COMMANDS,
     LOCATE_ALLOW,
@@ -124,7 +126,8 @@ async def start(dut) -> Wrap:
     dut.stat_bytes.value = 0
     for name in ("mpkt_valid", "mpkt_status", "mpkt_gap", "mpkt_msgs", "mpkt_dup_msgs", "mpkt_oversize",
                  "mres_valid", "mres_class", "mres_outcome", "feed_expected_seq", "feed_synced", "feed_eos",
-                 "sym_req_ready", "sym_rsp_valid", "sym_rsp_rdata", "host_ring_prod_idx", "host_ring_bresp_err",
+                 "sym_req_ready", "sym_rsp_valid", "sym_rsp_rdata", "host_ring_prod_idx", "host_ring_done_idx",
+                 "host_ring_running", "host_ring_busy", "host_ring_bresp_err",
                  "host_ring_enable_err", "host_ring_cnt_written", "host_ring_cnt_bresp_err",
                  "cnt_ring_commit_entries", "cnt_ring_drop_pkts", "cnt_ring_drop_entries", "st_armed", "st_error",
                  "ev_userref_ignored", "st_userref", "st_budget", "loc_req_ready", "loc_rsp_valid", "loc_rsp_rdata",
@@ -1177,11 +1180,12 @@ async def tc_feed_epoch(dut):
 @cocotb.test(timeout_time=2, timeout_unit="ms")  # a broken DUT must fail, not hang
 async def tc_ring_registers(dut):
     """RING is in the host domain, with no commit: a write reaches host_ring_* by itself, and reads back through the
-    fields' own widths. PROD_IDX, RING_STATUS and the host counters read the input live; software cannot write them
-    (K5). The snapshot counters do not move with a read. All 0 after reset, so an enable needs a size first."""
+    fields' own widths. PROD_IDX, RING_DONE_IDX, RING_STATUS, RING_BUSY and the host counters read the input live;
+    software cannot write them (K5). The snapshot counters do not move with a read. All 0 after reset, so an enable
+    needs a size first."""
     w = await start(dut)
     regs = {n: addr(f"RING.{n}") for n in ("RING_CTRL", "RING_BASE_LO", "RING_BASE_HI", "RING_SIZE_LOG2", "CONS_IDX",
-                                           "PROD_IDX", "RING_STATUS")}  # fmt: skip
+                                           "PROD_IDX", "RING_STATUS", "RING_DONE_IDX", "RING_BUSY")}  # fmt: skip
 
     async def check(name, value):
         assert await w.drv.read(regs[name]) == (value, OKAY), name
@@ -1210,21 +1214,207 @@ async def tc_ring_registers(dut):
     assert await w.drv.write(regs["RING_CTRL"], 0) == OKAY
     assert not dut.host_ring_enable.value
 
-    for prod, bresp, enable, written, errors in ((7, 1, 0, 1 << 40 | 3, 5), (0xFFFF_FFFF, 0, 1, 9, 1 << 33), (0, 1, 1, 0, 0)):
+    for prod, done, bresp, enable, busy, written, errors in (
+        (7, 5, 1, 0, 1, 1 << 40 | 3, 5), (0xFFFF_FFFF, 0xFFFF_FFFD, 0, 1, 0, 9, 1 << 33), (0, 0, 1, 1, 1, 0, 0),
+        (3, 0x8000_0000, 0, 0, 0, 0, 0),
+    ):  # fmt: skip
         dut.host_ring_prod_idx.value = prod
+        dut.host_ring_done_idx.value = done
         dut.host_ring_bresp_err.value = bresp
         dut.host_ring_enable_err.value = enable
+        dut.host_ring_busy.value = busy
         dut.host_ring_cnt_written.value = written
         dut.host_ring_cnt_bresp_err.value = errors
         await RisingEdge(dut.host_clk)
         await check("PROD_IDX", prod)
+        await check("RING_DONE_IDX", done)
         await check("RING_STATUS", bresp | enable << 1)
+        await check("RING_BUSY", busy)
         assert await w.drv.read(addr("RING.RING_WRITTEN.LO")) == (written & 0xFFFF_FFFF, OKAY)
         assert await w.drv.read(addr("RING.RING_WRITTEN.HI")) == (written >> 32, OKAY)
         assert await w.drv.read(addr("RING.RING_BRESP_ERR.LO")) == (errors & 0xFFFF_FFFF, OKAY)
         assert await w.drv.read(addr("RING.RING_BRESP_ERR.HI")) == (errors >> 32, OKAY)
-    for name in ("PROD_IDX", "RING_STATUS"):
+    for name in ("PROD_IDX", "RING_STATUS", "RING_DONE_IDX", "RING_BUSY"):
         assert await w.drv.write(regs[name], 0xFFFF_FFFF) != OKAY, f"{name} takes a software write"
+
+
+# ---- ring interrupt (audit/15 decisions 4 and 11, A6, A7) ----
+IRQ_EN, IRQ_RING_IDX, IRQ_STATUS = (addr(f"GLOBAL.{n}") for n in ("IRQ_EN", "IRQ_RING_IDX", "IRQ_STATUS"))
+
+
+async def irq_after(dut, edges: int) -> list[int]:
+    """irq after each of the next `edges` host edges."""
+    out = []
+    for _ in range(edges):
+        await RisingEdge(dut.host_clk)
+        await ReadOnly()
+        out.append(int(dut.irq.value))
+    await RisingEdge(dut.host_clk)
+    return out
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_irq(dut):
+    """The ring interrupt by hand: 0 after reset with every IRQ_* at 0; IRQ_STATUS.ring = running && RING_DONE_IDX !=
+    IRQ_RING_IDX before IRQ_EN; irq = IRQ_EN.ring && that, one host edge after the cause (each of: done moves, IRQ_EN
+    written, IRQ_RING_IDX written, the ring stops); only bit 0 of IRQ_EN; indexes compared across the 32-bit wrap; a
+    reset clears IRQ_EN and IRQ_RING_IDX."""
+    w = await start(dut)
+    for a in (IRQ_EN, IRQ_RING_IDX, IRQ_STATUS):
+        assert await w.drv.read(a) == (0, OKAY), f"{a:#06x} after reset"
+    assert await irq_after(dut, 3) == [0, 0, 0]
+
+    async def drive(running: int, done: int) -> None:
+        await FallingEdge(dut.host_clk)
+        dut.host_ring_running.value = running
+        dut.host_ring_done_idx.value = done
+
+    await drive(1, 0)
+    assert await w.drv.read(IRQ_STATUS) == (0, OKAY), "done = index: nothing pending"
+    await drive(1, 1)
+    assert await w.drv.read(IRQ_STATUS) == (1, OKAY), "one entry done, the host at 0"
+    assert await irq_after(dut, 3) == [0, 0, 0], "irq without IRQ_EN"
+    assert await w.drv.write(IRQ_EN, 0xFFFF_FFFF) == OKAY
+    assert await w.drv.read(IRQ_EN) == (1, OKAY), "IRQ_EN has bit 0 only"
+    assert await irq_after(dut, 1) == [1]
+    # Each cause reaches irq one host edge later.
+    await drive(1, 0)  # done back to the index (a model input: the writer only counts up)
+    assert await irq_after(dut, 2) == [0, 0]
+    await drive(1, 2)
+    assert await irq_after(dut, 2) == [1, 1]
+    assert await w.drv.write(IRQ_RING_IDX, 2) == OKAY  # the host handled both
+    assert await irq_after(dut, 2) == [0, 0]  # the field changed by the B handshake at the latest: irq one edge on
+    assert await w.drv.read(IRQ_STATUS) == (0, OKAY)
+    await drive(1, 3)
+    assert await irq_after(dut, 2) == [1, 1]
+    await drive(0, 3)  # the ring stops: nothing pending, with entries unhandled
+    assert await irq_after(dut, 2) == [0, 0]
+    assert await w.drv.read(IRQ_STATUS) == (0, OKAY)
+    await drive(1, 3)
+    assert await irq_after(dut, 2) == [1, 1]
+    assert await w.drv.write(IRQ_EN, 0) == OKAY
+    assert await irq_after(dut, 2) == [0, 0]
+    assert await w.drv.read(IRQ_STATUS) == (1, OKAY), "IRQ_EN off: still pending"
+    assert await w.drv.write(IRQ_EN, 1) == OKAY
+    # Across the wrap: done 0x1, index 0xFFFFFFFF: pending; index 0x1: handled.
+    assert await w.drv.write(IRQ_RING_IDX, 0xFFFF_FFFF) == OKAY
+    await drive(1, 1)
+    assert await irq_after(dut, 1) == [1]
+    assert await w.drv.write(IRQ_RING_IDX, 1) == OKAY
+    assert await irq_after(dut, 2) == [0, 0]
+    # The edge of each cause, exactly: irq follows the field one host edge later.
+    await drive(1, 2)
+    await RisingEdge(dut.host_clk)  # the edge that samples done = 2
+    await ReadOnly()
+    assert int(dut.irq.value) == 1, "irq not on the edge after the cause"
+    await RisingEdge(dut.host_clk)
+    # A reset clears both fields and irq.
+    await reset(dut)
+    for a in (IRQ_EN, IRQ_RING_IDX):
+        assert await w.drv.read(a) == (0, OKAY), f"{a:#06x} survived the reset"
+    assert await w.drv.read(IRQ_STATUS) == (1, OKAY), "the inputs still say pending (running, done 2, index 0)"
+    assert await irq_after(dut, 3) == [0, 0, 0]
+
+
+IRQ_BINS = ["rise_done", "fall_idx", "fall_en", "fall_stop", "rise_en", "rise_start", "pending_no_en", "wrap",
+            "idx_ahead"]  # fmt: skip
+
+
+@cocotb.test(timeout_time=20, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_irq_random(dut):
+    """The ring interrupt against a model on every host edge (irq after edge t = IRQ_EN.ring && running && done !=
+    IRQ_RING_IDX as sampled on t, from the inputs and the CSR fields), with the writer's outputs moving at random
+    (done counting up and wrapping, running on and off) and the host writing IRQ_EN and IRQ_RING_IDX at random,
+    IRQ_STATUS read and checked against the same cause. A fixed phase first hits every coverage bin, then a random
+    phase; the bins must all be hit."""
+    w = await start(dut)
+    cov = Coverage("hft_csr_wrap.tc_irq_random", IRQ_BINS)
+    regs = dut.hwif_out.GLOBAL
+    state = {"running": 0, "done": 0}
+    errors: list[str] = []
+
+    async def monitor() -> None:
+        """Samples the cause after each falling edge (the inputs change there, the CSR fields only on rising edges):
+        what the next rising edge takes. irq after that edge must equal it."""
+        prev = None
+        while True:
+            await FallingEdge(dut.host_clk)
+            await ReadOnly()
+            if prev is not None:
+                irq = int(dut.irq.value)
+                if irq != prev[0]:
+                    errors.append(f"irq {irq}, model {prev[0]} at {get_sim_time()}")
+            else:
+                irq = 0
+            en, idx = int(regs.IRQ_EN.ring.value.value), int(regs.IRQ_RING_IDX.idx.value.value)
+            running, done = int(dut.host_ring_running.value), int(dut.host_ring_done_idx.value)
+            pend = running and done != idx
+            if prev is not None:
+                was_en, was_pend, was_running, was_idx = prev[1:]
+                if irq == 0 and int(en and pend) == 1:
+                    cov.hit("rise_done" if was_en and was_running and was_idx == idx else
+                            "rise_en" if not was_en else "rise_start" if not was_running else "rise_done")
+                if irq == 1 and not (en and pend):
+                    cov.hit("fall_idx" if running and en else "fall_en" if not en else "fall_stop")
+            if pend and not en:
+                cov.hit("pending_no_en")
+            if pend and done < idx:
+                cov.hit("wrap" if idx - done > 1 << 31 else "idx_ahead")
+            prev = (int(en and pend), en, pend, running, idx)
+
+    cocotb.start_soon(monitor())
+
+    async def writer(running: int, step: int) -> None:
+        await FallingEdge(dut.host_clk)
+        state["running"] = running
+        state["done"] = (state["done"] + step) & 0xFFFF_FFFF
+        dut.host_ring_running.value = running
+        dut.host_ring_done_idx.value = state["done"]
+
+    async def status_check() -> None:
+        await ReadOnly()
+        en, idx = int(regs.IRQ_EN.ring.value.value), int(regs.IRQ_RING_IDX.idx.value.value)
+        want = int(state["running"] and state["done"] != idx)
+        await RisingEdge(dut.host_clk)
+        got, resp = await w.drv.read(IRQ_STATUS)
+        assert resp == OKAY
+        # The read lands a few edges later; the inputs are held meanwhile (the writer coroutine is not running).
+        assert got == want, f"IRQ_STATUS {got}, cause {want} (IRQ_EN {en})"
+
+    # Fixed phase: every bin by construction.
+    await w.drv.write(IRQ_EN, 1)
+    await writer(1, 1)  # rise_done (idx 0)
+    await w.drv.write(IRQ_RING_IDX, 1)  # fall_idx
+    await writer(1, 1)  # rise_done
+    await w.drv.write(IRQ_EN, 0)  # fall_en, pending_no_en
+    await status_check()
+    await w.drv.write(IRQ_EN, 1)  # rise_en
+    await writer(0, 0)  # fall_stop
+    await writer(1, 0)  # rise_start
+    await w.drv.write(IRQ_RING_IDX, 0xFFFF_FFF0)  # done 2 < idx: wrap
+    await writer(1, 0)
+    await w.drv.write(IRQ_RING_IDX, 5)  # the host index ahead of done (a host bug): still pending, idx_ahead
+    await writer(1, 0)
+    await w.drv.write(IRQ_RING_IDX, state["done"])
+    # Random phase: the writer and the host interleaved.
+    for _ in range(600):
+        r = w.rng.random()
+        if r < 0.5:
+            await writer(int(w.rng.random() < 0.9), w.rng.choice([0, 1, 1, 2]))
+        elif r < 0.7:
+            await w.drv.write(IRQ_RING_IDX, w.rng.choice([state["done"], state["done"] - 1, w.rng.getrandbits(32)])
+                              & 0xFFFF_FFFF)  # fmt: skip
+        elif r < 0.8:
+            await w.drv.write(IRQ_EN, int(w.rng.random() < 0.8))
+        elif r < 0.9:
+            await status_check()
+        else:
+            for _ in range(w.rng.randint(1, 8)):
+                await RisingEdge(dut.host_clk)
+    for _ in range(4):
+        await RisingEdge(dut.host_clk)
+    assert not errors, errors[:5]
+    cov.check(Path.cwd())  # the run directory
 
 
 # ---- order path (audit/14 S7) ----

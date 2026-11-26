@@ -553,10 +553,12 @@ inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Ever
 ### Host rules
 
 1. The region is 2^`RING_SIZE_LOG2` entries of 128 bytes, `RING_SIZE_LOG2` in 4..20, aligned to 4 KiB (a hugepage in
-   practice). Before **every** enable the host fills it with zeros and writes `CONS_IDX` = 0, then `RING_BASE_*`,
-   `RING_SIZE_LOG2` and `RING_CTRL.enable` = 1. A rising edge of `enable` with `CONS_IDX` ≠ 0 or the size out of
-   range is refused: `RING_STATUS.enable_err`, nothing is written; write 0, then 1 to retry. Base and size are taken
-   on the accepted edge and ignored until the next one.
+   practice). Before **every** enable the host fills it with zeros and writes `CONS_IDX` = 0 (and `IRQ_RING_IDX` = 0
+   if it uses the interrupt), then `RING_BASE_*`, `RING_SIZE_LOG2` and `RING_CTRL.enable` = 1. A rising edge of
+   `enable` with `CONS_IDX` ≠ 0, the size out of range or `RING_BUSY` = 1 is refused: `RING_STATUS.enable_err`,
+   nothing is written; write 0, then 1 to retry. Base and size are taken on the accepted edge and ignored until the
+   next one. The `RING_BUSY` refusal is new in F8 (audit/15 A9): before, an enable right after a disable was taken
+   while bursts of the last run were still on their way.
 2. To read: poll the next slot; an entry is there when **both** `ctrl` bytes show the expected phase (PCIe does not
    order the bytes of one write in host memory). Read the `ctrl` bytes with acquire, then the fields; `ring_idx` is a
    further check.
@@ -565,9 +567,33 @@ inside the entry, no overlap, natural alignment, nothing on a `ctrl` byte). Ever
    them. A GAP entry is a gap of the feed, not a loss of the ring.
 5. `RING_WRITTEN` and `RING_BRESP_ERR` are live 64-bit counters in two registers: read HI, LO, HI and repeat if the
    two HI differ. The snapshot counters need no such rule.
-6. A disable lets the bursts in flight finish and starts no new entry; the FIFO may fill meanwhile and drop.
+6. A disable lets the bursts in flight finish and starts no new entry; the FIFO may fill meanwhile and drop. The host
+   waits for `RING_BUSY` = 0 before it zeroes the region for the next enable: a burst still on its way would land
+   after the zeros, with the first pass's phase, and look like a new entry.
 7. `cfg_epoch` of an entry is the FEED commit count of its packet's first beat (see FEED): the host keeps the same
    count and so knows which configuration made each entry.
+8. `RING_STATUS` holds only error bits (0 = no error); test them one by one. `RING_BUSY` is a state.
+
+### Ring interrupt
+
+`irq` (`host_clk`, a level, a register) = `IRQ_EN.ring` && `IRQ_STATUS.ring`, one `host_clk` edge after its cause;
+`IRQ_STATUS.ring` = the ring runs (an accepted enable, `RING_CTRL.enable` still 1) && `RING_DONE_IDX` ≠
+`IRQ_RING_IDX` (audit/15 decisions 4 and 11, A6, A7). `RING_DONE_IDX` counts the bursts of this run answered (OKAY or
+not), 0 at an accepted enable. A PCIe bridge answers a write once its TLP is ordered before any later one (PG194), so
+the entries `RING_DONE_IDX` counts are in host memory before an interrupt that follows them; `PROD_IDX` counts bursts
+started and may run ahead. A refused enable or a stopped ring raises nothing. There is no W1C and no arm bit (K5):
+the host clears the interrupt by writing `IRQ_RING_IDX`.
+
+Handler, for any shell:
+1. Read every entry in memory (host rule 2), write `CONS_IDX` and then `IRQ_RING_IDX` = the entries handled.
+2. Read `IRQ_STATUS`. If `ring` = 1, go back to 1. An MSI or MSI-X shell sends one message per **rising** edge of its
+   request (PG195, IRQ Block User Interrupt Enable Mask): an entry answered after the last poll leaves `irq` high
+   with no new edge, and no message would come for it. The read also orders the posted `IRQ_RING_IDX` write.
+3. An interrupt with no new entry in memory: an entry was answered with an error (`RING_STATUS.bresp_err`,
+   `RING_BRESP_ERR`); its slot never changes phase.
+
+Tests: `tc_irq` and `tc_irq_random` (`test_hft_csr_wrap`), `tc_irq_ring` (system: a handler driven only by rising
+edges of `irq` reads every entry, and the re-check of step 2 is exercised), `irq_props` (SVA, bound to the wrapper).
 
 ### Identities
 
@@ -600,7 +626,7 @@ low; reset the memory side with it). The entries of a packet cut by a reset are 
 | Ring model: `expect_entries` (commit, rollback, GAP and EOS order, drop and `overflow_before`, epoch), `RingConsumer` (both phases, `ctrl`, `ring_idx`), pacings | `tb/model/ring.py`, `tb/selftest/test_ring_model.py` |
 | `COMMIT=1` FIFO at every clock profile: random commit and rollback, the reader sees only committed words, rollback at the full boundary, reset in the middle | `tb/unit/test_cdc_async_fifo_commit.py` |
 | `event_packer`: every class × outcome, every status, GAP and EOS order, whole-packet drop, busy as full, `overflow_before`, largest packet into an empty FIFO, reset mid-packet; exact cycles of every write and end; 10⁵ random messages with a coverage gate | `tb/unit/test_event_packer.py` |
-| `event_ring_writer` (`DATA_W` 64, 128, 256, 512): hand stamp, wrap and phase, full ring, indexes past 2³², enable rules and refusals, BRESP error, rate contract, outstanding limit, reset mid-burst; 10⁶ entries (`DATA_W` 512) and 10⁵ (64) lossless in order (`long`, K9) | `tb/unit/test_event_ring_writer.py` |
+| `event_ring_writer` (`DATA_W` 64, 128, 256, 512): hand stamp, wrap and phase, full ring, indexes past 2³², enable rules and refusals (a busy writer too), `done_idx`, `running` and `busy` by hand, BRESP error, rate contract, outstanding limit, reset mid-burst; 10⁶ entries (`DATA_W` 512) and 10⁵ (64) lossless in order (`long`, K9) | `tb/unit/test_event_ring_writer.py` |
 | Assertions (`packer_props` 14, `ring_props` 9, `axi_wr_props` 8: 4 KiB, beat count, channel stability, B after AW, VALID low after reset), each violation firing only its own | `tb/sva/`, `tb/sv/`, `tb/unit/test_sva_checkers.py` |
 | System: every entry read back from host memory through the ring protocol against the chain model, byte by byte; the ring identity in every snapshot; bring-up, 10⁴-message replay, gap and recovery, ring pressure, refused enable and BRESP error; `tc_itch_random` with a 64-entry ring and a consumer that stops, runs, slows and pauses; real Nasdaq windows with no loss (M1) | `tb/system/test_rx_csr.py` |
 | Order entries (F7): hand-written `ORDER_SENT` and `RISK_REJECT` entries, exact latency, waiting for the packet and on a full FIFO, the queue holding all 16 credits, a dropped packet's flag on an order entry, a lost reject's flag at its place, reset with orders queued; the random run fills every order bin | `tb/unit/test_event_packer.py` (`tc_order_*`, `tc_lost_reject_flag_place`) |
@@ -629,7 +655,7 @@ that register. `report_cdc`: CDC-6 and CDC-15 (the FIFO's data, constrained), no
 
 ### Out of scope
 
-An interrupt (`irq`) is F8's. Line-rate stress with IPG 0 and the clock ratio matrix of audit/04 §3.4 (scenarios 8
+The ring interrupt is described above (F8). Line-rate stress with IPG 0 and the clock ratio matrix of audit/04 §3.4 (scenarios 8
 and 9) are left for the platform phases.
 
 ## Order path: `strategy_engine`, `risk_check`, `order_tx_builder`
@@ -831,12 +857,12 @@ Only blocks with a user are defined; the rest of the window is reserved (unmappe
 
 | Base | Block | Registers |
 |------|-------|-----------|
-| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0005`), `SCRATCH` (RW), `RESET_SEEN` (RW, 1 after reset; see Software contract after reset); snapshot: `TS_SNAPSHOT` (`LO`/`HI`) at `0x0010`, the timestamp counter (F8) |
+| `0x0000` | GLOBAL | `ID` (RO, `0x48465431` "HFT1"), `VERSION` (RO, `0x0005_0005`), `SCRATCH` (RW), `RESET_SEEN` (RW, 1 after reset; see Software contract after reset); snapshot: `TS_SNAPSHOT` (`LO`/`HI`) at `0x0010`, the timestamp counter (F8); host domain: `IRQ_EN` (`ring`), `IRQ_RING_IDX`, `IRQ_STATUS` (RO, `ring`) at `0x0018`..`0x0020`, see Ring interrupt (F8) |
 | `0x0100` | NET | `NET_CTRL` (`rx_en` bit 0, `accept_bcast` bit 1), `LOCAL_MAC_LO` (MAC[31:0]), `LOCAL_MAC_HI` (MAC[47:32]), `NET_COMMIT` (WO), `NET_STATUS` (RO, `commit_busy`), `FILTER[i]` at `0x0120 + 8i`: `IP`, `PORT_EN` (port bits 15:0, enable bit 16) |
 | `0x0200` | FEED | Shadow: `FEED_CTRL` (`enable` bit 0, `session_check` bit 1, `resync_learn` bit 2, `filter_mask` bits 15:8), `SESSION_0..2` at `0x0204` (session bytes 0–3, byte 0 = bits 31:24; 4–7; 8–9 = bits 31:16), `RESYNC_SEQ_LO/HI` at `0x0210`. `FEED_COMMIT` at `0x0218` (WO, `commit` bit 0, `resync` bit 1), `FEED_STATUS` (RO, `commit_busy`). Snapshot: `EXPECTED_SEQ` (`LO`/`HI`) at `0x0220`, `FEED_STATE` at `0x0228` (`synced` bit 0, `eos` bit 1), `MOLD_<status>` at `0x0240 + 8 × status`, then `MOLD_MSGS`, `MOLD_DUP_MSGS`, `MOLD_OVERSIZE_MSGS`, `MOLD_GAP_EVENTS`, `MOLD_GAP_MSGS` at `0x0298`..`0x02B8` |
 | `0x0400` | STATS | `STATS_CTRL` (WO, `snapshot`), `STATS_SEQ` (RO), eleven 64-bit counters as `LO`/`HI` pairs from `0x0410`: `RX_PKTS`, `RX_BYTES`, then `DROP_<reason>` at `0x0420 + 8 × (reason − 1)` |
 | `0x0600` | ITCH | Shadow (carried by `FEED_COMMIT`): `ITCH_CTRL` (`class_en` bits 5:0, `class_filter` bits 13:8; bit = `itch_class_e` code). Snapshot: `ITCH_<class>` at `0x0640 + 8 × class`, then `ITCH_OUT`, `ITCH_FILTERED`, `ITCH_MASKED` at `0x0670`, `0x0678`, `0x0680` |
-| `0x0800` | RING | Host domain, no commit: `RING_CTRL` (`enable`), `RING_BASE_LO` (bits 31:12), `RING_BASE_HI`, `RING_SIZE_LOG2`, `CONS_IDX` (RW), `PROD_IDX` (RO, live), `RING_STATUS` (RO: `bresp_err` bit 0, `enable_err` bit 1), live counters `RING_WRITTEN` at `0x0820` and `RING_BRESP_ERR` at `0x0828`. Snapshot: `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS`, `RING_DROP_ENTRIES`, `RING_DROP_ORDERS` from `0x0840`, `RING_ORDER_QUEUED` at `0x0860` (F7). Alone in its 512-byte read window (read path timing, audit/13 S8). See Host event ring |
+| `0x0800` | RING | Host domain, no commit: `RING_CTRL` (`enable`), `RING_BASE_LO` (bits 31:12), `RING_BASE_HI`, `RING_SIZE_LOG2`, `CONS_IDX` (RW), `PROD_IDX` (RO, live), `RING_STATUS` (RO: `bresp_err` bit 0, `enable_err` bit 1), `RING_DONE_IDX` (RO, live, F8) at `0x081C`, live counters `RING_WRITTEN` at `0x0820` and `RING_BRESP_ERR` at `0x0828`, `RING_BUSY` (RO, live, F8) at `0x0830`. Snapshot: `RING_COMMIT_ENTRIES`, `RING_DROP_PKTS`, `RING_DROP_ENTRIES`, `RING_DROP_ORDERS` from `0x0840`, `RING_ORDER_QUEUED` at `0x0860` (F7). Alone in its 512-byte read window (read path timing, audit/13 S8). See Host event ring |
 | `0x0A00` | RISK | `MAX_QTY`, `MAX_NOTIONAL_LO/HI`, `RATE_REFILL`, `RATE_PERIOD`, `RATE_BURST` (shadow), `RISK_COMMIT` (command), `RISK_CTRL` (`kill`, direct), `BUDGET_ADD` (command), `BUDGET` (RO, live); snapshot: `ORDERS_SENT_HW/HOST` at `0x0A40`, `RISK_REJECT_<reason>` at `0x0A60 + 8 × (reason − 1)` |
 | `0x1000` | STRATEGY | `RULE_SEL`, the selected rule's shadow `RULE_CTRL`, `RULE_LOCATE`, `RULE_THRESHOLD`, `RULE_MIN_SHARES`, `RULE_QTY`, `RULE_OFFSET`, then `RULE_COMMIT`, `RULE_ARM`, `RULE_DISARM` (commands), `RULE_STATUS`, `RULE_ARMED` (RO); snapshot: `RULE_FIRED_<n>` at `0x1040 + 8n` |
 | `0x2000` | TX | `TX_CTRL` (`tx_en`, direct), `TX_OUCH` (shadow), `TX_COMMIT`, `TX_USERREF_NEXT` (commands), `TX_STATUS` (RO), `TX_USERREF` (RO, the counter), `TX_TEMPLATE[10]` at `0x2020` and `TX_TEMPLATE_TAIL` (42 header bytes), the mailbox `MBOX_*` fields, `MBOX_SEND`, `MBOX_SPACE`, `MBOX_STATUS`, live `MBOX_DROP` at `0x2090` |
@@ -851,7 +877,9 @@ For the same reason the resync value (`RESYNC_SEQ`, written by software) and the
 `VERSION` is major.minor: a minor step only adds registers (software written for an older minor still works), a
 major step changes existing ones. The F3 FEED block made it `0x0005_0001`, the F4 ITCH block and SYMBOL
 `0x0005_0002`, the F6 RING block `0x0005_0003`, the F7 RISK, STRATEGY, TX blocks and LOCATE_ALLOW `0x0005_0004`,
-the F8 `RESET_SEEN` and `TS_SNAPSHOT` `0x0005_0005`.
+the F8 `RESET_SEEN`, `TS_SNAPSHOT` and ring interrupt (`IRQ_*`, `RING_DONE_IDX`, `RING_BUSY`) `0x0005_0005`. F8 also
+refuses an enable while `RING_BUSY` = 1 (Host rules 1): a tightening of an existing rule that closes a race, kept
+in the minor step because no host software was released yet (user decision, audit/15 S5).
 
 The generated read mux has one register stage per 512-byte window (`--rt-read-fanin`), and the logic in front of it
 grows with the registers in that window: RING at `0x0300`, in FEED's window, failed the Artix-7 125 MHz gate. A new
@@ -1097,7 +1125,7 @@ after every reset, in this order:
 8. releases the kill switch last (`RISK_CTRL.kill` = 0).
 The order commands answer once in effect, so no polling is needed between them.
 
-How the host learns about a reset (a platform reset notification, or a reset counter register) is F8's.
+The host learns about a reset from `GLOBAL.RESET_SEEN` (F8, see Software contract after reset).
 
 ### Clocks and reset
 
