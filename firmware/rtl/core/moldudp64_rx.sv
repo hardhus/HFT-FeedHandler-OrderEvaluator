@@ -244,8 +244,11 @@ module moldudp64_rx
       l_e[i]     = 4'(i) + 4'(l_len[i][2:0]);
       l_short[i] = l_len[i] < 16'(MOLD_MIN_LEN);
       l_over[i]  = l_len[i] > 16'(MOLD_MAX_MSG);
-      // the block ends in this beat (only from i <= 1 with a 6..7-byte block)
-      l_end[i]   = l_len[i] < 16'd8 && l_e[i] < 4'd8 && vld[l_e[i][2:0]];
+      // The block ends in this beat. Read only with !l_short[o] (a new block, nb_end, exact), and then only i <= 1
+      // can end here: length >= MOLD_MIN_LEN >= 6 (g_check) and i + length < 8. Lanes 2..7 are a constant 0, so
+      // the select by o_q is 2:1, not 8:1 (timing, F8 S8: A7 net_clk worst path rx out_data_q -> l_end[o_q]
+      // through MUXF7/MUXF8 -> s1_end_new, -0.344).
+      l_end[i]   = i <= 1 && l_len[i] < 16'd8 && l_e[i] < 4'd8 && vld[l_e[i][2:0]];
       l_wz[i]    = l_len[i][15:5] == '0 && l_t[i] < 6'd16;
       l_w1[i]    = l_len[i][15:5] == '0 && l_t[i] >= 6'd16 && l_t[i] < 6'd24;
       // ... on the last byte
