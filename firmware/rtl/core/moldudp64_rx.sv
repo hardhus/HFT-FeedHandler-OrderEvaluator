@@ -372,8 +372,10 @@ module moldudp64_rx
       cb_seq_q  <= dec_seq;
       cb_idx_q  <= dec_idx;
     end
-    if (hdr2 || dec) begin
-      bi_q <= dec ? dec_idx + 16'd1 : dec_idx;
+    // hdr2 || dec = hdr2 || dec_b (dec_h needs hdr2): the enable takes no count compare, and only bit 0 does
+    // (timing, F8 S8: rx out_data_q -> cnt_now -> dec (fo 146) -> bi_q CE, -0.123 on the A7).
+    if (hdr2 || dec_b) begin
+      bi_q <= hdr2 ? {15'd0, dec_h} : bi_q + 16'd1;
     end
   end
 
