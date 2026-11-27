@@ -299,13 +299,16 @@ module strategy_engine
     end
   end
 
+  // A fire in the previous cycle: |hit registered is |hit_q (same edge, same reset), so the OR comes after hit_q's
+  // register, not between hit and a fire_q flop (timing, F8 S8: A7 net_clk worst path itch m_ev_price -> price
+  // compare -> hit -> |hit -> fire_q, -0.289). Its loads (mem write enable, wr_ptr_q) are register to register.
+  assign fire_q = |hit_q;
+
   always_ff @(posedge clk) begin
     if (rst) begin
-      fire_q    <= 1'b0;
       pkt_q     <= 1'b0;
       pkt_acc_q <= 1'b0;
     end else begin
-      fire_q    <= |hit;  // = |fire
       pkt_q     <= s_pkt_valid;
       pkt_acc_q <= pkt_acc;
     end
