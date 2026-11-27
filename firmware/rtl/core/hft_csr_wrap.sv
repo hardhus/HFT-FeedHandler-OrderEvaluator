@@ -1356,6 +1356,10 @@ module hft_csr_wrap
   // sends the next command after this one's response). A flop, so the decode is not in front of strategy_engine's
   // rule write decode (fo 165) and hit (timing, F8 S8: pulse_q -> cfg_rule_wr -> block -> hit -> fire_q, -0.166).
   logic                                 rule_wr_q;
+  // = pulse_q && cmd_dst.kind == CMD_RISK_COMMIT, the same way: the decode is not in front of risk_check's limit
+  // muxes (fo 505) and the notional compare (timing, F8 S8: cmd_dst.kind -> cfg_lim_wr -> max_notional_n ->
+  // notional_gt_q, -0.043).
+  logic                                 lim_wr_q;
   logic      [$clog2(CMD_SETTLE+1)-1:0] settle_q;
   rsp_t                                 rsp_q;
   logic                                 rsp_src_ready;
@@ -1378,11 +1382,13 @@ module hft_csr_wrap
       host_take_q <= '0;
       pulse_q     <= 1'b0;
       rule_wr_q   <= 1'b0;
+      lim_wr_q    <= 1'b0;
       settle_q    <= '0;
     end else begin
       host_take_q <= {host_take_q[1:0], host_take};
       pulse_q     <= 1'b0;
       rule_wr_q   <= 1'b0;
+      lim_wr_q    <= 1'b0;
       unique case (n_state_q)
         N_IDLE: begin
           if (cmd_dst_valid) begin
@@ -1396,6 +1402,7 @@ module hft_csr_wrap
             end else begin
               pulse_q   <= 1'b1;
               rule_wr_q <= cmd_dst.kind == CMD_RULE_COMMIT;
+              lim_wr_q  <= cmd_dst.kind == CMD_RISK_COMMIT;
               settle_q  <= '0;
               n_state_q <= N_SETTLE;
             end
@@ -1436,7 +1443,7 @@ module hft_csr_wrap
   assign cmd_arm_mask      = cmd_dst.pay[STRAT_N_RULES-1:0];
   assign cmd_disarm        = pulse_q && cmd_dst.kind == CMD_RULE_DISARM;
   assign cmd_disarm_mask   = cmd_dst.pay[STRAT_N_RULES-1:0];
-  assign cfg_lim_wr        = pulse_q && cmd_dst.kind == CMD_RISK_COMMIT;
+  assign cfg_lim_wr        = lim_wr_q;
   assign cfg_max_qty       = cmd_lim.max_qty;
   assign cfg_max_notional  = cmd_lim.max_notional;
   assign cfg_rate_refill   = cmd_lim.rate_refill;
