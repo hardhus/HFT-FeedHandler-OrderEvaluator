@@ -1352,6 +1352,10 @@ module hft_csr_wrap
   net_state_e       n_state_q;
   logic       [2:0] host_take_q;  // a host order taken in each of the last 3 cycles
   logic host_take, fence_ok, pulse_q, path_closed;
+  // = pulse_q && cmd_dst.kind == CMD_RULE_COMMIT, set with pulse_q (cmd_dst holds from N_IDLE to N_RESP: the host
+  // sends the next command after this one's response). A flop, so the decode is not in front of strategy_engine's
+  // rule write decode (fo 165) and hit (timing, F8 S8: pulse_q -> cfg_rule_wr -> block -> hit -> fire_q, -0.166).
+  logic                                 rule_wr_q;
   logic      [$clog2(CMD_SETTLE+1)-1:0] settle_q;
   rsp_t                                 rsp_q;
   logic                                 rsp_src_ready;
@@ -1373,10 +1377,12 @@ module hft_csr_wrap
       n_state_q   <= N_IDLE;
       host_take_q <= '0;
       pulse_q     <= 1'b0;
+      rule_wr_q   <= 1'b0;
       settle_q    <= '0;
     end else begin
       host_take_q <= {host_take_q[1:0], host_take};
       pulse_q     <= 1'b0;
+      rule_wr_q   <= 1'b0;
       unique case (n_state_q)
         N_IDLE: begin
           if (cmd_dst_valid) begin
@@ -1389,6 +1395,7 @@ module hft_csr_wrap
               n_state_q <= N_LOC_REQ;
             end else begin
               pulse_q   <= 1'b1;
+              rule_wr_q <= cmd_dst.kind == CMD_RULE_COMMIT;
               settle_q  <= '0;
               n_state_q <= N_SETTLE;
             end
@@ -1422,7 +1429,7 @@ module hft_csr_wrap
   end
 
   // Pulses: the cycle after the fence opened. TX_COMMIT goes only while the path is closed (decision 37).
-  assign cfg_rule_wr       = pulse_q && cmd_dst.kind == CMD_RULE_COMMIT;
+  assign cfg_rule_wr       = rule_wr_q;
   assign cfg_rule_idx      = cmd_rule.idx;
   assign cfg_rule          = cmd_rule.rule;
   assign cmd_arm           = pulse_q && cmd_dst.kind == CMD_RULE_ARM;
