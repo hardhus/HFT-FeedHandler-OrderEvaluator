@@ -99,6 +99,8 @@ bind event_packer packer_props u_packer_props (
     .s_pkt_valid    (s_pkt_valid),
     .s_pkt_gap      (s_pkt_gap),
     .s_pkt_gap_nz   (s_pkt_gap_nz),
+    .s_pkt_seq      (s_pkt_seq),
+    .s_pkt_gap_seq  (s_pkt_gap_seq),
     .pkt_accepted   (pkt_accepted),
     .s1_valid       (s1_valid),
     .fifo_wr_en     (fifo_wr_en),

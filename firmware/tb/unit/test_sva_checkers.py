@@ -163,6 +163,7 @@ PACKER_VIOLATIONS = {
     "a_ord_taken": (13, "a queued order entry not taken in a free cycle"),
     "a_pick": (14, "the order queue read address differs from rp + s1_ord"),
     "a_gap_nz": (15, "s_pkt_gap_nz differs from s_pkt_gap != 0"),
+    "a_gap_seq": (16, "s_pkt_gap_seq differs from s_pkt_seq - s_pkt_gap"),
 }
 
 STRATEGY_TB = ["firmware/tb/sva/strategy_props.sv", "firmware/tb/sv/tb_strategy_props.sv"]

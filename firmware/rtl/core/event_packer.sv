@@ -11,7 +11,9 @@
 //                at least 3 beats before its first message or to be accepted): room for GAP and EOS,
 //                written with no stall. A rejected event in the cycle of a pending EOS entry
 //                has no message (at most 2 beats) and is ignored: it would roll back nothing.
-//                s_pkt_gap_nz is s_pkt_gap != 0, registered upstream so the 64-bit test is off this path.
+//                s_pkt_gap_nz is s_pkt_gap != 0 and s_pkt_gap_seq is s_pkt_seq - s_pkt_gap, registered upstream
+//                so the 64-bit test and subtraction are off this path (timing, F8 S8: the subtraction fed s1_din
+//                on the A7 net_clk worst path, -0.066).
 // Commit       : accepted packet (MOLD_OK, HEARTBEAT, EOS): its message entries, then GAP if it has a gap,
 //                then EOS, then fifo_commit. Any other status: fifo_rollback, nothing is counted.
 // Drop         : a write that finds the FIFO full or busy drops the packet: nothing more of it is written and
@@ -79,6 +81,7 @@ module event_packer
     input logic         [           63:0] s_pkt_seq,
     input logic         [           63:0] s_pkt_gap,
     input logic                           s_pkt_gap_nz,
+    input logic         [           63:0] s_pkt_gap_seq,
     input logic         [           63:0] s_pkt_sof_ts,
     input logic         [CFG_EPOCH_W-1:0] s_pkt_epoch,
 
@@ -356,8 +359,8 @@ module event_packer
         next_valid = 1'b1;
         next_eos = s_pkt_status == MOLD_EOS;
         next_commit = !next_eos;
-        next_din = desc_pack_gap(s_pkt_seq - s_pkt_gap, s_pkt_sof_ts, flags_in, s_pkt_epoch,
-                                 s_pkt_seq, s_pkt_gap);
+        next_din =
+            desc_pack_gap(s_pkt_gap_seq, s_pkt_sof_ts, flags_in, s_pkt_epoch, s_pkt_seq, s_pkt_gap);
       end else if (s_pkt_status == MOLD_EOS) begin
         next_valid  = 1'b1;
         next_commit = 1'b1;

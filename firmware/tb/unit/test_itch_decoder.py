@@ -317,6 +317,8 @@ class Dec:
             got = {k: int(getattr(d, f"m_pkt_{k}").value) for k in PKT_PORTS}
             assert got == p, f"packet event {got}, sent {p}"
             assert int(d.m_pkt_gap_nz.value) == int(p["gap"] != 0), f"m_pkt_gap_nz for gap {p['gap']:#x}"
+            want = (p["seq"] - p["gap"]) % 2**64
+            assert int(d.m_pkt_gap_seq.value) == want, f"m_pkt_gap_seq {int(d.m_pkt_gap_seq.value):#x}, want {want:#x}"
             if self.keep:
                 self.order.append((self.cycle, "pkt"))
         else:

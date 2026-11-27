@@ -135,6 +135,7 @@ module event_path_ooc
   mold_status_e                      pkt_status_q;
   logic [63:0] pkt_seq_q, pkt_gap_q, pkt_sof_ts_q;
   logic                            pkt_gap_nz_q;
+  logic         [            63:0] pkt_gap_seq_q;
   logic         [ CFG_EPOCH_W-1:0] pkt_epoch_q;
   logic                            sent_valid_q;
   logic         [            31:0] sent_user_ref_q;
@@ -196,6 +197,7 @@ module event_path_ooc
     pkt_seq_q        <= s_pkt_seq;
     pkt_gap_q        <= s_pkt_gap;
     pkt_gap_nz_q     <= s_pkt_gap != '0;  // as itch_decoder m_pkt_gap_nz
+    pkt_gap_seq_q    <= s_pkt_seq - s_pkt_gap;  // as itch_decoder m_pkt_gap_seq
     pkt_sof_ts_q     <= s_pkt_sof_ts;
     pkt_epoch_q      <= s_pkt_epoch;
     sent_valid_q     <= s_sent_valid;
@@ -265,6 +267,7 @@ module event_path_ooc
       .s_pkt_seq       (pkt_seq_q),
       .s_pkt_gap       (pkt_gap_q),
       .s_pkt_gap_nz    (pkt_gap_nz_q),
+      .s_pkt_gap_seq   (pkt_gap_seq_q),
       .s_pkt_sof_ts    (pkt_sof_ts_q),
       .s_pkt_epoch     (pkt_epoch_q),
       .s_sent_valid    (sent_valid_q),

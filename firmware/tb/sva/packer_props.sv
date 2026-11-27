@@ -11,6 +11,8 @@ module packer_props
     input logic                                 s_pkt_valid,
     input logic [                         63:0] s_pkt_gap,
     input logic                                 s_pkt_gap_nz,
+    input logic [                         63:0] s_pkt_seq,
+    input logic [                         63:0] s_pkt_gap_seq,
     input logic                                 pkt_accepted,
     input logic                                 s1_valid,
     input logic                                 fifo_wr_en,
@@ -66,6 +68,14 @@ module packer_props
   assert property (@(posedge clk) disable iff (rst || !armed) s_pkt_valid |-> s_pkt_gap_nz == (s_pkt_gap != '0))
   else begin
     $error("packer_props: s_pkt_gap_nz differs from s_pkt_gap != 0");
+  end
+
+  // s_pkt_gap_seq is registered upstream (itch_decoder) and must equal the subtraction it replaces.
+  a_gap_seq :
+  assert property (@(posedge clk) disable iff (rst || !armed) s_pkt_valid |->
+                  s_pkt_gap_seq == s_pkt_seq - s_pkt_gap)
+  else begin
+    $error("packer_props: s_pkt_gap_seq differs from s_pkt_seq - s_pkt_gap");
   end
 
   a_ev_after_pkt :

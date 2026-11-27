@@ -237,6 +237,7 @@ class Packer:
             d.s_pkt_seq.value = pkt.seq
             d.s_pkt_gap.value = pkt.gap
             d.s_pkt_gap_nz.value = int(pkt.gap != 0)
+            d.s_pkt_gap_seq.value = (pkt.seq - pkt.gap) % 2**64
             d.s_pkt_sof_ts.value = pkt.sof_ts
             d.s_pkt_epoch.value = pkt.epoch
             if self.d == self.eos_slot:

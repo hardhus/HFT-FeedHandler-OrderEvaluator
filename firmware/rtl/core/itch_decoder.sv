@@ -3,7 +3,8 @@
 // Clock domain : clk (net_clk)
 // Latency      : s_msg_valid -> m_ev_valid / m_res_valid 2 cycles; s_pkt_valid -> m_pkt_valid
 //                2 cycles, so a packet's event still follows its messages
-//                (m_pkt_gap_nz = m_pkt_gap != 0, a register beside it: event_packer's GAP decision)
+//                (m_pkt_gap_nz = m_pkt_gap != 0 and m_pkt_gap_seq = m_pkt_seq - m_pkt_gap, registers beside
+//                them: event_packer's GAP decision and the GAP entry's first lost sequence number)
 // Throughput   : one message per cycle, no backpressure; a message and a packet event may come
 //                in the same cycle (the message then belongs to the next packet)
 // Classes      : ORDER (A F E C X D U) and TRADE (P Q B) are decoded into the normalized m_ev_*
@@ -97,6 +98,7 @@ module itch_decoder
     output logic         [           15:0] m_pkt_count,
     output logic         [           63:0] m_pkt_gap,
     output logic                           m_pkt_gap_nz,
+    output logic         [           63:0] m_pkt_gap_seq,
     output logic         [           15:0] m_pkt_msgs,
     output logic         [           15:0] m_pkt_dup_msgs,
     output logic         [           15:0] m_pkt_oversize,
@@ -395,6 +397,7 @@ module itch_decoder
     m_pkt_count      <= p1_count_q;
     m_pkt_gap        <= p1_gap_q;
     m_pkt_gap_nz     <= p1_gap_q != '0;
+    m_pkt_gap_seq    <= p1_seq_q - p1_gap_q;
     m_pkt_msgs       <= p1_msgs_q;
     m_pkt_dup_msgs   <= p1_dup_q;
     m_pkt_oversize   <= p1_over_q;

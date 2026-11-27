@@ -15,6 +15,8 @@ module tb_packer_props;
   logic                         s_pkt_valid = 1'b0;
   logic [                 63:0] s_pkt_gap = '0;
   logic                         s_pkt_gap_nz = 1'b0;
+  logic [                 63:0] s_pkt_seq = '0;
+  logic [                 63:0] s_pkt_gap_seq = '0;
   logic                         pkt_accepted = 1'b0;
   logic                         s1_valid = 1'b0;
   logic                         fifo_wr_en = 1'b0;
@@ -44,6 +46,8 @@ module tb_packer_props;
       .s_pkt_valid    (s_pkt_valid),
       .s_pkt_gap      (s_pkt_gap),
       .s_pkt_gap_nz   (s_pkt_gap_nz),
+      .s_pkt_seq      (s_pkt_seq),
+      .s_pkt_gap_seq  (s_pkt_gap_seq),
       .pkt_accepted   (pkt_accepted),
       .s1_valid       (s1_valid),
       .fifo_wr_en     (fifo_wr_en),
@@ -151,17 +155,21 @@ module tb_packer_props;
 
     // An accepted event with GAP and EOS: the commit comes 2 cycles later.
     @(negedge clk);
-    s_pkt_valid  = 1'b1;
-    pkt_accepted = 1'b1;
-    s_pkt_gap    = 64'h8000_0000_0000_0000;  // only the top bit: the whole gap is tested
-    s_pkt_gap_nz = !v(15);  // 15: a_gap_nz
+    s_pkt_valid   = 1'b1;
+    pkt_accepted  = 1'b1;
+    s_pkt_gap     = 64'h8000_0000_0000_0000;  // only the top bit: the whole gap is tested
+    s_pkt_gap_nz  = !v(15);  // 15: a_gap_nz
+    s_pkt_seq     = 64'h1_0000_0005;  // a borrow across bit 32: the whole subtraction is tested
+    s_pkt_gap_seq = s_pkt_seq - s_pkt_gap - 64'(v(16));  // 16: a_gap_seq
     @(negedge clk);
-    s_pkt_valid  = 1'b0;
-    pkt_accepted = 1'b0;
-    s_pkt_gap    = '0;
-    s_pkt_gap_nz = 1'b0;
-    s1_valid     = 1'b1;
-    fifo_wr_en   = 1'b1;
+    s_pkt_valid   = 1'b0;
+    pkt_accepted  = 1'b0;
+    s_pkt_gap     = '0;
+    s_pkt_gap_nz  = 1'b0;
+    s_pkt_seq     = '0;
+    s_pkt_gap_seq = '0;
+    s1_valid      = 1'b1;
+    fifo_wr_en    = 1'b1;
     @(negedge clk);
     fifo_commit   = !v(8);  // 8: a_accepted_gets_end
     fifo_rollback = v(6);  // 6: a_end_xor

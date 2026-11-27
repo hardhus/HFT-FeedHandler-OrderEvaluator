@@ -146,6 +146,7 @@ module HFT_Core
   logic [63:0] m_fwd_pkt_seq, m_fwd_pkt_gap, m_fwd_pkt_sof_ts;
   logic [15:0] m_fwd_pkt_msgs, m_fwd_pkt_dup_msgs, m_fwd_pkt_oversize;
   logic                         m_fwd_pkt_gap_nz;
+  logic [                 63:0] m_fwd_pkt_gap_seq;
   logic [      CFG_EPOCH_W-1:0] m_fwd_pkt_epoch;
   // event_packer's order queue
   logic                         ring_credit_ret;
@@ -558,6 +559,7 @@ module HFT_Core
       .m_pkt_count       (fwd_pkt_count_unused),
       .m_pkt_gap         (m_fwd_pkt_gap),
       .m_pkt_gap_nz      (m_fwd_pkt_gap_nz),
+      .m_pkt_gap_seq     (m_fwd_pkt_gap_seq),
       .m_pkt_msgs        (m_fwd_pkt_msgs),
       .m_pkt_dup_msgs    (m_fwd_pkt_dup_msgs),
       .m_pkt_oversize    (m_fwd_pkt_oversize),
@@ -767,6 +769,7 @@ module HFT_Core
       .s_pkt_seq         (m_fwd_pkt_seq),
       .s_pkt_gap         (m_fwd_pkt_gap),
       .s_pkt_gap_nz      (m_fwd_pkt_gap_nz),
+      .s_pkt_gap_seq     (m_fwd_pkt_gap_seq),
       .s_pkt_sof_ts      (m_fwd_pkt_sof_ts),
       .s_pkt_epoch       (m_fwd_pkt_epoch),
       .s_sent_valid      (sent_valid),
