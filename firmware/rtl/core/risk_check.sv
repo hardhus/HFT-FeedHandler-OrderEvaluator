@@ -280,8 +280,7 @@ module risk_check
   logic burst_nz_q, refill_nz_q;  // = rate_burst_q != 0, rate_refill_q != 0 (set with the limits)
   logic burst_gt1_q, refill_gt1_q;  // = rate_burst_q > 1, rate_refill_q > 1 (set with the limits)
 
-  logic [31:0] tok_sum;  // mod 2^32: a sum past it is above burst (sat1)
-  logic        rate_ok;
+  logic rate_ok;
   logic full, cancel, cancel_kill;
   risk_reason_e        reason;
   logic                accept;
@@ -293,7 +292,12 @@ module risk_check
   logic [31:0]
       burst_m1_q, refill_m1_q, period_m1_q;  // burst - 1, refill - 1, period - 1 (mod 2^32)
   logic sat1, sat0;  // with a tick, without one: the count is above burst
-  logic [31:0] tok_sum_m1, tok_m1, tokens_n;
+  // KEEP (timing, F8 S8): without it Vivado shares one adder for both sums, tokens + (accept ? refill - 1 : refill),
+  // and tokens - accept for tok_m1, which puts accept in front of the carry chain (A7 net_clk worst paths, run 9:
+  // ctl_hold_q / tick_q -> accept -> 8 CARRY4 -> tokens_q, -0.418). Kept, the three values come from flops alone.
+  (* keep = "true" *) logic [31:0] tok_sum;  // mod 2^32: a sum past it is above burst (sat1)
+  (* keep = "true" *) logic [31:0] tok_sum_m1, tok_m1;
+  logic [31:0] tokens_n;
   logic eff_nz, eff_gt1;  // the effective count != 0, > 1
   logic tok_gt1;  // tokens_q > 1
   assign tok_sum    = tokens_q + rate_refill_q;
