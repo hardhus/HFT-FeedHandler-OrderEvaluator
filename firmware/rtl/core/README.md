@@ -9,6 +9,11 @@ they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`
 [`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3, F4, F6 and
 F7 plans (audit 09, 10, 11, 12, 13, 14); this file is the contract.
 
+The synthesis tables give the routed utilization from Vivado's `utilization_route.rpt` (Slice LUTs, LUT as Memory,
+Slice Registers, BRAM tiles), measured at `ac699c7` (F8) unless a row says otherwise. Figures quoted from earlier
+phases in the text are the netlist cell counts the flow printed then (`HFT_SYNTH`), which run above the Slice LUTs.
+The whole core is synthesized in [`HFT_Core` synthesis](#hft_core-synthesis-just-synth-top) at the end.
+
 ## Catalog
 
 | Block | What it does | Phase |
@@ -158,9 +163,11 @@ every path is register to register. The gate is the routed timing; the synthesis
 
 | Part | Clock | LUT | FF | WNS (ns) | WHS (ns) | `report_cdc` | Gate |
 |------|-------|-----|----|----------|----------|--------------|------|
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 662 | 1269 | +0.382 (synthesis +0.247) | +0.131 | no crossing | PASS |
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 673 | 1269 | +3.689 (synthesis +4.641) | +0.046 | no crossing | PASS |
-| `xc7a100tcsg324-1` | 250 MHz | 662 | 1269 | −2.153 (synthesis) | +0.266 | no crossing | information only |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 617 | 1289 | +0.092 (synthesis +0.716) | +0.156 | no crossing | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 615 | 1289 | +3.652 (synthesis +4.633) | +0.042 | no crossing | PASS |
+| `xc7a100tcsg324-1` | 250 MHz | 662 (cells) | 1269 | −2.153 (synthesis) | +0.266 | no crossing | information only (F2 run) |
+
+The block's RTL is unchanged since F2; the Artix-7 routed margin moved from +0.382 to +0.092 with placement alone.
 
 ### Out of scope
 
@@ -327,8 +334,8 @@ Harness `rtl/platform/synth_ooc/moldudp64_rx_ooc.sv` (inputs registered, as for 
 
 | Part | Clock | LUT | FF | WNS (ns) | WHS (ns) | `report_cdc` | Gate |
 |------|-------|-----|----|----------|----------|--------------|------|
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 2482 | 2942 | +0.155 (synthesis +0.313) | +0.097 | no crossing | PASS |
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 2503 | 2942 | +3.441 (synthesis +4.419) | +0.042 | no crossing | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 2005 | 3208 | +0.384 (synthesis −0.002) | +0.097 | no crossing | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 1979 | 3208 | +3.555 (synthesis +4.419) | +0.028 | no crossing | PASS |
 
 Measured with the 12-bit per-packet context (`CTX_W` = 12, F4).
 
@@ -469,8 +476,8 @@ Harness `rtl/platform/synth_ooc/itch_decoder_ooc.sv` (inputs registered).
 
 | Part | Clock | LUT | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|-------|-----|----|------|----------|----------|------|
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 635 | 3115 | 2 × RAMB36 | +0.978 (synthesis +1.145) | +0.100 | PASS |
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 634 | 3115 | 2 × RAMB36 | +4.097 (synthesis +4.751) | +0.045 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 529 | 3420 | 2 × RAMB36 | +1.059 (synthesis +1.145) | +0.099 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 525 | 3420 | 2 × RAMB36 | +4.161 (synthesis +4.751) | +0.020 | PASS |
 
 Most FFs are output registers (`m_ev_raw` alone is 512).
 
@@ -635,18 +642,19 @@ low; reset the memory side with it). The entries of a packet cut by a reset are 
 ### Synthesis (OOC, `just synth-ooc-on <part> event_path_ooc <profile> core.f synth_ooc_core.f impl`, placed and routed)
 
 Harness `rtl/platform/synth_ooc/event_path_ooc.sv` (packer with its F7 order queue, `COMMIT=1` FIFO of 256 entries,
-writer; inputs registered). F7 numbers (`6c05d52`):
+writer; inputs registered). `just synth-core` runs it on both parts. LUT includes LUTRAM (LUT as Memory):
 
 | Part | net / host clock | `DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|----------|-----|--------|----|------|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 4104 | 4914 | 5721 | 0 | +0.876 (synthesis +2.058) | +0.013 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 4097 | 6270 | 5746 | 0 | +0.135 (synthesis +0.671) | +0.053 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 7582 | 3848 | 5824 | 0 | +0.484 (synthesis +2.058) | +0.014 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 8167 | 4472 | 5846 | 0 | +0.186 (synthesis +0.671) | +0.053 | PASS |
 
 F6 alone (no order queue) was 2211 / 4653 (Kintex) and 2206 / 4683 (Artix-7, +0.353 ns; `DATA_W` 128 +0.219 ns). The
 F7 growth is the order queue, two LUTRAM banks of 8 slots (about 1530 LUTRAM on the Artix-7), and its registered
 order inputs (two ~500-bit entry ports). The banks are flat vectors on purpose: as an array of the slot struct,
-Vivado infers no RAM (Synth 8-7186) and the queue took about 8k FFs. The Artix-7's worst path is now the queue's
-write address (`wp_q` into the LUTRAM). The read address has its own register (`pick_q`, `packer_props` checks
+Vivado infers no RAM (Synth 8-7186) and the queue took about 8k FFs. In F7 the Artix-7's worst path was the queue's
+write address (`wp_q` into the LUTRAM); at `ac699c7` it is the host side's FIFO read into the writer (below), with
+the packer at +0.438 ns. The read address has its own register (`pick_q`, `packer_props` checks
 it): without it the Artix-7 gate failed by 0.052 ns.
 
 The FIFO is LUTRAM (`ram_style = "distributed"`, about a fifth of the Artix-7's memory LUTs), no BRAM. The host
@@ -808,12 +816,12 @@ when the trigger field enters the FPGA.
 ### Synthesis (OOC, `just synth-core`, placed and routed)
 
 Harness `rtl/platform/synth_ooc/order_path_ooc.sv`: `strategy_engine` + `risk_check` + `order_tx_builder`, inputs
-registered (`bf5f1d4`).
+registered. LUT includes LUTRAM (LUT as Memory):
 
 | Part | Clock | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
 |------|-------|-----|--------|----|------|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 4879 | 907 | 9188 | 2 | +2.640 (synthesis +4.170) | +0.026 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 4783 | 1163 | 8858 | 5 | +0.144 (synthesis +0.326) | +0.085 | PASS |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 MHz | 4190 | 627 | 9193 | 2 | +2.513 (synthesis +4.170) | +0.015 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 MHz | 4126 | 540 | 8863 | 5 | +0.387 (synthesis +0.338) | +0.071 | PASS |
 
 The first Artix-7 run failed by 8.19 ns: `risk_check` decided in one cycle through a 31-level chain. The decision now
 reads flags registered one cycle ahead from next-state values (two candidates where an accept changes them; the
@@ -1171,9 +1179,9 @@ gates are placed and routed out of context (no board or pins); the table also gi
 
 | Part | net / host clock | Flow | LUT | FF | WNS (ns) | WHS (ns) | Gate |
 |------|------------------|------|-----|----|----------|----------|------|
-| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 7381 | 19265 | +0.406 (synthesis +1.291) | +0.022 | PASS |
-| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 7380 | 19277 | +0.018 (synthesis −0.059) | +0.052 | PASS |
-| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 7381 | 19264 | −4.059 | +0.164 | information only |
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | routed | 7014 | 19164 | +0.680 (synthesis +1.958) | +0.028 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | routed | 7059 | 19179 | +0.177 (synthesis +0.422) | +0.058 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 250 MHz | synthesis | 7146 | 19162 | −3.017 | +0.164 | information only |
 
 F5 alone was 1329 LUT, 4349 FF (Artix-7 margin +0.324 ns); the F3 FEED block made it 2460 / 8405, the F4 ITCH block,
 SYMBOL path and 2370-bit snapshot 3426 / 10697, the F6 RING block, ring counters and the counter alignment 3639 /
@@ -1187,9 +1195,66 @@ is closed by `phys_opt_design` after routing, which `synth_ooc.tcl` runs only wh
 AXI-Lite arbitration into its read mux. If the map grows, the next steps are regblock `--cpuif passthrough` behind
 the router or a third register block for the snapshot counters.
 
-`report_cdc` (F7): CDC-3 (synchronizers, 22), CDC-15 (handshake data captured with an enable, constrained by
-`cdc.tcl`, 5066 bits), CDC-6 (2, allowed), and CDC-26 on the 272 mailbox FIFO read endpoints, waived by name
+F8 (`ac699c7`): both gates pass at routing, without `phys_opt_design`. The worst paths are host reads into the
+read-back registers: on the Kintex UltraScale+ the bus bridge into `hft_csr`'s (5 levels), on the Artix-7 the
+snapshot's valid into `hft_order_csr`'s (6 levels).
+
+`report_cdc` (F8): CDC-3 (synchronizers, 22), CDC-15 (handshake data captured with an enable, constrained by
+`cdc.tcl`, 5402 bits; 5066 in F7), CDC-6 (2, allowed), and CDC-26 on the 272 mailbox FIFO read endpoints, waived by name
 (decision 42: the FIFO never reads the address being written while its output is valid; the gate accepts CDC-26
 only on those waived endpoints); no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
 user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
 read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.
+
+## `HFT_Core` synthesis (`just synth-top`)
+
+Harness `rtl/platform/synth_ooc/hft_core_ooc.sv`: the whole core (`core.f`, `csr.f`, `top.f`), every synchronous input
+and output through one register in its own clock domain, so every path, the core's output logic included, is
+register to register and inside the timing and CDC gates. Placed and routed out of context; the gate is the routed
+timing. LUT includes LUTRAM (LUT as Memory).
+
+| Part | net / host clock | `RING_DATA_W` | LUT | LUTRAM | FF | BRAM | WNS (ns) | WHS (ns) | Gate |
+|------|------------------|---------------|-----|--------|----|------|----------|----------|------|
+| `xcku5p-ffvb676-2-e` (Kintex UltraScale+) | 156.25 / 250 MHz | 512 | 21946 | 4725 | 35644 | 4 | +0.399 (synthesis +1.841) | +0.011 | PASS |
+| `xc7a100tcsg324-1` (Artix-7) | 156.25 / 125 MHz | 512 | 22574 | 5286 | 35345 | 7 | +0.015 (synthesis −0.002) | +0.052 | PASS |
+| `xc7a100tcsg324-1` | 156.25 / 125 MHz | 128 | 22779 | 5286 | 34994 | 7 | +0.104 (synthesis +0.200) | +0.071 | information only |
+
+The core takes 36 % of the Artix-7's Slice LUTs (28 % of its memory LUTs) and 10 % of the Kintex UltraScale+'s.
+No memory is left uninferred (no Synth 8-7186).
+
+Worst setup and hold slack ending in each block, from the routed checkpoints of the two gates:
+
+| Block | Artix-7 WNS (ns) | Artix-7 WHS (ns) | Kintex UltraScale+ WNS (ns) | Kintex UltraScale+ WHS (ns) |
+|-------|------------------|------------------|-----------------------------|-----------------------------|
+| `u_rx` (`eth_ip_udp_rx`) | +0.128 | +0.149 | +2.786 | +0.041 |
+| `u_mold` (`moldudp64_rx`) | +0.053 | +0.109 | +2.302 | +0.031 |
+| `u_itch` (`itch_decoder`) | +0.015 | +0.108 | +3.236 | +0.041 |
+| `u_strategy` | +0.149 | +0.070 | +1.727 | +0.036 |
+| `u_risk` | +0.109 | +0.084 | +1.945 | +0.037 |
+| `u_tx` (`order_tx_builder`) | +0.692 | +0.097 | +2.566 | +0.031 |
+| `u_packer` (`event_packer`) | +0.056 | +0.168 | +2.478 | +0.042 |
+| `u_ring_fifo` (`cdc_async_fifo`) | +0.115 | +0.053 | +0.904 | +0.011 |
+| `u_ring_writer` (`event_ring_writer`) | +0.495 | +0.143 | +0.745 | +0.036 |
+| `u_wrap` (`hft_csr_wrap`) | +0.071 | +0.052 | +0.399 | +0.035 |
+| `u_net_rst`, `u_host_rst`, `HFT_Core`'s own flops | ≥ +1.320 | ≥ +0.138 | ≥ +2.121 | ≥ +0.059 |
+
+The Artix-7 margin is thin and spread over several blocks rather than one path: `itch_decoder`, `moldudp64_rx`,
+`event_packer` and `hft_csr_wrap` all end within 0.08 ns. Its worst path is the symbol bitmap's RAM read into a copy
+of `itch_decoder`'s `m_ev_valid` (4 levels). On the Kintex UltraScale+ the worst path is the snapshot handshake's
+synchronized request into the enable of the 2555-bit snapshot register (1 level, its fanout).
+
+The first whole-core Artix-7 run failed by 0.418 ns after `phys_opt_design`. These fixes closed it, none changing a
+latency or the behaviour (each its own commit, with tests):
+
+- `risk_check`: the token sums (`tok_sum`, `tok_sum_m1`, `tok_m1`) are kept apart, so Vivado no longer shares one
+  adder and puts `accept` in front of the carry chain.
+- `moldudp64_rx`: a block can end in a beat only from lanes 0 and 1, so the end select by the offset is 2:1, not
+  8:1; the block index enable no longer contains the count compare.
+- `hft_csr_wrap`: the rule and risk limit write pulses are registered at the edge of the command pulse.
+- `strategy_engine`: the fire flag is the OR of the registered hits, after the register.
+- `itch_decoder`: registers the gap's first sequence number (`m_pkt_gap_seq`), so `event_packer` no longer subtracts
+  on its input (`packer_props` `a_gap_seq` checks it).
+
+`report_cdc`, the same on all three runs: CDC-3 (synchronizers, 25), CDC-6 (4, allowed), CDC-15 (handshake and FIFO
+data captured with an enable, constrained by `cdc.tcl`, 6113 bits), and CDC-26 on the 272 mailbox FIFO read
+endpoints, waived by name (decision 42, CSR block above); no critical finding.
