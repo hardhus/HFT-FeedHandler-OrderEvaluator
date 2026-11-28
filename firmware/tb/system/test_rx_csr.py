@@ -1773,12 +1773,26 @@ async def tc_ring_errors(dut):
 async def reset_core(dut) -> None:
     """A reset of the core mid-run (rst_in, as the platform gives it): both synchronized resets rise and fall. ts_q
     is 0 while the net reset holds it and then counts the net edges after it (no random start here: the restart
-    itself is checked; u_wrap's copy of the net reset stands for ts_q's, every copy is equal in every cycle)."""
+    itself is checked; u_wrap's copy of the net reset stands for ts_q's, every copy is equal in every cycle).
+    Each domain's reset copies fall together on the 4th edge of their own clock after rst_in falls (HFT_Core's
+    reset_syncs: STAGES 3 + the output copy), so neither domain takes rst_in without its synchronizer."""
     dut.rst_in.value = 1
     for _ in range(6):
         await RisingEdge(dut.host_clk)
         await RisingEdge(dut.net_clk)
     dut.rst_in.value = 0
+
+    async def release(clk, rst, name: str) -> None:
+        ones = (1 << len(rst)) - 1
+        for edge in range(1, 5):
+            await RisingEdge(clk)
+            await ReadOnly()
+            want = 0 if edge == 4 else ones
+            got = int(rst.value)
+            assert got == want, f"{name} {got:#x} at edge {edge} after rst_in fell, want {want:#x}"
+
+    checks = [cocotb.start_soon(release(dut.net_clk, dut.net_rst, "net_rst")),
+              cocotb.start_soon(release(dut.host_clk, dut.host_rst, "host_rst"))]  # fmt: skip
     low = 0  # net edges that sampled the net reset low
     for _ in range(200):
         await ReadOnly()
@@ -1790,6 +1804,8 @@ async def reset_core(dut) -> None:
         low += int(not rst)
     else:
         raise AssertionError("the synchronized resets never fell")
+    for c in checks:
+        await c
     await RisingEdge(dut.host_clk)
 
 
