@@ -13,9 +13,6 @@ characters); UserRefNum exactly the previous + 1 (the core never skips one; the 
 only needs "strictly increasing").
 """
 
-from scapy.layers.inet import IP, UDP
-from scapy.layers.l2 import Ether
-
 from model.order import (
     CLORDID_CHARS,
     FRAME_LEN,
@@ -30,6 +27,8 @@ from model.order import (
     unwrap_soupbin,
     valid_price,
 )
+from scapy.layers.inet import IP, UDP
+from scapy.layers.l2 import Ether
 
 
 class ExchangeError(AssertionError):

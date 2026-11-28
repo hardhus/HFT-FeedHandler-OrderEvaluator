@@ -22,7 +22,6 @@ A source without expect fails and prints the measured values as the TOML to pin.
 from collections import Counter
 
 import pytest
-
 from common.itch_real import Retired, fetch, load, packets
 from model.itch import LOCATE_ZERO, PRICE_MAX, SPEC, ItchClass, classify, decode, header, normalize
 from model.mold import UDP_PAYLOAD_MAX, FeedConfig, FeedState, MoldStatus, expect, pack

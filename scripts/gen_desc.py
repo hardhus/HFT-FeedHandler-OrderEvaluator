@@ -297,11 +297,11 @@ def gen_py(schema: dict) -> str:
         out += [f"    Kind.{k['name']}: {{"]
         for f in layout(schema, k):
             if f["type"] != "pad":
-                out += [f"        \"{f['name']}\": ({f['byte']}, {f['size']}, \"{f['type']}\"),"]
+                out += [f'        "{f["name"]}": ({f["byte"]}, {f["size"]}, "{f["type"]}"),']
         out += ["    },"]
     out += ["}", "_FORMAT = {"]
     for k in schema["kind"]:
-        out += [f"    Kind.{k['name']}: struct.Struct(\"{_py_format(layout(schema, k))}\"),"]
+        out += [f'    Kind.{k["name"]}: struct.Struct("{_py_format(layout(schema, k))}"),']
     out += ["}"]
     out += [
         "",
@@ -315,7 +315,7 @@ def gen_py(schema: dict) -> str:
         "    for name, (_, size, typ) in fields.items():",
         "        v = values.get(name)",
         '        if typ in ("alpha", "bytes"):',
-        '            v = bytes(size) if v is None else bytes(v)',
+        "            v = bytes(size) if v is None else bytes(v)",
         "            if len(v) != size:",
         '                raise ValueError(f"{kind.name}.{name}: {len(v)} bytes, field is {size}")',
         '        elif typ == "u48":',

@@ -9,13 +9,11 @@ from pathlib import Path
 
 import pytest
 from desc_hand import HAND_ITCH, HAND_ORDER_SENT, HAND_RAW, HAND_RISK_REJECT
-
 from model import desc_gen
 from model.desc_gen import FLAG_OVERFLOW_BEFORE, Kind
 from model.itch import Bitmap, Event, ItchClass, ItchConfig, Outcome, encode, expect, random_itch, wire
 from model.mold import ACCEPTED, MoldStatus
 from model.order import OrderReq, Source
-from model.risk import Reason
 from model.ring import (
     MAX_PKT_ENTRIES,
     PACINGS,
@@ -30,6 +28,7 @@ from model.ring import (
     slot_addr,
     stamp,
 )
+from model.risk import Reason
 
 REJECTED = [s for s in MoldStatus if s not in ACCEPTED]
 EOS_ENTRY = desc_gen.encode(Kind.EOS, seq=1)

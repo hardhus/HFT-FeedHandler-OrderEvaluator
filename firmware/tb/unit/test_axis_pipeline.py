@@ -14,7 +14,6 @@ import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer
 from cocotbext.axi import AxiStreamBus, AxiStreamFrame, AxiStreamSink, AxiStreamSource
-
 from common.clocks import start_clock
 from common.runner import run_cocotb
 

@@ -23,10 +23,6 @@ import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
 from cocotbext.axi import AxiStreamBus, AxiStreamFrame, AxiStreamSource
-from scapy.layers.inet import IP, UDP
-from scapy.layers.l2 import Ether
-from scapy.packet import Raw
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.runner import run_cocotb
@@ -47,6 +43,9 @@ from model.net import (
     with_ip_options,
     with_vlan,
 )
+from scapy.layers.inet import IP, UDP
+from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 
 PERIOD_PS = 6400  # net_clk, 156.25 MHz
 N_FILTERS = int(os.environ.get("N_FILTERS", "8"))  # the build parameter, passed to the simulation via env
@@ -256,7 +255,9 @@ class Rx:
         if self.pkt_beats == 0 or last:  # in between, a_meta_stable (SVA) holds it every cycle
             self._check_meta(f, f"payload beat {self.pkt_beats}")
         if not last:
-            assert (keep, user) == (0xFF, 0), f"{f.name}: beat {self.pkt_beats} keep {keep:#04x} tuser {user} before tlast"
+            assert (keep, user) == (0xFF, 0), (
+                f"{f.name}: beat {self.pkt_beats} keep {keep:#04x} tuser {user} before tlast"
+            )
         else:
             assert keep in CONTIGUOUS_KEEP, f"{f.name}: last beat keep {keep:#04x} is not contiguous from lane 0"
         n = keep.bit_count()
@@ -477,9 +478,13 @@ async def tc_rx_disable(dut):
     rx = await start(dut)
     await rx.send(udp_frame(payload(60)), cfg=CFG, at_beat={3: lambda: rx.apply(off)}, intent=R.OK, name="1->0 mid")
     await rx.send(udp_frame(payload(60)), intent=R.DISABLED, name="after 1->0")
-    await rx.send(udp_frame(payload(60)), cfg=off, at_beat={3: lambda: rx.apply(CFG)}, intent=R.DISABLED, name="0->1 mid")
+    await rx.send(
+        udp_frame(payload(60)), cfg=off, at_beat={3: lambda: rx.apply(CFG)}, intent=R.DISABLED, name="0->1 mid"
+    )
     await rx.send(udp_frame(payload(60)), intent=R.OK, name="after 0->1")
-    await rx.send(udp_frame(payload(60)), cfg=off, at_beat={0: lambda: rx.apply(off)}, intent=R.DISABLED, name="1->0 at SOF")
+    await rx.send(
+        udp_frame(payload(60)), cfg=off, at_beat={0: lambda: rx.apply(off)}, intent=R.DISABLED, name="1->0 at SOF"
+    )
     await rx.send(udp_frame(payload(60)), cfg=CFG, at_beat={0: lambda: rx.apply(CFG)}, intent=R.OK, name="0->1 at SOF")
     rx.apply(off)
     await rx.send(bytes(5), intent=R.DISABLED, name="single-beat frame, disabled")
@@ -594,12 +599,26 @@ async def tc_latency(dut):
     rx = await start(dut)
     by_tail = {last_beat_payload_bytes(n): n for n in range(18, 26)}  # unpadded frames
     # (name, frame, intent, first beat after SOF or None if held, payload tlast after input tlast)
-    cases = [(f"{t} payload byte(s) in the last beat", udp_frame(payload(by_tail[t])), RxReason.OK, SOF_TO_PAYLOAD,
-              1 if t <= 2 else 2) for t in (1, 2, 3, 8)]
+    cases = [
+        (
+            f"{t} payload byte(s) in the last beat",
+            udp_frame(payload(by_tail[t])),
+            RxReason.OK,
+            SOF_TO_PAYLOAD,
+            1 if t <= 2 else 2,
+        )
+        for t in (1, 2, 3, 8)
+    ]
     cases += [
         ("padded, one beat (held)", pad_to(udp_frame(payload(4))), RxReason.OK, None, 1),
         ("padded, two beats", pad_to(udp_frame(payload(10))), RxReason.OK, SOF_TO_PAYLOAD, 1),
-        ("bytes after the datagram (last beat held)", udp_frame(payload(10)) + bytes(20), RxReason.LEN, SOF_TO_PAYLOAD, 1),
+        (
+            "bytes after the datagram (last beat held)",
+            udp_frame(payload(10)) + bytes(20),
+            RxReason.LEN,
+            SOF_TO_PAYLOAD,
+            1,
+        ),
     ]
     for name, frame, intent, first_latency, tlast_latency in cases:
         f = await rx.send(frame, intent=intent, name=name)
@@ -607,7 +626,9 @@ async def tc_latency(dut):
         if first_latency is None:
             assert f.out_first == f.out_last, f"{name}: expected a single, held beat"
         else:
-            assert f.out_first - f.sof == first_latency, f"{name}: first payload beat {f.out_first - f.sof} cycles after SOF"
+            assert f.out_first - f.sof == first_latency, (
+                f"{name}: first payload beat {f.out_first - f.sof} cycles after SOF"
+            )
         assert f.out_last - f.eof == tlast_latency, f"{name}: payload tlast {f.out_last - f.eof} cycles after tlast"
         assert f.stat - f.eof == 1, f"{name}: stat {f.stat - f.eof} cycles after tlast"
     await rx.finish()  # fmt: skip
@@ -667,7 +688,9 @@ async def tc_random_golden(dut):
                 nbeats > 1 and rng.random() < 0.3) else {}  # fmt: skip
             noise = rng.random() < 0.2
             rx.apply(replace(cfg, rx_en=t.rx_en))
-            f = await rx.send(t.frame, tuser=t.tuser, intent=t.intent, gaps=gaps, noise=noise, name=f"{t.category} #{i}")
+            f = await rx.send(
+                t.frame, tuser=t.tuser, intent=t.intent, gaps=gaps, noise=noise, name=f"{t.category} #{i}"
+            )
             # The monitor has checked (or will check) the DUT against f.want; cover what was exercised.
             ok = f.want.reason == RxReason.OK
             cov.hit(f"reason_{f.want.reason.name}")
@@ -805,7 +828,9 @@ async def tc_ts_wrap(dut):
     rx = await start(dut, ts_start=TS_MASK - 40)
     frames = []
     for i in range(12):
-        f = await rx.send(udp_frame(payload(random.randint(18, 60))), intent=RxReason.OK, name=f"frame {i} around the wrap")
+        f = await rx.send(
+            udp_frame(payload(random.randint(18, 60))), intent=RxReason.OK, name=f"frame {i} around the wrap"
+        )
         frames.append(f)
         await rx.idle(random.randint(0, 3))
     await rx.finish()

@@ -6,18 +6,15 @@ the OUCH 5.0 table, not through encode_ouch(). The header is checked with scapy.
 """
 
 import pytest
-from scapy.layers.inet import IP, UDP
-from scapy.layers.l2 import Ether
-
 from common.exchange import Exchange, ExchangeError
 from model.order import (
     FRAME_LEN,
     PRICE_LIMIT_MAX,
     TX_QUEUE_DEPTH,
     USER_REF_MAX,
-    Ouch,
     OrderError,
     OrderReq,
+    Ouch,
     Source,
     TxConfig,
     TxPort,
@@ -31,6 +28,8 @@ from model.order import (
     unwrap_soupbin,
     valid_order,
 )
+from scapy.layers.inet import IP, UDP
+from scapy.layers.l2 import Ether
 
 # docs/protocol/order_msg.md, "Worked example": frame bytes 42..91.
 DOC_EXAMPLE = bytes.fromhex(
@@ -48,10 +47,7 @@ ODD_OUCH = Ouch(
     user_ref=0x01020304, side=ord("S"), qty=0x0A0B0C0D, stock=b"ZVZZT   ", price=0x1112131415161718, tif=ord("E"),
     display=ord("N"), capacity=ord("A"), ise=ord("Y"), cross_type=ord("C"), clordid=b"abcdefghijklmn",
 )  # fmt: skip
-ODD_HEX = (
-    "4f 01020304 53 0a0b0c0d 5a565a5a54202020 1112131415161718 45 4e 41 59 43"
-    "6162636465666768696a6b6c6d6e 0000"
-)
+ODD_HEX = "4f 01020304 53 0a0b0c0d 5a565a5a54202020 1112131415161718 45 4e 41 59 436162636465666768696a6b6c6d6e 0000"
 CFG = TxConfig(template())
 
 

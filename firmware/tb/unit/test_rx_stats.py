@@ -11,7 +11,6 @@ import random
 import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.runner import run_cocotb
 from model.net import RxReason
@@ -20,7 +19,17 @@ PERIOD_PS = 6400  # net_clk, 156.25 MHz
 N_CNT = 11
 PKTS, BYTES = 0, 1
 # Hand-written counter index of each drop reason (STATS block order: DROP_DISABLED first).
-DROP_INDEX = {"DISABLED": 2, "FCS": 3, "MAC": 4, "ETHERTYPE": 5, "IP_HDR": 6, "FRAG": 7, "PROTO": 8, "FILTER": 9, "LEN": 10}
+DROP_INDEX = {
+    "DISABLED": 2,
+    "FCS": 3,
+    "MAC": 4,
+    "ETHERTYPE": 5,
+    "IP_HDR": 6,
+    "FRAG": 7,
+    "PROTO": 8,
+    "FILTER": 9,
+    "LEN": 10,
+}
 STAT_BYTES_MAX = 0xFFFF
 
 
@@ -188,7 +197,9 @@ def directed_tests(width: int) -> list[str]:
 
 
 # CNT_W: 64 (the product value) and 8 (every counter reaches its limit in a short test).
-@pytest.mark.parametrize("group, cnt_w", [("directed", 64), ("directed", 8), *((n, WIDTH_TESTS[n]) for n in LONG_TESTS)])
+@pytest.mark.parametrize(
+    "group, cnt_w", [("directed", 64), ("directed", 8), *((n, WIDTH_TESTS[n]) for n in LONG_TESTS)]
+)
 def test_rx_stats(group, cnt_w):
     run_cocotb(
         toplevel="rx_stats",

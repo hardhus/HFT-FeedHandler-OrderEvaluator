@@ -16,12 +16,12 @@ from dataclasses import dataclass
 import cocotb
 from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
-
-from common.axil import AxilDriver
 from model.csr import OKAY, addr, mem, regs_by_path
 from model.itch import ItchClass, Outcome
 from model.mold import ACCEPTED, MoldStatus
 from model.net import RxReason
+
+from common.axil import AxilDriver
 
 N_FILTERS = 8
 
@@ -392,8 +392,9 @@ class Feed:
             resync = bool(root.cfg_resync.value)
             loaded = loaded or landing
             if not loaded:
-                assert not (root.cfg_feed_en.value or root.cfg_session_check.value or resync or root.cfg_class_en.value), (
-                    "cfg_feed_en, cfg_session_check, cfg_resync or cfg_class_en set before any FEED commit was applied")
+                assert not (
+                    root.cfg_feed_en.value or root.cfg_session_check.value or resync or root.cfg_class_en.value
+                ), "cfg_feed_en, cfg_session_check, cfg_resync or cfg_class_en set before any FEED commit was applied"
                 continue
             epoch = int(root.cfg_epoch.value)
             assert landing or epoch == self.epoch, f"cfg_epoch {epoch} changed outside the landing of a transfer"
@@ -464,7 +465,8 @@ class Feed:
         assert self.landed == len(self.expected), f"{len(self.expected)} FEED transfers accepted, {self.landed} landed"
         assert self.resyncs == sum(self.expected), f"{self.resyncs} cfg_resync pulses, {sum(self.expected)} expected"
         assert self.request_edges == self.resync_requests, (
-            f"{self.resync_requests} resync writes, {self.request_edges} requests seen")
+            f"{self.resync_requests} resync writes, {self.request_edges} requests seen"
+        )
         commits = len(self.committed) - self.commit_base
         if commits:
             assert self.epoch == commits % 256, f"{commits} FEED commit writes, cfg_epoch {self.epoch}"
@@ -868,7 +870,8 @@ class Sym:
         cmds = [c for _, c in self.cmds]
         assert cmds == reqs, f"{len(reqs)} SYMBOL requests, {len(cmds)} commands (or they differ)"
         assert len(self.rsps) == len(cmds) and len(self.acks) == len(cmds), (
-            f"{len(cmds)} commands, {len(self.rsps)} responses, {len(self.acks)} acks")
+            f"{len(cmds)} commands, {len(self.rsps)} responses, {len(self.acks)} acks"
+        )
         assert [k for _, k in self.acks] == [bool(c.wr) for c in cmds], "ack kind differs from the request"
 
 
@@ -1156,7 +1159,9 @@ class Ord:
         names = {p: p.split(".")[1] for p in ext} | {"LOCATE_ALLOW": "LOCATE_ALLOW"}
         handles = []
         for p in [*ext, "LOCATE_ALLOW"]:
-            h = r.ohwif_in if p.split(".")[0] in ("RISK", "STRATEGY", "TX") else r.hwif_in  # hft_order_csr (decision 41)
+            h = (
+                r.ohwif_in if p.split(".")[0] in ("RISK", "STRATEGY", "TX") else r.hwif_in
+            )  # hft_order_csr (decision 41)
             for part in p.split("."):
                 h = getattr(h, part)
             for sig in ("wr_ack", "rd_ack"):

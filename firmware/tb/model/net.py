@@ -197,8 +197,20 @@ def udp_frame(
     """A valid Ethernet/IPv4/UDP frame (DF set, no UDP checksum), without padding."""
     pkt = (
         Ether(dst=dst_mac, src=src_mac, type=0x0800)
-        / IP(version=4, ihl=5, tos=0, len=28 + len(payload), id=ident, flags="DF", frag=0, ttl=ttl, proto=17,
-             chksum=0, src=src_ip, dst=dst_ip)  # fmt: skip
+        / IP(
+            version=4,
+            ihl=5,
+            tos=0,
+            len=28 + len(payload),
+            id=ident,
+            flags="DF",
+            frag=0,
+            ttl=ttl,
+            proto=17,
+            chksum=0,
+            src=src_ip,
+            dst=dst_ip,
+        )  # fmt: skip
         / UDP(sport=sport, dport=dport, len=8 + len(payload), chksum=0)
         / Raw(payload)
     )

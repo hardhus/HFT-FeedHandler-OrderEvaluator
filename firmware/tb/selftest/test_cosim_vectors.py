@@ -1,10 +1,10 @@
 """common/cosim_vectors.py: the co-simulation vectors pass the models' own checks (audit/15 §2.7). No simulator."""
 
-from model.desc_gen import CTRL_BYTES, FIELDS, VERSION, Kind, decode
-from model.csr import addr
-from model.order import Source, decode_ouch, ip_checksum_ok, unwrap_soupbin
 from common import cosim_vectors as cv
 from common.exchange import Exchange
+from model.csr import addr
+from model.desc_gen import CTRL_BYTES, FIELDS, VERSION, Kind, decode
+from model.order import Source, decode_ouch, ip_checksum_ok, unwrap_soupbin
 
 COMMANDS = {"memory": 2, "csr_w": 2, "csr_r": 3, "poll": 3, "tx_ready": 1, "rx": (1, 2), "idle": 1, "snapshot": 0,
             "drain": 2, "expect_ring": None, "expect_tx": 1, "end": 0}  # fmt: skip

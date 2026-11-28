@@ -7,7 +7,6 @@ import random
 import cocotb
 import pytest
 from cocotb.triggers import Combine, FallingEdge, ReadOnly, RisingEdge
-
 from common.clocks import PROFILES, profile, start_clock
 from common.runner import run_cocotb
 from common.scoreboard import Scoreboard
@@ -45,7 +44,9 @@ async def reset(dut) -> None:
         await FallingEdge(clk)
         rst.value = 0
 
-    await Combine(cocotb.start_soon(release(dut.src_clk, dut.src_rst)), cocotb.start_soon(release(dut.dst_clk, dut.dst_rst)))
+    await Combine(
+        cocotb.start_soon(release(dut.src_clk, dut.src_rst)), cocotb.start_soon(release(dut.dst_clk, dut.dst_rst))
+    )
     for _ in range(STAGES + 2):
         await RisingEdge(dut.src_clk)
 
@@ -178,7 +179,9 @@ async def tc_data_stable_window(dut):
                 held = None
 
     w = cocotb.start_soon(watch())
-    await Combine(cocotb.start_soon(sender(dut, words, sb, p_valid=0.5)), cocotb.start_soon(receiver(dut, sb, len(words))))
+    await Combine(
+        cocotb.start_soon(sender(dut, words, sb, p_valid=0.5)), cocotb.start_soon(receiver(dut, sb, len(words)))
+    )
     w.cancel()
     assert violations == 0, f"data_q changed {violations}x while req_q was high"
 
@@ -230,7 +233,9 @@ async def tc_reset_mid_transfer(dut):
     for word, clean in rounds:
         if received[pos : pos + 1] == [word]:
             pos += 1  # the interrupted word made it through (at most once)
-        assert received[pos : pos + len(clean)] == clean, f"words after a reset: {received[pos : pos + 3]}, want {clean}"
+        assert received[pos : pos + len(clean)] == clean, (
+            f"words after a reset: {received[pos : pos + 3]}, want {clean}"
+        )
         pos += len(clean)
     assert pos == len(received), f"{len(received) - pos} unexpected word(s) after the last round"
 

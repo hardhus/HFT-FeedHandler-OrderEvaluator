@@ -27,7 +27,6 @@ from pathlib import Path
 import cocotb
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
 from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
-
 from common.axil import AxilDriver
 from common.clocks import start_clock
 from common.coverage import Coverage
@@ -208,8 +207,8 @@ class Csr:
         seen, want = self.ext_seen, self.model.ext_writes
         first = next((i for i, (x, y) in enumerate(zip(seen, want)) if x != y), min(len(seen), len(want)))
         assert seen == want, (
-            f"external register writes differ from the model's at {first}: {seen[first:first + 3]} vs "
-            f"{want[first:first + 3]} ({len(seen)} seen, {len(want)} expected)"
+            f"external register writes differ from the model's at {first}: {seen[first : first + 3]} vs "
+            f"{want[first : first + 3]} ({len(seen)} seen, {len(want)} expected)"
         )
         for r, f in self.fields():
             if f.storage and f.hw_read:
@@ -217,7 +216,9 @@ class Csr:
                 assert got == self.model.shadow(r.path, f.name), f"hwif_out {r.path}.{f.name} = {got:#x}"
         for key, want in self.pulses_want.items():
             rises, high, holds = self.pulse_rises[key], self.pulse_high[key], self.pulse_holds[key]
-            assert rises <= want <= high <= want + holds, f"{key}: {rises} rises, {high} high cycles, want {want}, {holds} holds"
+            assert rises <= want <= high <= want + holds, (
+                f"{key}: {rises} rises, {high} high cycles, want {want}, {holds} holds"
+            )
             assert holds or high == want, f"{key}: {high} high cycles, want {want}"
         await RisingEdge(self.dut.clk)
 

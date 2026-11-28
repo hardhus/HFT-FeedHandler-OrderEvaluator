@@ -8,11 +8,10 @@ import cocotb
 import pytest
 from cocotb.triggers import Combine, FallingEdge, ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
-from test_cdc_async_fifo import SYNC_STAGES, WIDTH, depth, jitter, reader, start, wait_not_busy
-
 from common.clocks import PROFILES, profile
 from common.runner import run_cocotb
 from common.scoreboard import Scoreboard
+from test_cdc_async_fifo import SYNC_STAGES, WIDTH, depth, jitter, reader, start, wait_not_busy
 
 RUNTIME_PARAMS = ("ratio",)
 
@@ -384,6 +383,12 @@ def test_cdc_async_fifo_commit(depth_log2, width, sync_stages, jitter, ratio):
         test_module="test_cdc_async_fifo_commit",
         parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "COMMIT": 1, "WR_COUNT": 0},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
-        extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
-                   "SYNC_STAGES": sync_stages, "WR_COUNT": 0},  # fmt: skip
+        extra_env={
+            "DEPTH_LOG2": depth_log2,
+            "JITTER": jitter,
+            "RATIO": ratio,
+            "WIDTH": width,
+            "SYNC_STAGES": sync_stages,
+            "WR_COUNT": 0,
+        },  # fmt: skip
     )

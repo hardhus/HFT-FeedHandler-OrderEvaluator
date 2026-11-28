@@ -12,7 +12,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from model.itch import (
     ALPHA,
     INT,
@@ -279,7 +278,10 @@ def test_header_rule():
         assert res == Result(ItchClass.UNKNOWN, Outcome.OUT), "locate 0: never filtered"
         assert (ev.locate, ev.tracking, ev.timestamp) == (0, 0, 0)
         d10 = msg_of("D")[:n]  # an Order Delete cut short: MALFORMED, no header
-        assert expect(d10, cfg, bm) == (Event(ItchClass.MALFORMED, 0x44, n, d10), Result(ItchClass.MALFORMED, Outcome.OUT))
+        assert expect(d10, cfg, bm) == (
+            Event(ItchClass.MALFORMED, 0x44, n, d10),
+            Result(ItchClass.MALFORMED, Outcome.OUT),
+        )
     unk = bytes([0x00]) + bytes.fromhex("abab 0102 030405060708")
     assert expect(unk, cfg, bm) == (None, Result(ItchClass.UNKNOWN, Outcome.FILTERED))
     ev, _ = expect(unk, ALL, bm)

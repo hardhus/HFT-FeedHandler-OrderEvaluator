@@ -29,27 +29,6 @@ import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
-from test_rx_csr import (
-    FEED_ON,
-    ITCH_LATENCY,
-    NET_FEED,
-    PKT_LATENCY,
-    SESSION,
-    CoreTaps,
-    RingHost,
-    System,
-    bit,
-    configure,
-    configure_feed,
-    feed_frame,
-    named,
-    order,
-    ring_system,
-    send_feed,
-    snapshot_checked,
-    start,
-)
-
 from common.clocks import PROFILES
 from common.csr_env import (
     COMMANDS,
@@ -75,6 +54,26 @@ from model.order import FRAME_LEN, OrderReq, Source, TxConfig, frame, ouch_of, t
 from model.ring import RingOrder, order_entry, stamp
 from model.risk import Reason
 from model.strategy import PriceMode, PriceOp, QtyMode, Rule, Strategy, make_order
+from test_rx_csr import (
+    FEED_ON,
+    ITCH_LATENCY,
+    NET_FEED,
+    PKT_LATENCY,
+    SESSION,
+    CoreTaps,
+    RingHost,
+    System,
+    bit,
+    configure,
+    configure_feed,
+    feed_frame,
+    named,
+    order,
+    ring_system,
+    send_feed,
+    snapshot_checked,
+    start,
+)
 
 RUNTIME_PARAMS = ("ratio", "group")
 STRAT_LATENCY = 2  # strategy_engine: packet event -> its first released order (module header)
@@ -321,7 +320,8 @@ def check_ring_orders(sysm: System, watch: OrderWatch, flagged: frozenset[int] =
     """The ring's order entries are event_packer's order inputs, in order, as the ring model encodes them. flagged:
     the order entries (k-th) that carry overflow_before."""
     assert len(sysm.ring_orders) == len(watch.entries), (
-        f"{len(sysm.ring_orders)} order entries read, event_packer took {len(watch.entries)}")
+        f"{len(sysm.ring_orders)} order entries read, event_packer took {len(watch.entries)}"
+    )
     for k, ((idx, entry), (_, o)) in enumerate(zip(sysm.ring_orders, watch.entries, strict=True)):
         want = stamp(order_entry(o, FLAG_OVERFLOW_BEFORE if k in flagged else 0), idx, sysm.ring_size_log2)
         assert entry == want, f"ring entry {idx} (order {k}): {decode(entry)}, model {decode(want)}"
@@ -350,19 +350,21 @@ async def tc_order_rule(dut):
     first = hw_order(0, BUY_ON_ADD, sysm)
     check_frames(watch, [(first, 1)])
     assert (v["RULE_FIRED_0"], v["ORDERS_SENT_HW"], v["RULE_ARMED"], v["BUDGET"]) == (1, 1, 0, 999)
-    (kind, o), = watch.entries
+    ((kind, o),) = watch.entries
     assert kind == Kind.ORDER_SENT and o.user_ref == 1
 
     # P10: the trigger packet's last beat -> forwarded packet event -> released order -> m_tx_* -> first TX beat.
     tlast = watch.udp_tlast[-1]
-    (fwd, status), = watch.fwd[-1:]
-    dut._log.info(f"hops: sof {watch.sof[-1]} rx tlast {watch.tlast[-1]} udp tlast {tlast} fwd {fwd} "
-                  f"released {watch.released} tx_valid {watch.tx_valid} first beat {watch.tx_first}")
+    ((fwd, status),) = watch.fwd[-1:]
+    dut._log.info(
+        f"hops: sof {watch.sof[-1]} rx tlast {watch.tlast[-1]} udp tlast {tlast} fwd {fwd} "
+        f"released {watch.released} tx_valid {watch.tx_valid} first beat {watch.tx_first}"
+    )
     assert fwd == tlast + PKT_LATENCY + ITCH_LATENCY - 1, (tlast, fwd)
-    (rel, released), = watch.released
+    ((rel, released),) = watch.released
     assert (released, rel) == (first, fwd + STRAT_LATENCY), (fwd, rel, released)
     assert watch.tx_valid == [rel + 1 + RISK_LATENCY], (rel, watch.tx_valid)
-    (beat_valid, beat_taken), = watch.tx_first
+    ((beat_valid, beat_taken),) = watch.tx_first
     assert beat_valid == watch.tx_valid[0] + 1, (watch.tx_valid, beat_valid)
     # eth_ip_udp_rx: payload tlast 1 cycle after the input tlast, 2 if the last input beat holds > 2 payload bytes.
     assert tlast - watch.tlast[-1] in (1, 2), (watch.tlast[-1], tlast)
@@ -419,7 +421,9 @@ async def tc_order_kill_cancels_the_queue(dut):
     v = await drain_checked(w, sysm, host, watch, 2)
     check_frames(watch, [(a, 1)])
     assert [(k, o.reason, o.req) for k, o in watch.entries] == [
-        (Kind.RISK_REJECT, Reason.KILL, b), (Kind.ORDER_SENT, Reason.NONE, a)]
+        (Kind.RISK_REJECT, Reason.KILL, b),
+        (Kind.ORDER_SENT, Reason.NONE, a),
+    ]
     assert (v["RULE_FIRED_0"], v["RULE_FIRED_1"], v["ORDERS_SENT_HW"], v["RISK_REJECT_KILL"]) == (1, 1, 1, 1)
     assert (v["BUDGET"], v["RULE_ARMED"]) == (998, 0), "no refund on a cancel (decision 21)"
 
@@ -451,7 +455,7 @@ async def tc_order_mailbox(dut):
     v = await drain_checked(w, sysm, host, watch, 1)
     first = host_req(MBOX, epoch)
     check_frames(watch, [(first, 1)])
-    (kind, o), = watch.entries
+    ((kind, o),) = watch.entries
     assert (kind, o.req, o.user_ref) == (Kind.ORDER_SENT, first, 1)
     assert (v["ORDERS_SENT_HOST"], v["ORDERS_SENT_HW"], v["BUDGET"]) == (1, 0, 999)
 
@@ -546,14 +550,16 @@ async def tc_order_ring_pressure(dut):
     got = {k: v[k] for k in ("RING_ORDER_QUEUED", "RING_DROP_ORDERS", "RISK_REJECT_KILL", "RING_DROP_PKTS",
                              "RING_COMMIT_ENTRIES")}  # fmt: skip
     assert (got["RING_ORDER_QUEUED"], got["RING_DROP_ORDERS"], got["RISK_REJECT_KILL"]) == (16, 4, 20), (
-        f"{got}, lost {watch.lost}, entries {len(watch.entries)}")
+        f"{got}, lost {watch.lost}, entries {len(watch.entries)}"
+    )
     assert [r for _, r in watch.lost] == [Reason.KILL] * 4
     host.hold = False
     await host.drain(orders=16)
     await send_feed(sysm, seq, [order(70, n, "MSFT")])  # its first entry carries the lost rejects' flag
     v = await drain_checked(w, sysm, host, watch, 16, flagged=frozenset({0}))
     assert [(k, o.reason, o.req) for k, o in watch.entries] == [
-        (Kind.RISK_REJECT, Reason.KILL, host_req(m, 1)) for m in mbox[:16]]
+        (Kind.RISK_REJECT, Reason.KILL, host_req(m, 1)) for m in mbox[:16]
+    ]
     assert (v["RING_ORDER_QUEUED"], v["RING_DROP_ORDERS"], v["RISK_REJECT_KILL"]) == (0, 4, 20)
     assert sysm.ring_flags[-1] == sysm.ring_read - 1 + 16, "the last packet's entry carries the flag"
     w.feed.check_done()
@@ -631,7 +637,8 @@ async def tc_order_kill_latency_under_burst(dut):
                   f"burst {results['burst']} (ps, hardware orders taken meanwhile); net period {net_ps} ps")  # fmt: skip
     assert max(overlap) > 0, "no hardware order reached risk_check while the fenced command waited"
     assert burst <= base + KILL_EXTRA_BOUND * net_ps, (
-        f"burst {burst} ps > slowest base {base} ps + {KILL_EXTRA_BOUND} net cycles")
+        f"burst {burst} ps > slowest base {base} ps + {KILL_EXTRA_BOUND} net cycles"
+    )
     w.feed.check_done()
 
 
@@ -723,7 +730,8 @@ def check_round(phase: Phase, budget: int, watch: OrderWatch, n_taken: int, n_en
             hit.add("sent_hw" if o.source == Source.RULE else "sent_host")
         else:
             assert got.reason == want or (want == Reason.NONE and got.reason in (Reason.TX_BUSY, Reason.RING_FULL)), (
-                f"{o} rejected {got.reason.name}, model {want.name}")
+                f"{o} rejected {got.reason.name}, model {want.name}"
+            )
             hit.add(f"reason_{got.reason.name}")
     assert not outcomes and not lost, f"outcomes without an order {outcomes}, lost {lost}"
     return budget
@@ -789,6 +797,7 @@ async def tc_order_random(dut):
         n_taken, n_entries, n_lost, n_rel, n_pkt = (len(watch.taken), len(watch.entries), len(watch.lost),
                                                     len(watch.released), len(sysm.mold_done))  # fmt: skip
         hosts: list[MboxOrder] = []
+
         def valid(k: int) -> MboxOrder:
             return random_host(rng, k, qty=100, side=ord("B"), clordid=f"R{k:013d}".encode())
 
@@ -974,6 +983,11 @@ def test_rx_order_real(name):
         filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_order",
         testcase="tc_real_order",
-        extra_env={"GROUP": "tc_real_order", "JITTER": 0, "RATIO": "net2host", "ITCH_REAL": path,
-                   "ITCH_REAL_WINDOWS": json.dumps(src.system)},  # fmt: skip
+        extra_env={
+            "GROUP": "tc_real_order",
+            "JITTER": 0,
+            "RATIO": "net2host",
+            "ITCH_REAL": path,
+            "ITCH_REAL_WINDOWS": json.dumps(src.system),
+        },  # fmt: skip
     )

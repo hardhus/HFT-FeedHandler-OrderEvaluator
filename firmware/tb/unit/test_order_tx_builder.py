@@ -18,7 +18,6 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.exchange import Exchange

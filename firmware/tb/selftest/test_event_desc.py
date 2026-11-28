@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 from desc_hand import HAND_EOS, HAND_GAP, HAND_ITCH, HAND_ORDER_SENT, HAND_RAW, HAND_RISK_REJECT
-
 from model import desc_gen
 from model.desc_gen import Kind
 

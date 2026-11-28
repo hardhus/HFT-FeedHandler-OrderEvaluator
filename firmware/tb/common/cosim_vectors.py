@@ -33,8 +33,6 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from common.csr_env import COMMANDS, LOCATE_ALLOW, MBOX_SEND, RISK_CTRL, SYMBOL, TX_CTRL, FeedCfg, LimCfg, MboxOrder
-from common.csr_env import NetCfg, RuleCfg, TxCfg
 from model import mold, net
 from model.csr import addr
 from model.desc_gen import FIELDS, Kind
@@ -44,6 +42,21 @@ from model.net import RxConfig, RxReason, ip_int, pad_to, udp_frame
 from model.order import OrderReq, Source, TxConfig, frame, ouch_of, template
 from model.ring import RingOrder, RingPacket, expect_entries, stamp
 from model.strategy import PriceMode, PriceOp, QtyMode, Rule, make_order
+
+from common.csr_env import (
+    COMMANDS,
+    LOCATE_ALLOW,
+    MBOX_SEND,
+    RISK_CTRL,
+    SYMBOL,
+    TX_CTRL,
+    FeedCfg,
+    LimCfg,
+    MboxOrder,
+    NetCfg,
+    RuleCfg,
+    TxCfg,
+)
 
 LOCAL_MAC = "02:00:00:00:00:01"
 FEED_IP, FEED_PORT = "10.0.0.2", 5000

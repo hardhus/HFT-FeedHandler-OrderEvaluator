@@ -13,7 +13,6 @@ import random
 import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.runner import run_cocotb
 from model.mold import ACCEPTED, MoldStatus
@@ -239,7 +238,9 @@ def directed_tests(width: int) -> list[str]:
 
 
 # CNT_W: 64 (the product value) and 8 (every counter reaches its limit in a short test).
-@pytest.mark.parametrize("group, cnt_w", [("directed", 64), ("directed", 8), *((n, WIDTH_TESTS[n]) for n in LONG_TESTS)])
+@pytest.mark.parametrize(
+    "group, cnt_w", [("directed", 64), ("directed", 8), *((n, WIDTH_TESTS[n]) for n in LONG_TESTS)]
+)
 def test_mold_stats(group, cnt_w):
     run_cocotb(
         toplevel="mold_stats",

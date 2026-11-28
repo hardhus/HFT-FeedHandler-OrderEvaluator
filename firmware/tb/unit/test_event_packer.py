@@ -23,7 +23,6 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.runner import run_cocotb
@@ -1051,6 +1050,7 @@ async def tc_random_golden(dut):
     p.on_end = on_end
     sent = next_log = 0
     bag: list = []
+
     def packet_bins_empty() -> list[str]:
         return [b for b in cov.empty() if b not in ORDER_BINS]
 

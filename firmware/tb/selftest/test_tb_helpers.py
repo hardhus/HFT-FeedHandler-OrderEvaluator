@@ -7,7 +7,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from common.clocks import PROFILES, profile
 from common.coverage import REPORT, Coverage
 from common.filelist import read_filelist
@@ -141,7 +140,11 @@ def test_failure_lines_lists_every_failed_test(tmp_path, monkeypatch):
     log = tmp_path / "sim.log"
     body = []
     for i in range(20):
-        body += [f"{i}.00ns WARNING  cocotb.regression  test_m.tc_{i} failed", "Traceback:", f"AssertionError: detail {i}"]
+        body += [
+            f"{i}.00ns WARNING  cocotb.regression  test_m.tc_{i} failed",
+            "Traceback:",
+            f"AssertionError: detail {i}",
+        ]
     log.write_text("\n".join(body) + "\n")
     out = failure_lines(log, limit=3).splitlines()
     assert [line for line in out if "cocotb.regression" in line] == [line for line in body if "regression" in line]

@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-
 from common.itch_real import Retired, Source, fetch, load, messages, path_of
 
 GOOD_SHA = "0" * 64

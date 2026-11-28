@@ -6,7 +6,6 @@ field by field here.
 """
 
 import pytest
-
 from model.itch import Bitmap, ItchClass, ItchConfig, encode, expect
 from model.order import PRICE_LIMIT_MAX, Source
 from model.strategy import (
@@ -75,14 +74,23 @@ STATIC = [
     ("qty_1000000_fixed", {"qty": 1_000_000}, True),
     ("qty_999999_fixed", {"qty": 999_999}, False),
     ("qty_1000000_min", {"qty": 1_000_000, "qty_mode": QtyMode.MIN}, False),
-    ("threshold_offset_max", {"price_mode": PriceMode.THRESHOLD, "price_threshold": PRICE_LIMIT_MAX - 5,
-                              "price_offset": 5}, False),  # fmt: skip
-    ("threshold_offset_over", {"price_mode": PriceMode.THRESHOLD, "price_threshold": PRICE_LIMIT_MAX - 5,
-                               "price_offset": 6}, True),  # fmt: skip
+    (
+        "threshold_offset_max",
+        {"price_mode": PriceMode.THRESHOLD, "price_threshold": PRICE_LIMIT_MAX - 5, "price_offset": 5},
+        False,
+    ),  # fmt: skip
+    (
+        "threshold_offset_over",
+        {"price_mode": PriceMode.THRESHOLD, "price_threshold": PRICE_LIMIT_MAX - 5, "price_offset": 6},
+        True,
+    ),  # fmt: skip
     ("threshold_offset_1", {"price_mode": PriceMode.THRESHOLD, "price_threshold": 10, "price_offset": -9}, False),
     ("threshold_offset_0", {"price_mode": PriceMode.THRESHOLD, "price_threshold": 10, "price_offset": -10}, True),
-    ("threshold_offset_wraps", {"price_mode": PriceMode.THRESHOLD, "price_threshold": 0xFFFFFFFF,
-                                "price_offset": 0x7FFFFFFF}, True),  # fmt: skip
+    (
+        "threshold_offset_wraps",
+        {"price_mode": PriceMode.THRESHOLD, "price_threshold": 0xFFFFFFFF, "price_offset": 0x7FFFFFFF},
+        True,
+    ),  # fmt: skip
     ("event_price_ignores_offset", {"price_threshold": 10, "price_offset": -10}, False),
 ]
 

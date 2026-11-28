@@ -10,7 +10,6 @@ import random
 import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, Timer
-
 from common.clocks import start_clock
 from common.runner import run_cocotb
 

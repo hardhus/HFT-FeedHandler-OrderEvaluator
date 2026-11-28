@@ -3,7 +3,6 @@
 """
 
 import pytest
-
 from model.order import USER_REF_MAX, OrderReq, Source, TxConfig, TxPort, template
 from model.risk import BUDGET_MAX, Limits, Reason, Risk
 
@@ -252,7 +251,10 @@ def test_kill_fall_cancels_nothing():
 
 
 def test_ring_full_is_the_last_reason_and_a_dropped_reject_is_counted():
-    r, tx = open_risk(budget=100, limits=Limits(max_qty=1000, max_notional=1 << 63, rate_period=0, rate_burst=100)), TxPort(CFG)
+    r, tx = (
+        open_risk(budget=100, limits=Limits(max_qty=1000, max_notional=1 << 63, rate_period=0, rate_burst=100)),
+        TxPort(CFG),
+    )
     for _ in range(16):
         assert r.decide(req(), 0, tx) == Reason.NONE
         tx.queue.clear()

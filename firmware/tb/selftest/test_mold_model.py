@@ -13,7 +13,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-
 from model.mold import (
     ACCEPTED,
     ITCH50_LEN,
@@ -250,7 +249,9 @@ def test_random_feed_covers_categories(seed):
     statuses, gaps, lanes, lengths, oversize, partial, synced_now = set(), set(), set(), set(), 0, 0, 0
     for p in feed:
         result, state = expect(p.payload, p.abort, p.filter_idx, replace(cfg, enable=p.enable), state)
-        assert result.status == p.intent, f"{p.category}: generator meant {p.intent.name}, model says {result.status.name}"
+        assert result.status == p.intent, (
+            f"{p.category}: generator meant {p.intent.name}, model says {result.status.name}"
+        )
         statuses.add(result.status)
         gaps.add(result.gap)
         advanced += (len(result.msgs) if result.status in ACCEPTED else 0) + result.oversize + result.gap

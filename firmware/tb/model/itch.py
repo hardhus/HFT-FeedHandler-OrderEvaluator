@@ -408,12 +408,16 @@ class _ItchGen:
         cats += [("unknown_short", lambda: self.unknown(None, self.rng.randint(MIN_LEN, HDR_LEN - 1)))]
         cats += [("unknown_header", lambda: self.unknown(None, HDR_LEN))]
         stocks = [t for t in SPEC if t not in LOCATE_ZERO]
-        cats += [(f"locate_{loc}", lambda loc=loc: self.well_formed(self.rng.choice(stocks), loc)) for loc in EDGE_LOCATES]
+        cats += [
+            (f"locate_{loc}", lambda loc=loc: self.well_formed(self.rng.choice(stocks), loc)) for loc in EDGE_LOCATES
+        ]
         cats += [
             ("locate_subscribed", lambda: self.well_formed(self.rng.choice(stocks), self.rng.choice(self.subs))),
             ("locate_unsubscribed", lambda: self.well_formed(self.rng.choice(stocks), self.rng.choice(self.unsubs))),
         ]  # fmt: skip
-        cats += [(f"extreme_{k}", lambda k=k: self.extreme(k)) for k in ("zeros", "ones", "price_max", "ts_max", "ref_max")]
+        cats += [
+            (f"extreme_{k}", lambda k=k: self.extreme(k)) for k in ("zeros", "ones", "price_max", "ts_max", "ref_max")
+        ]
         return cats
 
 

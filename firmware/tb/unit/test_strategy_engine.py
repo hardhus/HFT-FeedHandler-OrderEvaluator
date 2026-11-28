@@ -15,7 +15,6 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.runner import run_cocotb
@@ -210,8 +209,13 @@ class Engine:
             if arm & s.disarm_on_accept and not accepted:
                 self.hit("cmd_after_fire_arm")
         released, fired = s.tick(
-            accepted, (msg.ev, msg.seq, msg.sof_ts, msg.epoch) if msg else None, commit, disarm or 0, arm or 0,
-            self.kill, self.tx_en,
+            accepted,
+            (msg.ev, msg.seq, msg.sof_ts, msg.epoch) if msg else None,
+            commit,
+            disarm or 0,
+            arm or 0,
+            self.kill,
+            self.tx_en,
         )
         for o in released:
             self.out.append((self.d + 2, o))
@@ -386,8 +390,13 @@ async def tc_order_modes(dut):
         rule(action_side=ActionSide.BUY, qty=7),
         rule(action_side=ActionSide.SELL, qty_mode=QtyMode.MIN, qty=400),
         rule(action_side=ActionSide.OPPOSITE, price_mode=PriceMode.THRESHOLD, price_offset=-2500),
-        rule(action_side=ActionSide.OPPOSITE, price_mode=PriceMode.THRESHOLD, price_threshold=PRICE_LIMIT_MAX - 7,
-             price_offset=7, price_op=PriceOp.GE),  # fmt: skip
+        rule(
+            action_side=ActionSide.OPPOSITE,
+            price_mode=PriceMode.THRESHOLD,
+            price_threshold=PRICE_LIMIT_MAX - 7,
+            price_offset=7,
+            price_op=PriceOp.GE,
+        ),  # fmt: skip
     ]
     await program(e, *rules)
     await e.step(Msg(ev(side="S", shares=500, price=900_000)))  # rule 0

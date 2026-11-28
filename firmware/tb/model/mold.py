@@ -348,9 +348,7 @@ class _FeedGen:
         cats += [(f"gap_{g}", 1, S.OK, f(lambda g=g: self.gap(g))) for g in GAPS]
         cats += [(f"oversize_{n}", 1, S.OK, f(lambda n=n: self.oversize(n))) for n in OVERSIZE]
         cats += [(f"unsupported_{n}", 1, S.UNSUPPORTED, f(lambda n=n: self.unsupported(n))) for n in range(MIN_LEN)]
-        cats += [
-            (f"align_{s}_{e}", 1, S.OK, f(lambda s=s, e=e: self.align(s, e))) for s in range(8) for e in range(8)
-        ]
+        cats += [(f"align_{s}_{e}", 1, S.OK, f(lambda s=s, e=e: self.align(s, e))) for s in range(8) for e in range(8)]
         if self.cfg.session_check:
             bad = lambda: pack(self.other_session(), self.E, self.itch_msgs())  # noqa: E731
             cats.append(("session", 1, S.SESSION, f(bad)))
@@ -387,4 +385,3 @@ def random_feed(
             payload, abort, idx, enable = make()
             out.append(FeedPacket(payload, abort, idx, enable, name, intent))
     return out[:n]
-

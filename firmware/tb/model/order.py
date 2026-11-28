@@ -191,9 +191,7 @@ def valid_order(req: OrderReq) -> bool:
     clordid_ok = req.source == Source.RULE or (
         req.clordid is not None and len(req.clordid) == CLORDID_LEN and set(req.clordid) <= CLORDID_CHARS
     )
-    return (
-        valid_price(req.price) and 0 < req.qty < QTY_LIMIT and req.side in SIDES and req.tif in TIFS and clordid_ok
-    )
+    return valid_price(req.price) and 0 < req.qty < QTY_LIMIT and req.side in SIDES and req.tif in TIFS and clordid_ok
 
 
 @dataclass

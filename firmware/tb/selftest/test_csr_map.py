@@ -13,7 +13,6 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-
 from model.csr import OKAY, SLVERR, CsrModel, csr_map, csr_mems, k5_violations, load_map, mem, regs_by_path
 
 FW = Path(__file__).resolve().parents[2]
@@ -267,7 +266,9 @@ def test_constants():
     assert regs["GLOBAL.ID"].fields[0].reset == 0x48465431  # "HFT1"
     assert regs["GLOBAL.VERSION"].fields[0].reset == 0x0005_0005  # + F3 FEED, F4 ITCH, SYMBOL, F6 RING, F7, F8 (minor)
     seen = regs["GLOBAL.RESET_SEEN"].fields[0]
-    assert (seen.reset, seen.sw_read, seen.sw_write, seen.hw_write) == (1, True, True, False), "1 after reset, only sw writes"
+    assert (seen.reset, seen.sw_read, seen.sw_write, seen.hw_write) == (1, True, True, False), (
+        "1 after reset, only sw writes"
+    )
 
 
 def test_drop_counters_follow_reason_codes():
@@ -400,10 +401,9 @@ def test_router_windows_hold_exactly_the_order_blocks():
     """Decision 41: the router sends an access to hft_order_csr when its address is in a window. Every RISK,
     STRATEGY and TX register is in one, and no other register or memory word is (a block placed there later
     would answer SLVERR from hft_order_csr). hft_order_csr has exactly those registers at the same addresses."""
+    from model.csr import RDL
     from systemrdl import RDLCompiler
     from systemrdl.node import RegNode
-
-    from model.csr import RDL
 
     wins = _router_windows()
     assert wins == [(0x0A00, 0xFE00), (0x1000, 0xF000), (0x2000, 0xF000)], "hand-written: RISK, STRATEGY, TX"

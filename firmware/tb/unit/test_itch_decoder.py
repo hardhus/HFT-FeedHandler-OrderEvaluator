@@ -25,7 +25,6 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.itch_real import Retired, fetch, load, packets, tally_text
@@ -631,7 +630,10 @@ def each_class_at(locate: int) -> list[Msg]:
             ((C.ORDER, "A"), (C.TRADE, "P"), (C.ADMIN, "R"), (C.AUCTION, "I"))]  # fmt: skip
     unknown = bytearray(bytes([0x00]) + random.randbytes(20))
     unknown[1:3] = locate.to_bytes(2, "big")
-    msgs += [Msg(bytes(unknown), name=f"UNKNOWN@{locate}"), Msg(with_locate("A", locate, 35), name=f"MALFORMED@{locate}")]
+    msgs += [
+        Msg(bytes(unknown), name=f"UNKNOWN@{locate}"),
+        Msg(with_locate("A", locate, 35), name=f"MALFORMED@{locate}"),
+    ]
     return msgs
 
 

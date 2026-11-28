@@ -46,31 +46,30 @@ import cocotb
 import pytest
 from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge, gather
 from cocotb.utils import get_sim_time
-
 from common.clocks import PROFILES, profile, start_clock
 from common.coverage import Coverage
 from common.csr_env import (
     COMMANDS,
-    LOCATE_ALLOW,
-    MBOX_SEND,
-    MBOX_SPACE,
-    MBOX_STATUS,
-    ORD_NAMES,
-    RISK_CTRL,
-    RULE_STATUS,
-    TX_CTRL,
-    TX_STATUS,
-    TX_USERREF,
     FEED_COMMIT,
     FEED_DELAY,
     ITCH_CTRL,
+    LOCATE_ALLOW,
     MASK64,
+    MBOX_SEND,
+    MBOX_SPACE,
+    MBOX_STATUS,
     N_CNT,
-    SNAP_NAMES,
+    ORD_NAMES,
+    RISK_CTRL,
+    RULE_STATUS,
     SCRATCH,
+    SNAP_NAMES,
     STATS_CTRL,
-    SYMBOL,
     STATS_DELAY,
+    SYMBOL,
+    TX_CTRL,
+    TX_STATUS,
+    TX_USERREF,
     FeedCfg,
     LimCfg,
     MboxOrder,
@@ -462,7 +461,8 @@ async def tc_snapshot_feed_aligned(dut):
         e = got[idx["FEED.EXPECTED_SEQ"]]
         moved = sum(got[idx[f"FEED.MOLD_{n}"]] for n in ("MSGS", "OVERSIZE_MSGS", "GAP_MSGS"))
         assert (e - e0) & MASK64 == moved & MASK64, (
-            f"snapshot {seq}: EXPECTED_SEQ - E0 = {(e - e0) & MASK64}, counters account for {moved & MASK64}")
+            f"snapshot {seq}: EXPECTED_SEQ - E0 = {(e - e0) & MASK64}, counters account for {moved & MASK64}"
+        )
         assert got[idx["FEED.FEED_STATE"]] == 1, "synced"
         if phases == set(range(-1, FEED_DELAY + 1)):
             break
@@ -495,7 +495,9 @@ async def tc_snapshot_ring_aligned(dut):
                 dut.mres_outcome.value = int(Outcome.OUT)
                 await RisingEdge(dut.net_clk)
             dut.mres_valid.value = 0
-            status, gap = w.rng.choice([(MoldStatus.OK, 0), (MoldStatus.OK, 7), (MoldStatus.EOS, 0), (MoldStatus.EOS, 7)])
+            status, gap = w.rng.choice(
+                [(MoldStatus.OK, 0), (MoldStatus.OK, 7), (MoldStatus.EOS, 0), (MoldStatus.EOS, 7)]
+            )
             dut.mpkt_valid.value = 1
             dut.mpkt_status.value = int(status)
             dut.mpkt_gap.value = gap
@@ -814,7 +816,11 @@ async def tc_feed_resync(dut):
         before, transfers, seen = w.feed.resyncs, len(w.feed.expected), watch.resync_requests
         w.feed.committed += [cfg, cfg, cfg]
         w.feed.resync_requests += 1
-        pend = [w.drv.write_nowait(FEED_COMMIT, 1), w.drv.write_nowait(FEED_COMMIT, 1), w.drv.write_nowait(FEED_COMMIT, 2)]
+        pend = [
+            w.drv.write_nowait(FEED_COMMIT, 1),
+            w.drv.write_nowait(FEED_COMMIT, 1),
+            w.drv.write_nowait(FEED_COMMIT, 2),
+        ]
         for q in pend:
             assert (await q.wait())[1] == OKAY
         await w.feed.wait_idle()
@@ -1013,7 +1019,11 @@ async def tc_sym_bresp_after_effect(dut):
     sym.p_ready = 0.3
     want: dict[int, int] = {}
     for _ in range(60):
-        word, data, strb = w.rng.randrange(SYMBOL.entries), w.rng.getrandbits(32), w.rng.choice([0xF, w.rng.getrandbits(4)])
+        word, data, strb = (
+            w.rng.randrange(SYMBOL.entries),
+            w.rng.getrandbits(32),
+            w.rng.choice([0xF, w.rng.getrandbits(4)]),
+        )
         bits = wstrb_mask(strb)
         want[word] = (want.get(word, 0) & ~bits) | (data & bits)
         n = len(sym.cmds)
@@ -1073,8 +1083,8 @@ async def sym_reset_and_recover(w: Wrap, dut) -> None:
     assert await w.drv.write(sym_addr(word), data) == OKAY
     assert await w.drv.read(sym_addr(word)) == (data, OKAY)
     await sweep_free(w)
-    reqs = [c for _, c in sym.host_reqs[n[0]:]]
-    assert [c for _, c in sym.cmds[n[1]:]] == reqs and len(reqs) == 2, "after the reset: two accesses, two commands"
+    reqs = [c for _, c in sym.host_reqs[n[0] :]]
+    assert [c for _, c in sym.cmds[n[1] :]] == reqs and len(reqs) == 2, "after the reset: two accesses, two commands"
     assert len(sym.rsps) - n[2] == 2 and len(sym.acks) - n[3] == 2
 
 
@@ -1352,8 +1362,15 @@ async def tc_irq_random(dut):
             if prev is not None:
                 was_en, was_pend, was_running, was_idx = prev[1:]
                 if irq == 0 and int(en and pend) == 1:
-                    cov.hit("rise_done" if was_en and was_running and was_idx == idx else
-                            "rise_en" if not was_en else "rise_start" if not was_running else "rise_done")
+                    cov.hit(
+                        "rise_done"
+                        if was_en and was_running and was_idx == idx
+                        else "rise_en"
+                        if not was_en
+                        else "rise_start"
+                        if not was_running
+                        else "rise_done"
+                    )
                 if irq == 1 and not (en and pend):
                     cov.hit("fall_idx" if running and en else "fall_en" if not en else "fall_stop")
             if pend and not en:
@@ -1596,8 +1613,13 @@ async def tc_cmd_latency(dut):
                 cmd_acc.append(edge)
             await ReadOnly()
             fifo = r.u_mbox_fifo.g_portable
-            trace[edge] = (int(r.h_state_q.value), int(r.mbox_count.value), int(r.mbox_wr_busy.value),
-                           int(fifo.g_count.count_q.value), int(r.u_cmd_cdc.src_ready.value))
+            trace[edge] = (
+                int(r.h_state_q.value),
+                int(r.mbox_count.value),
+                int(r.mbox_wr_busy.value),
+                int(fifo.g_count.count_q.value),
+                int(r.u_cmd_cdc.src_ready.value),
+            )
             if any(h.req.value for h in reqs):
                 req_edges.append(edge)
             accept = bool(r.u_cmd_cdc.src_valid.value and r.u_cmd_cdc.src_ready.value)
@@ -1626,7 +1648,8 @@ async def tc_cmd_latency(dut):
         p, ack, req, acc, racc = o.pulses[n], o.acks[-1][0], req_edges[-1], cmd_acc[-1], rsp_acc[-1]
         steps = sum(req < e <= acc for e in w.host_edges)
         assert steps == 3, f"{name}: host edges request -> acceptance {steps}: " + str(
-            [(e, trace.get(e)) for e in w.host_edges if req <= e <= acc])
+            [(e, trace.get(e)) for e in w.host_edges if req <= e <= acc]
+        )
         host.add(steps)
         to_net.add(sum(acc < e <= p.edge for e in w.net_edges))
         settle.add(sum(p.edge < e <= racc for e in w.net_edges))
@@ -1779,7 +1802,11 @@ async def tc_mailbox(dut):
     assert await rd(w, MBOX_SPACE) == 16
     await send(w, extra)
     assert await rd(w, MBOX_STATUS) == 0, "a send that fits did not clear dropped"
-    pend = [w.drv.write_nowait(MBOX_SEND, 1), w.drv.write_nowait(MBOX_SEND, 1), w.drv.write_nowait(MBOX_SEND, 0, 0b1110)]
+    pend = [
+        w.drv.write_nowait(MBOX_SEND, 1),
+        w.drv.write_nowait(MBOX_SEND, 1),
+        w.drv.write_nowait(MBOX_SEND, 0, 0b1110),
+    ]
     for q in pend:
         assert (await q.wait())[1] == OKAY
     for _ in range(60):
@@ -1885,7 +1912,9 @@ async def tc_fence_controls(dut):
         q1 = w.drv.write_nowait(COMMANDS[name], w.rng.getrandbits(32))
         assert (await q0.wait())[1] == OKAY and (await q1.wait())[1] == OKAY
         p = o.pulses[n]
-        assert (p.kill, p.tx_en) == (kill, tx_en), f"command {k} at net before the control write (kill {kill}, tx_en {tx_en})"
+        assert (p.kill, p.tx_en) == (kill, tx_en), (
+            f"command {k} at net before the control write (kill {kill}, tx_en {tx_en})"
+        )
 
 
 @cocotb.test(timeout_time=30, timeout_unit="ms")  # a broken DUT must fail, not hang
@@ -1951,7 +1980,9 @@ async def tc_kill_latency(dut):
     for case, ts in results.items():
         dut._log.info(f"kill write (W handshake) -> ctl_kill, {case}: {min(ts)}..{max(ts)} ps")
     j = {0, 1} if jitter() else {0}
-    assert sync <= {STAGES - 1 + d for d in j} | {STAGES + d for d in j}, f"register -> ctl_kill net edges {sorted(sync)}"
+    assert sync <= {STAGES - 1 + d for d in j} | {STAGES + d for d in j}, (
+        f"register -> ctl_kill net edges {sorted(sync)}"
+    )
     assert max(results["idle"]) < min(results["behind a full mailbox"])
 
 
@@ -2030,7 +2061,8 @@ async def tc_locate_allow(dut):
             await wr(w, LOCATE_ALLOW.addr + 4 * word, data, strb)
             c = o.loc_cmds[-1]
             assert (c[1].wr, c[1].addr, c[1].wstrb) == (1, word, strb) and c[0] < o.acks[-1][0], (
-                "not this write at the port, or answered before the port took it")
+                "not this write at the port, or answered before the port took it"
+            )
             bits = wstrb_mask(strb)
             want[word] = (want.get(word, 0) & ~bits) | (data & bits)
         for word in words:

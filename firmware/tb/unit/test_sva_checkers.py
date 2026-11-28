@@ -1,7 +1,6 @@
 """Tests of the SVA checkers themselves (they must fire on violations and stay quiet otherwise)."""
 
 import pytest
-
 from common.svtb import run_svtb
 
 TB = ["firmware/tb/sva/fifo_props.sv", "firmware/tb/sv/tb_fifo_props_arming.sv"]
@@ -124,7 +123,11 @@ def test_itch_props_fires(prop, capsys):
     assert fired == [prop], f"HFT_VIOLATE={k}: fired {fired}"
 
 
-ITCH_STATS_TB = ["firmware/rtl/core/hft_pkg.sv", "firmware/tb/sva/itch_stats_props.sv", "firmware/tb/sv/tb_itch_stats_props.sv"]
+ITCH_STATS_TB = [
+    "firmware/rtl/core/hft_pkg.sv",
+    "firmware/tb/sva/itch_stats_props.sv",
+    "firmware/tb/sv/tb_itch_stats_props.sv",
+]
 ITCH_STATS_VIOLATIONS = {
     "a_pend_limit": (1, "pending count past 16 bits (a packet of more than 65535 results)"),
 }

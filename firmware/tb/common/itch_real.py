@@ -181,5 +181,5 @@ if __name__ == "__main__":
     src = Source("pin", url, 0, last, "0" * 64, "active")
     tmp = path_of(src).with_suffix(".pin")
     download(src, tmp)
-    print(f"range = [0, {last}]\nsha256 = \"{sha256_of(tmp)}\"")
+    print(f'range = [0, {last}]\nsha256 = "{sha256_of(tmp)}"')
     tmp.unlink()

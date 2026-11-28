@@ -22,8 +22,8 @@ import random
 import sys
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator
-from importlib.metadata import version
 from contextlib import contextmanager
+from importlib.metadata import version
 from pathlib import Path
 
 import cocotb_tools.runner as cocotb_runner

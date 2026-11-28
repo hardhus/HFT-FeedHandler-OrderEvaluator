@@ -30,7 +30,6 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import ReadOnly, RisingEdge
-
 from common.clocks import start_clock
 from common.coverage import Coverage
 from common.runner import run_cocotb
@@ -206,7 +205,9 @@ class Mold:
         for _, learn, seq in (r for r in resyncs if r[0] == 0):  # first beat: before the packet
             before = model_resync(before, learn, seq)
         want, after = expect(payload, abort, fidx, self.cfg, before)
-        assert intent is None or want.status == intent, f"{name}: test packet gives {want.status.name}, meant {intent.name}"
+        assert intent is None or want.status == intent, (
+            f"{name}: test packet gives {want.status.name}, meant {intent.name}"
+        )
         waiting = [r for r in resyncs if 0 < r[0] < nbeats]
         for _, learn, seq in waiting[-1:] + [r for r in resyncs if r[0] == nbeats]:  # the last waiting one wins
             after = model_resync(after, learn, seq)
@@ -353,7 +354,9 @@ class Mold:
         assert n == len(data), f"{p.name}: seq {seq} length {n}, model {len(data)}"
         if vec[:n] != data:
             bad = next(i for i in range(n) if vec[i] != data[i])
-            raise AssertionError(f"{p.name}: seq {seq} ({n} B) differs from byte {bad}: {vec[:n].hex()} vs {data.hex()}")
+            raise AssertionError(
+                f"{p.name}: seq {seq} ({n} B) differs from byte {bad}: {vec[:n].hex()} vs {data.hex()}"
+            )
         assert not any(vec[n:]), f"{p.name}: seq {seq}: bytes after the length are not 0: {vec[n:].hex()}"
         assert int(self.m_ts.value) == p.ts, f"{p.name}: seq {seq} m_msg_sof_ts is not its packet's"
         ctx = int(self.dut.m_msg_ctx.value)
@@ -475,14 +478,18 @@ async def tc_alignment_matrix(dut):
         for e in range(8):
             msgs = msgs_of(fill_to_lane(s), len_to_lane(s, e)) + itch(random.randint(0, 2))
             gaps = {random.randint(1, 3): random.randint(1, 2)} if (s + e) % 3 == 0 else {}
-            await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, gaps=gaps, name=f"start lane {s}, end lane {e}")
+            await m.send(
+                pack(SESSION, m.next_seq(), msgs), intent=S.OK, gaps=gaps, name=f"start lane {s}, end lane {e}"
+            )
             await m.idle((s * 8 + e) % 3)
     for n in range(MIN_LEN, MAX_MSG + 1):
         await m.send(pack(SESSION, m.next_seq(), msgs_of(*[n] * 9)), intent=S.OK, name=f"9 x {n} B")
     for i in range(4):
         types = list(ITCH50_LEN)
         random.shuffle(types)
-        await m.send(pack(SESSION, m.next_seq(), [itch_like(random, t) for t in types]), intent=S.OK, name=f"all ITCH types {i}")
+        await m.send(
+            pack(SESSION, m.next_seq(), [itch_like(random, t) for t in types]), intent=S.OK, name=f"all ITCH types {i}"
+        )
     await m.finish()
     assert m.lanes >= {(s, e) for s in range(8) for e in range(8)}, "a (start lane, end lane) pair was not exercised"
 
@@ -576,11 +583,17 @@ async def tc_malformed(dut):
     await m.send(pack(SESSION, m.next_seq(), itch(1))[:HDR_LEN], intent=S.MALFORMED, name="count 1, header only")
     for build in (heartbeat, eos):
         for extra in (1, 3, 4, 5, 8, 12, 30):
-            await m.send(build(SESSION, m.next_seq()) + random.randbytes(extra), intent=S.MALFORMED, name=f"{build.__name__} + {extra} B")
+            await m.send(
+                build(SESSION, m.next_seq()) + random.randbytes(extra),
+                intent=S.MALFORMED,
+                name=f"{build.__name__} + {extra} B",
+            )
         # what follows looks like a block (a short length or a whole 6-B block): still no block to decode
         for n in (1, MIN_LEN):
             tail = n.to_bytes(2, "big") + random.randbytes(n)
-            await m.send(build(SESSION, m.next_seq()) + tail, intent=S.MALFORMED, name=f"{build.__name__} + {n} B block")
+            await m.send(
+                build(SESSION, m.next_seq()) + tail, intent=S.MALFORMED, name=f"{build.__name__} + {n} B block"
+            )
     await m.finish()
 
 
@@ -722,7 +735,9 @@ async def tc_dup_full(dut):
     for c in (1, 3):
         await m.send(pack(SESSION, m.next_seq() - c, itch(c)), intent=S.DUP, name=f"S + C = E, C = {c}")
         await m.send(pack(SESSION, m.next_seq() - c, itch(c + 1)), intent=S.OK, name=f"S + C = E + 1, C = {c + 1}")
-    await m.send(pack(SESSION, m.next_seq() - 4, itch(1) + msgs_of(65, 300) + itch(1)), intent=S.DUP, name="with oversize")
+    await m.send(
+        pack(SESSION, m.next_seq() - 4, itch(1) + msgs_of(65, 300) + itch(1)), intent=S.DUP, name="with oversize"
+    )
     for back in (0xFFFF, 0x10000, 0x10001, 1 << 40, 1 << 63):
         await m.send(pack(SESSION, m.next_seq() - back, itch(3)), intent=S.DUP, name=f"{back} behind")
     await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.OK, name="in order after them")
@@ -765,7 +780,9 @@ async def tc_abort_no_seq_update(dut):
         await m.send(p, intent=S.ABORT, abort=True, name="copy")
         await m.send(pack(SESSION, m.next_seq() + 7, itch(2)), intent=S.ABORT, abort=True, name="gap")
         await m.send(pack(SESSION, m.next_seq() - 2, itch(4)), intent=S.ABORT, abort=True, name="partial overlap")
-        await m.send(pack(SESSION, m.next_seq(), itch(1) + msgs_of(100) + itch(1)), intent=S.ABORT, abort=True, name="oversize")
+        await m.send(
+            pack(SESSION, m.next_seq(), itch(1) + msgs_of(100) + itch(1)), intent=S.ABORT, abort=True, name="oversize"
+        )
         await m.send(heartbeat(SESSION, m.next_seq() + 3), intent=S.ABORT, abort=True, name="heartbeat")
         await m.send(eos(SESSION, m.next_seq()), intent=S.ABORT, abort=True, name="end of session")
         await m.idle(ipg)
@@ -800,9 +817,24 @@ async def tc_session(dut):
     await m.send(pack(b"XESSION001", m.next_seq(), itch(1))[:19], intent=S.RUNT, name="19 B, wrong session")
     await m.send(heartbeat(b"SESSION00X", m.next_seq()), intent=S.SESSION, name="heartbeat, wrong session")
     other = b"SESSION002"
-    await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.OK, cfg_mid=replace(m.cfg, session=other), name="cfg_session changes in beat 1")
-    await m.send(pack(other, m.next_seq(), itch(2)), intent=S.SESSION, cfg_mid=replace(m.cfg, session=other), name="the change is not taken")
-    await m.send(pack(other, m.next_seq(), itch(2)), intent=S.SESSION, cfg_mid=replace(m.cfg, session_check=False), name="check off from beat 1")
+    await m.send(
+        pack(SESSION, m.next_seq(), itch(2)),
+        intent=S.OK,
+        cfg_mid=replace(m.cfg, session=other),
+        name="cfg_session changes in beat 1",
+    )
+    await m.send(
+        pack(other, m.next_seq(), itch(2)),
+        intent=S.SESSION,
+        cfg_mid=replace(m.cfg, session=other),
+        name="the change is not taken",
+    )
+    await m.send(
+        pack(other, m.next_seq(), itch(2)),
+        intent=S.SESSION,
+        cfg_mid=replace(m.cfg, session_check=False),
+        name="check off from beat 1",
+    )
     m.set_cfg(session=other)  # back to back: the next first beat takes it
     await m.send(pack(other, m.next_seq(), itch(2)), intent=S.OK, name="new session, IPG 0")
     await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.SESSION, name="old session, IPG 0")
@@ -828,8 +860,20 @@ async def tc_other_feed(dut):
         if mine:
             await m.send(p, intent=S.DUP, fidx=5 - i, name=f"copy from entry {5 - i}")
     await m.send(heartbeat(SESSION, m.next_seq())[:10], intent=S.OTHER_FEED, fidx=3, name="runt from entry 3")
-    await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.OK, fidx=0, cfg_mid=replace(m.cfg, filter_mask=0x02), name="mask changes in beat 1")
-    await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.OTHER_FEED, fidx=1, cfg_mid=replace(m.cfg, filter_mask=0x02), name="the change is not taken")
+    await m.send(
+        pack(SESSION, m.next_seq(), itch(1)),
+        intent=S.OK,
+        fidx=0,
+        cfg_mid=replace(m.cfg, filter_mask=0x02),
+        name="mask changes in beat 1",
+    )
+    await m.send(
+        pack(SESSION, m.next_seq(), itch(1)),
+        intent=S.OTHER_FEED,
+        fidx=1,
+        cfg_mid=replace(m.cfg, filter_mask=0x02),
+        name="the change is not taken",
+    )
     m.set_cfg(filter_mask=0x02)
     await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.OK, fidx=1, name="new mask, IPG 0")
     await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.OTHER_FEED, fidx=0, name="old entry, IPG 0")
@@ -848,9 +892,19 @@ async def tc_disabled(dut):
     await m.send(pack(SESSION, m.next_seq(), itch(3)), intent=S.DISABLED, abort=True, name="abort")
     await m.send(pack(b"XXXXXXXXXX", m.next_seq(), itch(1)), intent=S.DISABLED, name="wrong session")
     await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.DISABLED, fidx=4, name="other entry")
-    await m.send(pack(SESSION, m.next_seq(), itch(1)), intent=S.DISABLED, cfg_mid=replace(m.cfg, enable=True), name="enabled from beat 1")
+    await m.send(
+        pack(SESSION, m.next_seq(), itch(1)),
+        intent=S.DISABLED,
+        cfg_mid=replace(m.cfg, enable=True),
+        name="enabled from beat 1",
+    )
     m.set_cfg(enable=True)
-    await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.OK, cfg_mid=replace(m.cfg, enable=False), name="disabled from beat 1")
+    await m.send(
+        pack(SESSION, m.next_seq(), itch(2)),
+        intent=S.OK,
+        cfg_mid=replace(m.cfg, enable=False),
+        name="disabled from beat 1",
+    )
     await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.OK, name="in order")
     m.set_cfg(enable=False)
     await m.send(pack(SESSION, m.next_seq(), itch(2)), intent=S.DISABLED, name="disabled, IPG 0")
@@ -881,42 +935,99 @@ async def tc_resync(dut):
     msgs = msgs_of(10, 10, 10)  # 56 B: 7 beats
     for ipg in (0, 2):  # first beat: before the packet
         y = seq()
-        await m.send(pack(SESSION, y, msgs), intent=S.OK, resync=((0, False, y),), name=f"set y on its first beat, at y, IPG {ipg}")
+        await m.send(
+            pack(SESSION, y, msgs),
+            intent=S.OK,
+            resync=((0, False, y),),
+            name=f"set y on its first beat, at y, IPG {ipg}",
+        )
         await m.idle(ipg)
-        await m.send(pack(SESSION, seq(), msgs), intent=S.OK, resync=((0, True, 0),), name=f"learn on its first beat: syncs, IPG {ipg}")
+        await m.send(
+            pack(SESSION, seq(), msgs),
+            intent=S.OK,
+            resync=((0, True, 0),),
+            name=f"learn on its first beat: syncs, IPG {ipg}",
+        )
         await m.idle(ipg)
     for beat in (1, 2, 3, 6, 7):  # later beats and the cycle after tlast: after the packet
         y = seq()
-        await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((beat, False, y),), name=f"set in beat {beat}")
+        await m.send(
+            pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((beat, False, y),), name=f"set in beat {beat}"
+        )
         await m.send(pack(SESSION, y, itch(1)), intent=S.OK, name=f"at the set seq (beat {beat})")
-        await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((beat, True, 0),), name=f"learn in beat {beat}")
+        await m.send(
+            pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((beat, True, 0),), name=f"learn in beat {beat}"
+        )
         await m.send(pack(SESSION, seq(), itch(1)), intent=S.OK, name=f"syncs (learn in beat {beat})")
     y, z = seq(), seq()
-    await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((1, False, y), (4, True, 0)), name="set then learn: learn wins")
+    await m.send(
+        pack(SESSION, m.next_seq(), msgs),
+        intent=S.OK,
+        resync=((1, False, y), (4, True, 0)),
+        name="set then learn: learn wins",
+    )
     await m.send(heartbeat(SESSION, 0)[:9], intent=S.RUNT, name="runt: E kept by the learn")
-    await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((1, True, 0), (4, False, y)), name="learn then set: set wins")
+    await m.send(
+        pack(SESSION, m.next_seq(), msgs),
+        intent=S.OK,
+        resync=((1, True, 0), (4, False, y)),
+        name="learn then set: set wins",
+    )
     await m.send(pack(SESSION, y, itch(1)), intent=S.OK, name="in sync at the set seq")
-    await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((2, False, y), (7, False, z)), name="set y waits, set z after tlast")
+    await m.send(
+        pack(SESSION, m.next_seq(), msgs),
+        intent=S.OK,
+        resync=((2, False, y), (7, False, z)),
+        name="set y waits, set z after tlast",
+    )
     await m.send(pack(SESSION, z, itch(1)), intent=S.OK, name="at z")
-    await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((2, False, y), (7, True, 0)), name="set y waits, learn after tlast")
+    await m.send(
+        pack(SESSION, m.next_seq(), msgs),
+        intent=S.OK,
+        resync=((2, False, y), (7, True, 0)),
+        name="set y waits, learn after tlast",
+    )
     await m.send(heartbeat(SESSION, 0)[:9], intent=S.RUNT, name="runt: E = y, out of sync")
     for ipg in (0, 1):  # the earlier packet's waiting request, then the first-beat one
         y, z = seq(), seq()
-        await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((2, False, y),), name=f"set y in beat 2, IPG {ipg}")
+        await m.send(
+            pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((2, False, y),), name=f"set y in beat 2, IPG {ipg}"
+        )
         await m.idle(ipg)
-        await m.send(pack(SESSION, z, msgs), intent=S.OK, resync=((0, False, z),), name=f"set z on the first beat, at z, IPG {ipg}")
-        await m.send(pack(SESSION, m.next_seq(), msgs), intent=S.OK, resync=((2, False, y),), name=f"set y in beat 2 again, IPG {ipg}")
+        await m.send(
+            pack(SESSION, z, msgs),
+            intent=S.OK,
+            resync=((0, False, z),),
+            name=f"set z on the first beat, at z, IPG {ipg}",
+        )
+        await m.send(
+            pack(SESSION, m.next_seq(), msgs),
+            intent=S.OK,
+            resync=((2, False, y),),
+            name=f"set y in beat 2 again, IPG {ipg}",
+        )
         await m.idle(ipg)
-        await m.send(heartbeat(SESSION, 0)[:12], intent=S.RUNT, resync=((0, True, 0),), name=f"learn on a runt's first beat: E = y, IPG {ipg}")
+        await m.send(
+            heartbeat(SESSION, 0)[:12],
+            intent=S.RUNT,
+            resync=((0, True, 0),),
+            name=f"learn on a runt's first beat: E = y, IPG {ipg}",
+        )
         await m.send(pack(SESSION, seq(), itch(1)), intent=S.OK, name=f"syncs, IPG {ipg}")
-    await m.send(heartbeat(SESSION, m.next_seq())[:12], intent=S.RUNT, resync=((1, False, x),), name="set during a runt")
+    await m.send(
+        heartbeat(SESSION, m.next_seq())[:12], intent=S.RUNT, resync=((1, False, x),), name="set during a runt"
+    )
     m.set_cfg(enable=False)
-    await m.send(pack(SESSION, x, itch(1)), intent=S.DISABLED, resync=((2, True, 0),), name="learn during a disabled packet")
+    await m.send(
+        pack(SESSION, x, itch(1)), intent=S.DISABLED, resync=((2, True, 0),), name="learn during a disabled packet"
+    )
     m.set_cfg(enable=True)
     await m.send(eos(SESSION, seq()), intent=S.EOS, name="end of session syncs, eos = 1")
     await m.resync(learn=False, seq=m.next_seq())
     assert not (await m.feed_settled()).eos
-    await m.send(eos(SESSION, m.next_seq()), intent=S.EOS, resync=((3, True, 0),), name="eos cleared by a resync after tlast")
+    await m.send(
+        eos(SESSION, m.next_seq()), intent=S.EOS, resync=((3, True, 0),), name="eos cleared by a resync after tlast"
+    )
     await m.send(pack(SESSION, seq(), itch(1)), intent=S.OK, name="last")
     await m.finish()
 

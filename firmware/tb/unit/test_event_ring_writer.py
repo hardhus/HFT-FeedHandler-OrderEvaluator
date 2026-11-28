@@ -16,7 +16,6 @@ import cocotb
 import pytest
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
-
 from common.axi_ram import Ram, write_bus
 from common.coverage import Coverage
 from common.runner import run_cocotb

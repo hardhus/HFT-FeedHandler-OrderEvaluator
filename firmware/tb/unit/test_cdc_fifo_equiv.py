@@ -5,7 +5,6 @@ so both implementations are checked against the same contract and stimulus.
 """
 
 import pytest
-
 from common.svtb import run_svtb
 
 SEEDS = [1, 2, 3]

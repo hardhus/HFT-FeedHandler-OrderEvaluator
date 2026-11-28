@@ -57,9 +57,9 @@ from pathlib import Path
 
 import cocotb
 import pytest
-from cocotb.triggers import Event as Signal, ReadOnly, RisingEdge
+from cocotb.triggers import Event as Signal
+from cocotb.triggers import ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
-
 from common.axi_ram import Ram, write_bus
 from common.clocks import PROFILES, profile, start_clock
 from common.coverage import Coverage
@@ -81,10 +81,9 @@ from common.itch_real import Retired, fetch, load, packets, tally_text
 from common.runner import run_cocotb
 from model import mold
 from model.csr import OKAY
-from model.itch import N_WORDS, Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
-from model.itch import expect as itch_expect
 from model.desc_gen import FLAG_OVERFLOW_BEFORE, Kind, decode
-from model.itch import DECODED
+from model.itch import DECODED, N_WORDS, Bitmap, Event, ItchClass, ItchConfig, Outcome, Result, encode, itch_stream
+from model.itch import expect as itch_expect
 from model.mold import ACCEPTED, HDR_LEN, MAX_MSG, SEQ_MOD, FeedConfig, FeedState, MoldResult, MoldStatus
 from model.net import (
     RxConfig,
@@ -160,7 +159,7 @@ def tap_path(name: str) -> str | None:
     """The HFT_Core path of a TAPS name, None if the name is not in TAPS."""
     for key, path in TAPS.items():
         if name == key or (key.endswith("_") and name.startswith(key)):
-            return path + name[len(key):]
+            return path + name[len(key) :]
     return None
 
 
@@ -344,7 +343,8 @@ class System:
             await RisingEdge(self.dut.net_clk)
         raise AssertionError(
             f"{len(self.stat_q)} frame(s) without a stat event, {len(self.pay_q)} without payload, "
-            f"{len(self.mold_q) + len(self.out_q) + int(self.cur is not None)} without a packet event")
+            f"{len(self.mold_q) + len(self.out_q) + int(self.cur is not None)} without a packet event"
+        )
 
     async def _monitor(self) -> None:
         d, r = self.dut, self.root
@@ -398,7 +398,9 @@ class System:
         s = self.stat_q.popleft()
         assert s.want is not None, f"{s.name}: stat event before its stage A beat"
         got = (int(self.root.stat_reason.value), int(self.root.stat_bytes.value))
-        assert got == (s.want.reason, s.want.nbytes), f"{s.name}: stat {got}, model ({s.want.reason.name}, {s.want.nbytes})"
+        assert got == (s.want.reason, s.want.nbytes), (
+            f"{s.name}: stat {got}, model ({s.want.reason.name}, {s.want.nbytes})"
+        )
         if self.keep:
             self.done.append(s)
 
@@ -487,7 +489,8 @@ class System:
         assert int(d.m_msg_sof_ts.value) == p.ts, f"{name}: seq {seq}: m_msg_sof_ts is not its packet's"
         ctx = int(d.m_msg_ctx.value)
         assert ctx == p.epoch << 2 * N_CLASS | p.itch.class_filter << N_CLASS | p.itch.class_en, (
-            f"{name}: seq {seq}: m_msg_ctx {ctx:#x}")
+            f"{name}: seq {seq}: m_msg_ctx {ctx:#x}"
+        )
         ev, res = itch_expect(data, p.itch, self.bm)  # the lookup in this cycle: before its write
         self.itch_q.append((self.cycle, ev, res, seq, p.ts, name, p.epoch))
         if ev is not None:
@@ -514,7 +517,8 @@ class System:
         assert int(d.m_pkt_sof_ts.value) == p.ts, f"{name}: m_pkt_sof_ts is not its packet's"
         ctx = int(d.m_pkt_ctx.value)
         assert ctx == p.epoch << 2 * N_CLASS | p.itch.class_filter << N_CLASS | p.itch.class_en, (
-            f"{name}: m_pkt_ctx {ctx:#x}")
+            f"{name}: m_pkt_ctx {ctx:#x}"
+        )
         if self.keep:
             if w.status in ACCEPTED:
                 self.accepted_msgs += w.msgs
@@ -536,7 +540,9 @@ class System:
         if d.m_res_valid.value:
             assert self.itch_q, f"cycle {self.cycle}: ITCH result with no message outstanding"
             cyc, ev, res, seq, ts, name, epoch = self.itch_q.popleft()
-            assert self.cycle - cyc == ITCH_LATENCY, f"{name}: seq {seq}: result {self.cycle - cyc} cycles after the message"
+            assert self.cycle - cyc == ITCH_LATENCY, (
+                f"{name}: seq {seq}: result {self.cycle - cyc} cycles after the message"
+            )
             got = Result(ItchClass(int(d.m_res_class.value)), Outcome(int(d.m_res_outcome.value)))
             assert got == res, f"{name}: seq {seq}: result {got}, model {res}"
             assert bool(d.m_ev_valid.value) == (ev is not None), f"{name}: seq {seq}: m_ev_valid"
@@ -559,7 +565,8 @@ class System:
         else:
             assert not d.m_ev_valid.value, f"cycle {self.cycle}: m_ev_valid without m_res_valid"
             assert not self.itch_q or self.cycle - self.itch_q[0][0] < ITCH_LATENCY, (
-                f"{self.itch_q[0][5]}: seq {self.itch_q[0][3]}: ITCH result missing")
+                f"{self.itch_q[0][5]}: seq {self.itch_q[0][3]}: ITCH result missing"
+            )
         if d.m_fwd_pkt_valid.value:
             assert self.fwd_q, f"cycle {self.cycle}: forwarded packet event with none outstanding"
             cyc, want = self.fwd_q.popleft()
@@ -745,11 +752,11 @@ class RingHost:
         self.sysm.check_ring_counters(v)
         written, errors = await self.live(RING_WRITTEN_LO), await self.live(RING_BRESP_ERR_LO)
         assert v["RING_COMMIT_ENTRIES"] == written + errors, (
-            f"RING_COMMIT_ENTRIES {v['RING_COMMIT_ENTRIES']}, RING_WRITTEN {written}, RING_BRESP_ERR {errors}")
+            f"RING_COMMIT_ENTRIES {v['RING_COMMIT_ENTRIES']}, RING_WRITTEN {written}, RING_BRESP_ERR {errors}"
+        )
         assert await self.w.drv.read(PROD_IDX) == (self.cons.idx & 0xFFFF_FFFF, OKAY)
         assert await self.w.drv.read(RING_STATUS) == (0, OKAY)
         assert await self.w.drv.read(RING_BUSY) == (1, OKAY), "the ring runs"
-
 
 
 async def start(dut) -> tuple[Wrap, System]:
@@ -829,7 +836,8 @@ def check_itch_identities(values: list[int]) -> None:
                + rejects) & MASK64  # fmt: skip
     assert ring == entries, (
         f"RING_COMMIT_ENTRIES + DROP_ENTRIES + DROP_ORDERS + ORDER_QUEUED {ring}, "
-        f"ITCH_OUT + GAP_EVENTS + EOS + ORDERS_SENT_* + RISK_REJECT_* {entries} ({v})")
+        f"ITCH_OUT + GAP_EVENTS + EOS + ORDERS_SENT_* + RISK_REJECT_* {entries} ({v})"
+    )
 
 
 def named(values: list[int]) -> dict[str, int]:
@@ -1001,7 +1009,13 @@ async def tc_feed_bring_up(dut):
     await sysm.finish()
     assert sysm.mold_done[-1].want.synced_now
     v = named(await snapshot_checked(w))
-    assert (v["EXPECTED_SEQ"], v["FEED_STATE"], v["MOLD_OK"], v["MOLD_MSGS"], v["MOLD_GAP_EVENTS"]) == (9001, 1, 7, 11, 1)
+    assert (v["EXPECTED_SEQ"], v["FEED_STATE"], v["MOLD_OK"], v["MOLD_MSGS"], v["MOLD_GAP_EVENTS"]) == (
+        9001,
+        1,
+        7,
+        11,
+        1,
+    )
     assert sysm.accepted_msgs[len(hand) :] == [(5000, itch["S"]), (5001, itch["W"]), (9000, itch["S"])]
     w.feed.check_done()
 
@@ -2057,6 +2071,11 @@ def test_rx_csr_real(name):
         filelists=["common.f", "core.f", "csr.f", "top.f"],
         test_module="test_rx_csr",
         testcase="tc_real_itch",
-        extra_env={"GROUP": "tc_real_itch", "JITTER": 0, "RATIO": "net2host", "ITCH_REAL": path,
-                   "ITCH_REAL_WINDOWS": json.dumps(src.system)},  # fmt: skip
+        extra_env={
+            "GROUP": "tc_real_itch",
+            "JITTER": 0,
+            "RATIO": "net2host",
+            "ITCH_REAL": path,
+            "ITCH_REAL_WINDOWS": json.dumps(src.system),
+        },  # fmt: skip
     )

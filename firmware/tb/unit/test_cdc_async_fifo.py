@@ -10,7 +10,6 @@ import cocotb
 import pytest
 from cocotb.triggers import Combine, FallingEdge, ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
-
 from common.clocks import PROFILES, profile, start_clock
 from common.runner import run_cocotb
 from common.scoreboard import Scoreboard
@@ -464,6 +463,12 @@ def test_cdc_async_fifo(depth_log2, width, sync_stages, jitter, ratio):
         test_module="test_cdc_async_fifo",
         parameters={"WIDTH": width, "DEPTH_LOG2": depth_log2, "SYNC_STAGES": sync_stages, "WR_COUNT": 1},
         defines={"HFT_SIM_CDC_JITTER": 1} if jitter else {},
-        extra_env={"DEPTH_LOG2": depth_log2, "JITTER": jitter, "RATIO": ratio, "WIDTH": width,
-                   "SYNC_STAGES": sync_stages, "WR_COUNT": 1},  # fmt: skip
+        extra_env={
+            "DEPTH_LOG2": depth_log2,
+            "JITTER": jitter,
+            "RATIO": ratio,
+            "WIDTH": width,
+            "SYNC_STAGES": sync_stages,
+            "WR_COUNT": 1,
+        },  # fmt: skip
     )
