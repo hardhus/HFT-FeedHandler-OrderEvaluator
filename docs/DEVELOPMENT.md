@@ -53,8 +53,8 @@ Optional per-machine settings go in `.env.local` (git-ignored). Copy them from [
 ## Daily flow
 
 ```bash
-just lint                 # Verilator -Wall + Verible lint + format check (blocking)
-just fmt                  # format every file under the lint gate in place (not generated files)
+just lint                 # Verilator -Wall + Verible lint + format check, ruff on the Python (blocking)
+just fmt                  # format every file under the lint gate in place (not generated SV files)
 just gen                  # regenerate the CSR outputs (hft_csr.rdl) and the event descriptor outputs (event_desc.toml)
 just gen-check            # fail if a generated file differs from a fresh `just gen` (part of `just ci`)
 just test                 # the cocotb tests, in parallel, without the long ones
@@ -72,18 +72,24 @@ just itch-real-rtl        # real Nasdaq data through itch_decoder and the system
   top, with the lists it needs) and the OOC synthesis harnesses in `synth_ooc*.f`. Packages (`*_pkg.sv`) are not a
   top of their own: Verilator checks them through their users. One top need not use every `hft_pkg` constant, so
   that warning is waived for `hft_pkg`; the selftest `test_every_package_constant_has_a_user` checks that every
-  constant has a user somewhere;
+  constant has a user somewhere. `HFT_Core` is linted twice: at its default `RING_DATA_W` (512, what the system
+  tests run) and at 128, so a width not passed down to the ring writer shows as a width mismatch;
 - **Verilator only:** the generated files under `rtl/core/gen/` (they are never restyled by hand; their waivers in
   `firmware/lint/waivers.vlt` match file, rule and message);
 - **Verible only (lint + format):** the XPM wrappers in `xilinx.f` (Verilator cannot compile XPM), the SVA checkers
-  in `sva*.f` and the self-checking SV testbenches in `firmware/tb/sv/`.
+  in `sva*.f` and the self-checking SV testbenches in `firmware/tb/sv/`;
+- **ruff:** `ruff format --check` and `ruff check` on every Python file git tracks. The settings are in
+  `pyproject.toml` (`[tool.ruff]`: 120 columns; an explicit rule set, ruff's classic default plus import sorting, so
+  a ruff upgrade does not widen the gate). ruff is a dev dependency pinned in `uv.lock`, so `just setup` and CI
+  install the same version everywhere, and `just doctor` reports it. `just fmt` formats and sorts the imports.
 
-The list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
+The SV list comes from the filelists (`just sv-files` prints it), so a new file is linted as soon as it is listed.
 
 Build outputs go to `build/` (the simulator builds to `$HFT_BUILD_DIR` if `.env.local` sets it; on WSL a path on
 the WSL disk is much faster than `/mnt/d`, see `.env.example`):
 - `build/sim/<top>_<hash>/` holds one cocotb build per configuration, with one `run_<hash>/` per runtime environment;
 - `build/svtb/` holds SV-testbench builds;
+- `build/cosim/` holds the co-simulation vectors (`smoke.vec`) and its CMake build;
 - `build/test-results.xml` is the JUnit report.
 
 ### Builds, seeds and reproducing a failure
@@ -251,6 +257,26 @@ cocotb 2.1 but emits `DeprecationWarning`s.
 
 Open waveforms with GTKWave or Surfer. Both ship with OSS CAD Suite and open through WSLg, for example
 `.tools/oss-cad-suite/bin/surfer build/sim/.../dump.fst`. Any Windows viewer works too.
+
+### C++ co-simulation (`just cosim`)
+
+The host side's first code runs against the RTL: `HFT_Core` is verilated into a C++ library and driven through the
+same `hft::Device` interface (`software/include/hft/device.hpp`) a board will implement.
+- `hft::SimDevice` (`software/sim/`) drives both clocks (net 6.4 ns, host 4.0 ns by default) and puts bus models on
+  the core's ports: an AXI4-Lite master, an AXI4 write slave into host memory (the ring region; `awready`/`wready`
+  with a settable probability), a frame injector on `s_axis_rx_*` and a frame capture on `m_axis_tx_*` (`tready`
+  with a settable probability; the smoke test runs it at 64 %). The Verilator flags are the cocotb builds'
+  (`-Wall --assert --x-assign unique --x-initial unique`) and the assertion filelists are compiled in, so an
+  assertion fails the C++ run as it fails a cocotb test.
+- The smoke test (`software/sim/tests/smoke_test.cpp`) runs a vector file that
+  `firmware/tb/common/cosim_vectors.py` writes from the Python models: the software contract after reset, packets
+  that fire a rule, a bad FCS, a duplicate, a host order through the mailbox, and every expected ring entry, TX
+  frame and snapshot counter. The C++ side only executes and compares; it has no golden model of its own. The
+  timestamps the models cannot predict are listed as masked fields and checked for order and range instead.
+  `tb/selftest/test_cosim_vectors.py` checks the generator.
+- `just cosim` writes the vectors into `build/cosim/`, configures `software/CMakeLists.txt` (Verilator's CMake package
+  from the pinned OSS CAD Suite, C++20), builds and runs `ctest`: the scenario with two seeds (Verilator's random
+  reset values and the `tready` pattern). It is part of `just ci`, so it runs on x64, arm64 and the Pi.
 
 ### Adding a module
 

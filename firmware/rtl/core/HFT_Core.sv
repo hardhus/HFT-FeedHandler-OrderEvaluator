@@ -3,11 +3,11 @@
 // order_tx_builder), event_packer, the commit FIFO and event_ring_writer, configured and counted through the host
 // CSR block (hft_csr_wrap).
 // Clock domain : host_clk (s_axil_*, m_axi_hmw_*, irq), net_clk (s_axis_rx_*, m_axis_tx_*)
-// Reset        : rst_in is the one asynchronous, active-high reset source of both domains (the platform ORs its
-//                PCIe, MAC and user resets into it). Each domain has its own reset_sync here, so cdc_handshake's
-//                one-source contract holds inside the core. Each consumer block gets its own copy of its domain's
-//                reset (reset_sync COPIES, decision 14, audit/15); the copies deassert together, 4 edges after
-//                rst_in falls (STAGES 3 + the output copy).
+// Reset        : rst_in is the one asynchronous, active-high reset source of both domains (a PCIe shell drives
+//                it from the bridge's axi_aresetn only, platform/pcie_xdma/README.md). Each domain has its own
+//                reset_sync here, so cdc_handshake's one-source contract holds inside the core. Each consumer block
+//                gets its own copy of its domain's reset (reset_sync COPIES, decision 14, audit/15); the copies
+//                deassert together, 4 edges after rst_in falls (STAGES 3 + the output copy).
 // Timestamps   : ts_q is a free-running 64-bit counter of net_clk cycles, 0 after reset; every timestamp in the
 //                core (SOF, TX, reject) is a value of it.
 // ITCH         : moldudp64_rx carries the ITCH config per packet: cfg_msg_ctx = {cfg_epoch, cfg_class_filter,

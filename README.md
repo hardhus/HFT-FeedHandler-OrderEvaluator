@@ -29,21 +29,22 @@ for the RTL rules.
 |------|----------|
 | `justfile` | Single entry point (`just` lists all recipes) |
 | `firmware/rtl/common/` | Reusable building blocks (reset/CDC/AXIS helpers) |
-| `firmware/rtl/core/` | Board-agnostic core: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), order path (strategy rules, pre-trade risk, OUCH 5.0 order TX), CSR block and counters |
+| `firmware/rtl/core/` | Board-agnostic core and its top `HFT_Core`: receive filter, MoldUDP64 de-framer, ITCH 5.0 decoder with the symbol filter, host event ring (entry packer and AXI4 ring writer), order path (strategy rules, pre-trade risk, OUCH 5.0 order TX), CSR block and counters |
 | `firmware/rdl/` | SystemRDL register map (single source of the RTL register block and the C header) |
-| `firmware/rtl/platform/` | Platform shells: simulation and out-of-context synthesis |
+| `firmware/rtl/platform/` | Out-of-context synthesis harnesses (`synth_ooc/`), the XPM FIFO wrapper (`xilinx/`) and the PCIe shell contract (`pcie_xdma/README.md`) |
 | `firmware/filelists/` | `.f` filelists shared by Verilator, cocotb and Vivado |
 | `firmware/tb/` | cocotb tests (`unit/`, `system/`), shared runner (`common/`), SVA checkers (`sva/`), self-checking SV testbenches (`sv/`) |
 | `firmware/scripts/vivado/` | Vivado Tcl: project generation, OOC synthesis gate, XSIM runs |
 | `firmware/constraints/` | Netlist-driven CDC constraints (`cdc.tcl`) |
 | `firmware/lint/` | Verilator waivers and Verible format flags |
 | `scripts/` | Bootstrap, setup and doctor scripts; `gen_csr.sh` (PeakRDL) |
-| `software/` | C++ host side: generated headers (`include/gen/`: CSR map, ring descriptors) |
+| `software/` | C++ host side: the `hft::Device` interface (`include/hft/`), generated headers (`include/gen/`: CSR map, ring descriptors), the Verilator co-simulation device and its smoke test (`sim/`) |
 
 ## Stack
 
 - **RTL:** SystemVerilog
-- **Verification:** Verilator 5, cocotb 2, pytest; Verible for style lint and formatting
+- **Verification:** Verilator 5, cocotb 2, pytest; C++ co-simulation through Verilator's CMake package; Verible for
+  SV style lint and formatting, ruff for the Python
 - **Synthesis checks (optional):** AMD Vivado (OOC timing/`report_cdc` gate, XSIM for the cross-simulator FIFO test)
 - **Registers:** SystemRDL 2.0, PeakRDL (regblock, C header, Markdown)
 - **Tooling:** just, uv, pinned OSS CAD Suite (Linux x86_64 and arm64)
@@ -144,6 +145,19 @@ for the RTL rules.
     path: all caught or shown equivalent.
   - Placed and routed out of context on Artix-7 and Kintex UltraScale+, the order path and the register blocks
     included.
+- **F8, core top:** [`HFT_Core`](firmware/rtl/core/README.md#hft_core), the board-independent top a platform shell
+  instantiates.
+  - Plain ports only: the host's AXI4-Lite bus, the MAC's receive and transmit streams, AXI4 writes into host memory
+    and a level interrupt; two asynchronous clocks and one reset, synchronized inside the core per domain. A 64-bit
+    timestamp counter replaces the timestamp input. `RESET_SEEN` tells software that the core was reset,
+    `TS_SNAPSHOT` dates each counter snapshot, and the ring interrupt follows the entries answered in host memory.
+  - Every system test runs on `HFT_Core`; the legacy RTL, its testbenches and the C++ register mock are gone.
+  - A C++ co-simulation: `HFT_Core` under Verilator behind the `hft::Device` interface a board will implement, with
+    a smoke test whose every expected entry, frame and counter comes from the Python models.
+  - The whole core placed and routed out of context: Kintex UltraScale+ at 156.25/250 MHz (+0.399 ns) and Artix-7
+    at 156.25/125 MHz (+0.015 ns, 36 % of its LUTs). How a PCIe bridge and a 10G MAC connect to it is written down in
+    [`platform/pcie_xdma/README.md`](firmware/rtl/platform/pcie_xdma/README.md).
+  - 62 mutants of the phase: 60 caught, 2 shown equivalent. The Python is formatted and linted with ruff.
 
 ## Real-data check
 

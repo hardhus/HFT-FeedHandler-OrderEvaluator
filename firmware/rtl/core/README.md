@@ -6,8 +6,10 @@ they are listed in [`filelists/core.f`](../../filelists/core.f), after `hft_pkg`
 [`filelists/sva_core.f`](../../filelists/sva_core.f) and their OOC synthesis harnesses in
 [`filelists/synth_ooc_core.f`](../../filelists/synth_ooc_core.f). The CSR blocks are in
 [`filelists/csr.f`](../../filelists/csr.f) (assertions [`sva_csr.f`](../../filelists/sva_csr.f), harness
-[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)). The design decisions are recorded in the F2, F5, F3, F4, F6 and
-F7 plans (audit 09, 10, 11, 12, 13, 14); this file is the contract.
+[`synth_ooc_csr.f`](../../filelists/synth_ooc_csr.f)), and the top `HFT_Core` in
+[`filelists/top.f`](../../filelists/top.f) (harness [`synth_ooc_top.f`](../../filelists/synth_ooc_top.f)). The design
+decisions are recorded in the F2, F5, F3, F4, F6, F7 and F8 plans (audit 09, 10, 11, 12, 13, 14, 15); this file is
+the contract.
 
 The synthesis tables give the routed utilization from Vivado's `utilization_route.rpt` (Slice LUTs, LUT as Memory,
 Slice Registers, BRAM tiles), measured at `ac699c7` (F8) unless a row says otherwise. Figures quoted from earlier
@@ -35,6 +37,7 @@ The whole core is synthesized in [`HFT_Core` synthesis](#hft_core-synthesis-just
 | `risk_check` | The single pre-trade gate for hardware and host orders (kill, tx_en, exchange validity, locate allow bitmap, quantity, notional, budget, token bucket, TX queue, ring credit), the TX queue and the UserRefNum counter | F7 |
 | `order_tx_builder` | One order to one 92-byte frame: the host's Ethernet/IPv4/UDP template, SoupBinTCP `U`, OUCH 5.0 Enter Order; `ORDER_SENT` at the first beat | F7 |
 | `order_stats` | Order counters: per rule fired, sent per source, rejects per reason, lost rejects (64 bit) | F7 |
+| `HFT_Core` | The core top a platform shell instantiates: every block above, both reset synchronizers, the timestamp counter and the ring interrupt (`filelists/top.f`) | F8 |
 
 ## `eth_ip_udp_rx`
 
@@ -896,16 +899,7 @@ whole map's address decoder failed the same gate (−0.384 ns), so the order blo
 the router (decisions 40, 41); `test_router_windows_hold_exactly_the_order_blocks` checks that the router's windows
 hold exactly RISK, STRATEGY and TX.
 
-### Software contract after reset
-
-Every reset of the core (`rst_in`) puts the whole configuration back at its reset values; `GLOBAL.RESET_SEEN` reads 1
-after it (F8, audit/15 decisions 3 and 10). Only a reset writes the bit.
-0. Read `ID` and `VERSION`, then write `RESET_SEEN` = 0, before any other block. A reset while software configures
-   sets the bit again after that write, so it is not lost.
-1. Configure the blocks (NET, FEED and ITCH, SYMBOL, RING, the order blocks), each by its own protocol below.
-
-Software reads `RESET_SEEN` at start-up and in its health check (slow path); 1 means the core was reset since the
-last configuration, so it starts again at step 0. `RESET_SEEN` is not an interrupt cause.
+Every block is configured by its own protocol below, in the order of Software contract after reset.
 
 ### Config commit (NET)
 
@@ -1120,11 +1114,12 @@ cannot be kept over a reset: block RAM content has no reset, and a value that lo
 
 The driver keeps its own copy of the configuration (it is the only source; it does not read the device back) and
 after every reset, in this order:
-1. checks `ID` and `VERSION`;
+1. checks `ID` and `VERSION`, then writes `GLOBAL.RESET_SEEN` = 0 before any other block (F8, audit/15 decisions 3
+   and 10); a reset while it configures sets the bit again after that write, so it is not lost;
 2. writes the NET shadow and `NET_COMMIT`;
 3. writes all 2048 `SYMBOL` words, the unsubscribed ones included (the first write waits until the sweep is done);
-4. sets up the ring by the host rules of the Host event ring (zeroed region, base, size, `CONS_IDX` = 0, enable)
-   and resets its own consumer index and epoch count;
+4. sets up the ring by the host rules of the Host event ring (zeroed region, base, size, `CONS_IDX` = 0 and, with
+   the interrupt, `IRQ_RING_IDX` = 0, enable) and resets its own consumer index and epoch count;
 5. writes the FEED shadow with `ITCH_CTRL` and `FEED_COMMIT`, with a resync if needed;
 6. waits for `commit_busy` = 0 after each commit;
 7. restores the order path (F7, decision 5), kill still 1: RISK limits and `RISK_COMMIT`, all 2048 `LOCATE_ALLOW`
@@ -1133,7 +1128,10 @@ after every reset, in this order:
 8. releases the kill switch last (`RISK_CTRL.kill` = 0).
 The order commands answer once in effect, so no polling is needed between them.
 
-The host learns about a reset from `GLOBAL.RESET_SEEN` (F8, see Software contract after reset).
+`RESET_SEEN` reads 1 after every reset and only a reset writes it. Software reads it at start-up and in its health
+check (slow path); 1 means the core was reset since the last configuration, so it starts again at step 1. It reads
+it once more after step 8: 1 there means a reset hit the configuration, which starts over. `RESET_SEEN` is not an
+interrupt cause.
 
 ### Clocks and reset
 
@@ -1205,6 +1203,72 @@ snapshot's valid into `hft_order_csr`'s (6 levels).
 only on those waived endpoints); no critical finding. The Kintex UltraScale+ part is the class of a real 10G + PCIe Gen3 x8 card (250 MHz PCIe
 user clock); the Artix-7 at 125 MHz is the PCIe Gen2 x4 (128-bit) configuration of a low-cost card. The register
 read path does not reach 250 MHz on the Artix-7; the part is not upgraded to hide that.
+
+## `HFT_Core`
+
+`HFT_Core.sv` (`filelists/top.f`) is the board-independent top: a platform shell gives it two clocks, one reset, the
+MAC's streams and the PCIe bridge's AXI interfaces, and nothing else. It holds no logic of its own beyond the two
+`reset_sync`s, the timestamp counter and the wiring; the instance names (`u_rx`, `u_mold`, `u_itch`, `u_strategy`,
+`u_risk`, `u_tx`, `u_packer`, `u_ring_fifo`, `u_ring_writer`, `u_wrap`, `u_net_rst`, `u_host_rst`) are the paths the
+tests and `cdc.tcl` use. How a PCIe shell connects it:
+[`platform/pcie_xdma/README.md`](../platform/pcie_xdma/README.md).
+
+### Ports
+
+| Group | Clock | Signals | Contract |
+|-------|-------|---------|----------|
+| Clocks and reset | | `net_clk`, `host_clk`, `rst_in` | See Clocks and Reset below |
+| Host CSR bus | `host_clk` | `s_axil_*` (AXI4-Lite, 16-bit address, 32-bit data) | The register map (CSR block); every access answers, SLVERR outside the map |
+| Market data in | `net_clk` | `s_axis_rx_{tdata[63:0], tkeep, tvalid, tready, tlast, tuser}` | Byte 0 = `tdata[7:0]`; `tuser` on the last beat = bad FCS; `tready` = 1 (line rate, no backpressure; `eth_ip_udp_rx`) |
+| Orders out | `net_clk` | `m_axis_tx_{tdata[63:0], tkeep, tvalid, tready, tlast}` | One 92-byte frame per order (`order_tx_builder`); `tready` may stall it |
+| Host memory writes | `host_clk` | `m_axi_hmw_*` (AXI4 write channels, no ID, `RING_DATA_W` data) | One 128-byte INCR burst per ring entry (`event_ring_writer`) |
+| Interrupt | `host_clk` | `irq` | A level from a register (Ring interrupt) |
+
+There is no timestamp input and no debug port: the tests read the inner signals through the hierarchy.
+
+### Parameters
+
+- `RING_DATA_W` (default 512): the host memory bus width, 64, 128, 256 or 512 (`event_ring_writer`). The platform
+  sets it to its bridge's AXI width (PCIe Gen2 x4: 128, Gen3 x8: 256) or puts a width converter in between. The
+  system tests run 512, the `event_ring_writer` unit test all four; `just lint` also lints `HFT_Core` at 128, so a
+  width not passed down shows there, and `synth-top` places and routes 128 on the Artix-7 for information.
+- `RING_DEPTH_LOG2` (default 8): the commit FIFO between `event_packer` and `event_ring_writer`, 2^8 entries.
+- `N_FILTERS` = 8 is a local parameter (the NET filter table of the register map).
+
+### Clocks
+
+- `net_clk`: the MAC side, 156.25 MHz for 10G (64 bits per cycle). It must run freely: the order and SYMBOL
+  commands answer on the bus only once they are in effect at `net_clk`, so a stopped clock hangs the host's access.
+- `host_clk`: the PCIe bridge's AXI clock (125 MHz on the Artix-7 gate, 250 MHz on the Kintex UltraScale+ gate).
+- The two are asynchronous and their ratio is free: every crossing is a `cdc_handshake`, a `sync_bit` or a
+  `cdc_async_fifo` (CSR block, Clocks and reset). The system tests run net 6.4 ns with host 4.0 ns, the reverse, and
+  both with ±20 % jitter per half period and the synchronizers' metastability model.
+
+### Reset
+
+`rst_in` is the one asynchronous, active-high reset of both domains; the PCIe shell drives it from the bridge's
+`axi_aresetn` only (platform README, Reset). Each domain has its own `reset_sync` inside the core, so both
+resets come from one source (`cdc_handshake`'s contract), and each block takes its own copy of its domain's reset
+(decision 14, audit/15): the copies fall together on the 4th edge of their own clock after `rst_in` falls, each
+domain on its own clock. Hold `rst_in` for at least 6 cycles of the slower clock with both clocks running (the
+`cdc_async_fifo` reset handshake). After any reset the configuration is at its reset values and
+`GLOBAL.RESET_SEEN` reads 1 (Software contract after reset).
+
+### Timestamp counter
+
+`ts_q` is a free-running 64-bit count of `net_clk` cycles, 0 after reset (it wraps after 2^64 cycles, about
+3700 years at 156.25 MHz). Every timestamp in the core is a value of it: a packet's SOF (`sof_ts`), an order's first
+TX beat (`tx_ts`), a reject (`reject_ts`). The host reads it as `TS_SNAPSHOT` in the same `net_clk` cycle as the
+snapshot counters (Counters and snapshot), so a snapshot dates its counters and every ring entry it counts is older
+than its `TS_SNAPSHOT`.
+
+### Verification
+
+| What | Where |
+|------|-------|
+| Every system test runs on `HFT_Core` (receive filter, feed, ITCH, ring, order path, real Nasdaq windows); `tc_reset_seen`: `RESET_SEEN` and the configuration over a mid-run reset, `ts_q` from 0 again, and each domain's reset copies released together on the 4th edge; `tc_ts_snapshot`; `tc_irq_ring` | `tb/system/test_rx_csr.py`, `tb/system/test_rx_order.py` |
+| C++ co-simulation: `HFT_Core` under Verilator driven by `hft::SimDevice` (AXI-Lite master, host memory, RX injector, TX capture), one bring-up and traffic scenario with every expectation from the Python models, the assertions bound | `software/sim/`, `tb/common/cosim_vectors.py`, `just cosim` |
+| 62 mutants of F8 (reset synchronizers, timestamp, `RESET_SEEN`, `TS_SNAPSHOT`, interrupt, ring writer, bus bridge, mailbox register, ring width, and the phase's timing fixes): 60 caught, 2 shown equivalent | audit/15 S9 |
 
 ## `HFT_Core` synthesis (`just synth-top`)
 
