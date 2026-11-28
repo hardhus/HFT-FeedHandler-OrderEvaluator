@@ -747,7 +747,7 @@ async def tc_order_random(dut):
     rng = random.Random(random.getrandbits(32))
     w, sysm, host, oh, watch = await order_system(dut, {}, budget=0, allow=LOCS)
     strat = Strategy()
-    budget, phase, epoch, seq, k_msg, k_host = 0, Phase(), 1, 100, 0, 0
+    budget, phase, seq, k_msg, k_host = 0, Phase(), 100, 0, 0
     hit: set[str] = set()
     for rnd, kind in enumerate([t for _ in range(N_BAGS) for t in rng.sample(ROUNDS, len(ROUNDS))]):
         # ---- software, path quiet

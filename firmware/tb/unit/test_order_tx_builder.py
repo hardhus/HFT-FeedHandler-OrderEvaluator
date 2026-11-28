@@ -12,8 +12,7 @@ that step's ts_now.
 """
 
 import random
-from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cocotb

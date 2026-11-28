@@ -130,7 +130,7 @@ def gen_sv(schema: dict) -> str:
     out += [
         f"  localparam int unsigned DESC_BYTES = {entry};",
         f"  localparam int unsigned DESC_LINE_BYTES = {line};",
-        f"  localparam int unsigned DESC_W = 8 * DESC_BYTES;",
+        "  localparam int unsigned DESC_W = 8 * DESC_BYTES;",
         f"  localparam logic [{version_bits - 1}:0] DESC_VERSION = {version_bits}'d{schema['version']};",
         f"  localparam int unsigned DESC_CTRL_PHASE_BIT = {phase_bit};",
     ]

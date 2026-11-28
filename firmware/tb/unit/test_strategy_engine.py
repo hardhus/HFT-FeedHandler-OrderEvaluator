@@ -7,7 +7,6 @@ with every field; st_armed and st_error after edge d + 1 equal the model's state
 directed tests check hand-written values on top of that.
 """
 
-import os
 import random
 from collections import deque
 from dataclasses import dataclass, field

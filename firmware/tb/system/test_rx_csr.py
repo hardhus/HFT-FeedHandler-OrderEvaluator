@@ -1190,7 +1190,7 @@ async def tc_feed_random(dut):
 
     async def send(p: mold.FeedPacket, idx: int) -> None:
         nonlocal sent
-        frame, tuser, dport = feed_frame(p.payload, idx), p.abort, None
+        frame, tuser = feed_frame(p.payload, idx), p.abort
         fault = rng.random()
         if fault < 0.03:
             tuser = True
