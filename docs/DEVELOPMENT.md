@@ -130,6 +130,11 @@ the WSL disk is much faster than `/mnt/d`, see `.env.example`):
   path, both sources) takes about 27 minutes on WSL with one worker; it runs in the `itch-real-rtl` workflow. On a
   WSL with 2 GB of RAM a single Verilator build of a core test takes 1 to 5 minutes, so mutation runs
   (`audit/f7-mutasyon/s10_mut.py`, 53 mutants) take several hours.
+  After F8 (924 tests, 2 `long` ones and the 2 co-simulation tests): on GitHub the x64 `ci` job takes about 29
+  minutes and the arm64 one about 26, `itch-real-rtl` 33 to 35. The Raspberry Pi 5 runs `just ci` in about 12
+  minutes for the tests plus 12 for the long ones; a 2 GB WSL takes about 39 plus 22. The co-simulation's own
+  `ctest` takes 3 seconds once built. The F8 mutation run (`audit/f8-mutasyon/s9_mut.py`, 62 mutants) took
+  2.5 hours on WSL.
 - **Every run has a seed.** Each test prints a line such as
   `[hft] reset_sync seed=1302067203 build=reset_sync_33b5cad549 ... (rerun: HFT_SEED=1302067203)`.
   The seed drives cocotb's `random` and Verilator's randomized initial state (`--x-initial unique`): flops without a

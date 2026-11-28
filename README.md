@@ -158,6 +158,8 @@ for the RTL rules.
     at 156.25/125 MHz (+0.015 ns, 36 % of its LUTs). How a PCIe bridge and a 10G MAC connect to it is written down in
     [`platform/pcie_xdma/README.md`](firmware/rtl/platform/pcie_xdma/README.md).
   - 62 mutants of the phase: 60 caught, 2 shown equivalent. The Python is formatted and linted with ruff.
+  - `just ci` is green on GitHub Actions (x64, arm64), on WSL and on a Raspberry Pi 5 (924 tests, 2 long ones and
+    the co-simulation); so are the real Nasdaq windows through the RTL (`itch-real-rtl`).
 
 ## Real-data check
 
