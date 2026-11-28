@@ -63,7 +63,8 @@ sv-files:
     files_of synth_ooc_top.f | sed 's/^/ooc_top /'
     { files_of xilinx.f; files_of sva.f; files_of sva_core.f; files_of sva_csr.f; ls firmware/tb/sv/*.sv; } | sed 's/^/style /'
 
-# Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check
+# Lint gate (blocking): Verilator -Wall per module, Verible rules (.rules.verible_lint) and format check,
+# ruff format check and ruff rules ([tool.ruff] in pyproject.toml) on the Python
 [script("bash")]
 [unix]
 lint:
@@ -101,6 +102,10 @@ lint:
     for f in "${srcs[@]}"; do
       verible-verilog-format --flagfile=firmware/lint/verible-format.flags --verify "$f" || fail=1
     done
+    echo "== ruff format --check"
+    uv run --frozen ruff format --check . || fail=1
+    echo "== ruff check"
+    uv run --frozen ruff check . || fail=1
     echo "lint: ${#srcs[@]} file(s), $([ $fail = 0 ] && echo clean || echo FAILED)"
     exit $fail
 
@@ -205,7 +210,7 @@ setup:
 doctor:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just doctor"
 
-# Lint new RTL in WSL (Verilator + Verible + format check)
+# Lint in WSL (Verilator + Verible + format check, ruff)
 [windows]
 lint:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just lint"
