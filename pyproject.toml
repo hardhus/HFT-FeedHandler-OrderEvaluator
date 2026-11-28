@@ -15,6 +15,7 @@ dev = [
     "peakrdl-regblock>=1.3.1",
     "pytest>=8",
     "pytest-xdist>=3",
+    "ruff>=0.17.6,<0.18",
     "scapy>=2.8.0",
 ]
 
@@ -28,3 +29,12 @@ python_files = ["test_*.py"]
 # Real-data tests (marker `real`) need the network: only `-m real` (just itch-real) selects them.
 # Long tests (marker `long`) run in `just test-long` and `just ci`, not in the daily `just test`.
 addopts = "-ra --junitxml=build/test-results.xml -m 'not real and not long'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Explicit, so a ruff upgrade does not change the gate: ruff's classic default set plus import sorting.
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E741"]  # one-letter aliases in tables: O for ItchClass.ORDER or Outcome.OUT

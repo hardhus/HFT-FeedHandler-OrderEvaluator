@@ -57,6 +57,11 @@ if [[ -f pyproject.toml ]]; then
   else
     bad "PeakRDL not importable (run: just setup)"
   fi
+  if fv=$(uv run --frozen ruff --version 2>/dev/null); then
+    ok "$fv (just lint)"
+  else
+    bad "ruff missing (run: just setup)"
+  fi
 else
   info "pyproject.toml not present yet; skipping Python checks"
 fi
