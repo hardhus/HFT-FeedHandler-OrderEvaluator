@@ -89,6 +89,10 @@ lint:
       esac
       echo "== verilator $top"
       verilator --lint-only -Wall --quiet --top-module "$top" firmware/lint/waivers.vlt "${lists[@]}" || fail=1
+      if [ "$top" = HFT_Core ]; then   # the tests run RING_DATA_W 512 only: a width not passed down shows at 128
+        echo "== verilator $top RING_DATA_W=128"
+        verilator --lint-only -Wall --quiet --top-module "$top" -GRING_DATA_W=128 firmware/lint/waivers.vlt "${lists[@]}" || fail=1
+      fi
     done <<<"$list"
     [ ${#srcs[@]} -gt 0 ] || { echo "lint: no files found"; exit 1; }
     echo "== verible-verilog-lint"
