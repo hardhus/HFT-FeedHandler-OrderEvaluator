@@ -58,7 +58,7 @@ from pathlib import Path
 import cocotb
 import pytest
 from cocotb.triggers import Event as Signal
-from cocotb.triggers import ReadOnly, RisingEdge
+from cocotb.triggers import FallingEdge, ReadOnly, RisingEdge
 from cocotb.utils import get_sim_time
 from common.axi_ram import Ram, write_bus
 from common.clocks import PROFILES, profile, start_clock
@@ -313,6 +313,7 @@ class System:
         self.ring_log: list[dict] = []  # entries read, decoded (with keep)
         self.ring_size_log2 = 0
         self.retired = False  # set before a reset of the core: the chain model does not follow resets
+        self.free_at: int | None = None  # sim time at which the last send() returned, just after a net edge
         cocotb.start_soon(self._monitor())
 
     async def send(self, frame: bytes, tuser: bool = False, gap: int = 0, name: str = "") -> Sent:
@@ -320,6 +321,11 @@ class System:
         self.queue.append(s)
         self.stat_q.append(s)
         d = self.dut
+        if not gap and get_sim_time() != self.free_at:
+            # Called between net edges (e.g. after a host_clk wait): every beat must be driven just after a
+            # net edge, where the monitor reads the beat the next edge takes. A beat driven mid-cycle is taken
+            # at the next edge but already replaced when the monitor looks (HFT_SEED=454425983 net2host).
+            await RisingEdge(d.net_clk)
         for _ in range(gap):
             d.s_axis_rx_tvalid.value = 0
             await RisingEdge(d.net_clk)
@@ -333,6 +339,7 @@ class System:
             d.s_axis_rx_tvalid.value = 1
             await RisingEdge(d.net_clk)
         d.s_axis_rx_tvalid.value = 0
+        self.free_at = get_sim_time()
         return s
 
     async def finish(self, limit: int = 50) -> None:
@@ -376,6 +383,8 @@ class System:
                     s.want = expect(s.frame, s.tuser, to_rx(s.cfg, s.rx_en))
                     assert s.want.payload is None
                 if d.s_axis_rx_tlast.value:
+                    beats = -(-len(s.frame) // 8)
+                    assert self.beat + 1 == beats, f"{s.name}: tlast after {self.beat + 1} beats, frame has {beats}"
                     if read_cfg(r) != self.start_cfg:
                         self.cfg_changed_in_frame += 1
                     self.in_flight = None
@@ -914,6 +923,25 @@ async def tc_bring_up(dut):
     assert v["MOLD_DISABLED"] == 12, "10 accepted and 2 FCS frames reach moldudp64_rx"
     assert sum(v[f"MOLD_{s.name}"] for s in S) == 12 and accounted(v) == 0 and v["MOLD_DUP_MSGS"] == 0
     assert (v["EXPECTED_SEQ"], v["FEED_STATE"]) == (0, 0)
+
+
+@cocotb.test(timeout_time=5, timeout_unit="ms")  # a broken DUT must fail, not hang
+async def tc_send_between_edges(dut):
+    """Frames sent with no gap between net edges (after a falling net edge or a host_clk edge, as after a
+    snapshot): the driver starts them on the next net edge, so the monitor sees every beat. One beat, one
+    beat plus a byte and longer, each also back to back (HFT_SEED=454425983 net2host: a 5 B frame sent
+    after a snapshot went unseen and the next stat event found it before its stage A beat)."""
+    w, sysm = await start(dut)
+    lengths = [5, 8, 9, 16, 17, 60]
+    for n in lengths:
+        await FallingEdge(dut.net_clk)
+        await sysm.send(random.randbytes(n))
+        await RisingEdge(dut.host_clk)
+        await sysm.send(random.randbytes(n))
+        await sysm.send(random.randbytes(n))
+    await sysm.finish()
+    want = [(n, RxReason.DISABLED) for n in lengths for _ in range(3)]
+    assert [(len(s.frame), s.want.reason) for s in sysm.done] == want
 
 
 @cocotb.test(timeout_time=10, timeout_unit="ms")  # a broken DUT must fail, not hang
