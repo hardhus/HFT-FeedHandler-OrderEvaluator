@@ -149,6 +149,7 @@ waves NAME:
 
 # Format every file under the style gate in place (same flags as the editor: firmware/lint/verible-format.flags).
 # Generated files (kind gen) are left alone: only `just gen` writes them (just gen-check).
+# The Python: ruff format and its import sorting (the I rule of just lint).
 [script("bash")]
 [unix]
 fmt:
@@ -157,6 +158,8 @@ fmt:
       [ "$kind" = gen ] && continue
       verible-verilog-format --flagfile=firmware/lint/verible-format.flags --inplace "$f"
     done
+    uv run --frozen ruff check --select I --fix --quiet .
+    uv run --frozen ruff format --quiet .
 
 # Regenerate the CSR block, C header and map doc from firmware/rdl/hft_csr.rdl (PeakRDL) and the
 # event descriptor outputs from firmware/formats/event_desc.toml
@@ -245,7 +248,7 @@ itch-real-rtl *ARGS:
 waves NAME:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just waves '{{ NAME }}'"
 
-# Format new RTL in WSL
+# Format the RTL and the Python in WSL
 [windows]
 fmt:
     wsl -d {{ distro }} --cd "{{ root }}" -- bash -lc "just fmt"
